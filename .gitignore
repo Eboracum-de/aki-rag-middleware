@@ -1,0 +1,39 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime / local configuration
+runtime/
+runtime.env
+provider.env
+state.sqlite
+research.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+embedding-deferred.jsonl
+
+# Installer-local state and TLS material
+install/.env
+install/nginx/tls/
+
+# Logs / temporary files
+*.log
+*.pid
+*.tmp
+*.swp
+*~
+
+# Local editor / OS metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Additional runtime state
+graph_queue.sqlite
+mail_state.sqlite

@@ -1,0 +1,16 @@
+[Unit]
+Description=AKI RAG Middleware API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RAG_USER@
+Group=@RAG_GROUP@
+WorkingDirectory=@RAG_DIR@
+ExecStart=/bin/bash @RAG_DIR@/start-api.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

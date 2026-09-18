@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Research Finding · RAG Admin{% endblock %}
+{% block content %}
+<h1>Research Finding kuratieren</h1>
+{% set f = detail.finding or {} %}
+{% set d = detail.document or {} %}
+<section><h2>Dokument / Provenienz</h2>
+<p><strong>{{ d.title or d.path or d.document_id }}</strong></p>
+{% if d.path %}<p class="muted">{{ d.path }}</p>{% endif %}
+{% if d.nextcloud_url %}<p><a href="{{ d.nextcloud_url }}" target="_blank" rel="noopener">In Nextcloud öffnen ↗</a></p>{% endif %}
+<table class="compact"><tbody>
+<tr><th>Verifikation</th><td>{{ f.verification_status or '—' }} · {{ f.relation_binding or '—' }}</td></tr>
+<tr><th>Konzepte</th><td>{{ (f.concepts or [])|join(', ') or '—' }}</td></tr>
+<tr><th>Constraints</th><td><code>{{ f.constraints_json or '—' }}</code></td></tr>
+<tr><th>Recherche</th><td>{{ f.intent or '—' }}</td></tr>
+<tr><th>Beobachtungen</th><td>{{ f.observation_count or 1 }}</td></tr>
+</tbody></table>
+</section>
+
+<section><h2>1. Entity Resolution</h2>
+<p class="muted">Erst die im Finding vermuteten Entities auflösen. Eine bestätigte Zuordnung erzeugt eine dokumentgebundene EntityObservation und <code>Document-[:MENTIONS]-&gt;Entity</code>. Das ist Provenienz, noch keine semantische Beziehung.</p>
+{% if not detail.entity_options %}
+<div class="alert warning"><strong>Keine Entity im Finding.</strong> Dieses Finding hat für Graph-Lite derzeit keinen strukturellen Wert und wird in der Standard-Inbox ausgeblendet. Die Recherche-Provenienz bleibt erhalten.</div>
+{% endif %}
+{% for item in detail.entity_options %}
+<div class="finding-entity">
+  <h3>{{ item.text }}{% if item.role %} <span class="muted">· {{ item.role }}</span>{% endif %}</h3>
+  {% if item.curated %}
+    <p><span class="status ok">zugeordnet</span> → <strong>{{ item.curated.display_name }}</strong> <span class="mono smalltext">{{ item.curated.entity_id }}</span></p>
+  {% elif item.suppressed %}
+    <p><span class="status stale">als Entity verworfen</span></p>
+  {% else %}
+    {% if item.auto_resolved %}
+      <p>Automatischer exakter Treffer: <strong>{{ item.auto_resolved.display_name }}</strong></p>
+      <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+        <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ item.auto_resolved.entity_id }}">
+        <button class="small">Exakten Treffer übernehmen</button>
+      </form>
+    {% endif %}
+    {% if item.suggestions %}
+      <div class="entity-suggestions"><strong>Bekannte Entities:</strong>
+      {% for candidate in item.suggestions %}
+        <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form entity-suggestion">
+          <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ candidate.entity_id }}">
+          <button type="submit" class="secondary small">{{ candidate.display_name }}</button>
+          <span class="muted">{{ candidate.labels|join('/') }} · {{ candidate.document_mentions or 0 }} Dokumente</span>
+        </form>
+      {% endfor %}
+      </div>
+    {% endif %}
+    <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="form-grid topgap">
+      <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="create">
+      <label>Name korrigieren / neu anlegen<input type="text" name="new_name" value="{{ item.text }}" required></label>
+      <label>Typ<select name="entity_type" required><option value="">Bitte wählen</option><option value="Person">Person</option><option value="Organization">Organization</option></select></label>
+      <label>Grund (optional)<input type="text" name="reason" placeholder="z.B. aus Recherche bestätigt"></label>
+      <div><button type="submit">Neue Entity anlegen</button></div>
+    </form>
+    <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form topgap">
+      <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="suppress">
+      <input type="text" name="reason" placeholder="Grund für Verwerfen (optional)"><button type="submit" class="danger-outline">Keine Entity</button>
+    </form>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+
+{% set curated = detail.curated_entities or [] %}
+<section><h2>2. Claim / Beziehung</h2>
+<p class="muted">Co-Mention ist bereits durch die Entity-Zuordnungen abgebildet. Eine semantische Beziehung wird nur optional als dokumentgebundene <code>RelationObservation</code> angelegt. Predicate-IDs sind sprachneutral und frei administrierbar; die Anzeige kann beliebig sprachlich formuliert werden.</p>
+{% if curated|length < 2 %}
+<p class="muted">Mindestens zwei kuratierte Entities nötig. Bei genau einer Entity bleibt das Finding als Mention/Provenienz wertvoll.</p>
+{% else %}
+<form method="post" action="{{ request.app.url_path_for('admin_finding_claim', finding_id=f.finding_id) }}" class="stack-form">
+  <div class="form-grid">
+    <label>Subject<select name="subject_entity_id" required>{% for e in curated %}<option value="{{ e.entity_id }}">{{ e.display_name }}</option>{% endfor %}</select></label>
+    <label>Predicate-ID<input name="predicate_id" required placeholder="z.B. shareholder_of, invoiced, works_for"></label>
+    <label>Object<select name="object_entity_id" required>{% for e in curated %}<option value="{{ e.entity_id }}">{{ e.display_name }}</option>{% endfor %}</select></label>
+  </div>
+  <div class="form-grid">
+    <label>Anzeigebezeichnung<input name="predicate_label" placeholder="z.B. ist Gesellschafter von"></label>
+    <label>Claim-Text<input name="claim_text" placeholder="Optionaler lesbarer Claim"></label>
+  </div>
+  <div><button type="submit">Claim-Kandidat anlegen</button></div>
+</form>
+{% endif %}
+{% if detail.claims %}
+<h3 class="topgap">Bereits angelegte Claims</h3>
+<table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Status</th></tr></thead><tbody>
+{% for c in detail.claims %}<tr><td>{{ c.subject_name }}</td><td><code>{{ c.predicate }}</code>{% if c.predicate_text %}<div class="muted">{{ c.predicate_text }}</div>{% endif %}</td><td>{{ c.object_name }}</td><td>{{ c.curator_status or '—' }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+</section>
+
+<section><h2>Finding-Status</h2>
+<p>Aktuell: <strong>{{ f.curator_status or 'aktiv' }}</strong>{% if f.curator_reason %} · {{ f.curator_reason }}{% endif %}</p>
+<form method="post" action="{{ request.app.url_path_for('admin_finding_curate', finding_id=f.finding_id) }}" class="filter-row">
+  {% if f.curator_status == 'suppressed' %}
+    <input type="hidden" name="status" value=""><input type="text" name="reason" placeholder="Grund für Wiederaufnahme (optional)"><button type="submit">Wieder aktivieren</button>
+  {% else %}
+    <input type="hidden" name="status" value="suppressed"><input type="text" name="reason" placeholder="Grund für Unterdrückung"><button type="submit" class="danger">Finding unterdrücken</button>
+  {% endif %}
+</form>
+</section>
+<details><summary>Query Frame</summary><pre>{{ f.query_frame_json or '—' }}</pre></details>
+<details><summary>Evidence Frame</summary><pre>{{ f.evidence_frame_json or '—' }}</pre></details>
+{% endblock %}

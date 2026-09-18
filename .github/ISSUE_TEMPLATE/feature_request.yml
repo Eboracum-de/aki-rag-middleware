@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a capability or workflow improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What real workflow or problem should this improve?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - retrieval / ranking
+        - ACL / identity
+        - Super-Light / deployment
+        - mail archive
+        - web research / archive
+        - AKI UI / provider API
+        - Graph-Lite / Neo4j
+        - Qdrant / embeddings / reranker
+        - administration
+        - documentation
+        - other
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints / privacy / compatibility considerations

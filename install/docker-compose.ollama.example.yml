@@ -1,0 +1,36 @@
+services:
+  ollama:
+    image: ollama/ollama:0.24.0
+    container_name: ollama
+
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+
+    ports:
+      - "127.0.0.1:11434:11434"
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    restart: unless-stopped
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: rag-reranker
+
+    command:
+      - --model-id
+      - Alibaba-NLP/gte-multilingual-reranker-base
+
+    ports:
+      - "127.0.0.1:8081:80"
+
+    volumes:
+      - reranker-data:/data
+
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  reranker-data:

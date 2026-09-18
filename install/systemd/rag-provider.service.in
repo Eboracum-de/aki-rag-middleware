@@ -1,0 +1,16 @@
+[Unit]
+Description=AKI RAG Middleware OpenAI Provider
+After=network-online.target rag-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RAG_USER@
+Group=@RAG_GROUP@
+WorkingDirectory=@RAG_DIR@
+ExecStart=/bin/bash @RAG_DIR@/start-openwebui-provider.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

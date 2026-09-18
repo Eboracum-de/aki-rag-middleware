@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Übersicht · RAG Admin{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div><h1>Übersicht</h1><p class="muted">Betriebs- und Administrationsstatus der Middleware. Für die Backend-Detailprüfung steht die geschützte Health-Ausgabe separat bereit.</p></div>
+  <a class="button secondary" href="/rag-api/health" target="_blank" rel="noopener">Systemdiagnose ↗</a>
+</div>
+
+<div class="cards">
+  <div class="card"><span>Benutzer</span><strong>{{ user_stats.total }}</strong><small>{{ user_stats.enabled }} aktiv · {{ mail_accounts }} Mailkonto/-konten</small></div>
+  <div class="card"><span>Graph-Entitäten</span><strong>{{ stats.persons + stats.organizations }}</strong><small>{{ stats.persons }} Personen · {{ stats.organizations }} Organisationen</small></div>
+  <div class="card"><span>Merge-Kandidaten</span><strong>{{ stats.merge_candidates }}</strong><small><a href="{{ request.app.url_path_for('admin_candidates') }}">prüfen</a></small></div>
+  <div class="card"><span>Graph Queue</span><strong>{{ queue.pending }}</strong><small>{{ queue.running }} running · {{ queue.counts.error or 0 }} Fehler</small></div>
+</div>
+
+<section>
+<h2>Betrieb</h2>
+<table class="compact"><tbody>
+<tr><th>RAG API / Admin</th><td><span class="status ok">ok</span></td><td>Diese Seite wird vom API-Prozess ausgeliefert.</td></tr>
+<tr><th>Graph Worker</th><td><span class="status {{ 'ok' if services.graph_worker else 'degraded' }}">{{ 'aktiviert' if services.graph_worker else 'deaktiviert' }}</span></td><td>{% if services.graph_worker %}{{ queue.worker.state or '—' }}{% if queue.worker.heartbeat_age_seconds is not none %} · Heartbeat {{ queue.worker.heartbeat_age_seconds }} s{% endif %}{% else %}Automatische Verarbeitung aus · Auto-Enqueue {{ 'an' if services.graph_auto_enqueue else 'aus' }}{% endif %}</td></tr>
+<tr><th>Sync Worker</th><td><span class="status {{ 'ok' if services.sync_worker else 'degraded' }}">{{ 'aktiviert' if services.sync_worker else 'deaktiviert' }}</span></td><td>Elasticsearch → Qdrant</td></tr>
+<tr><th>Mail</th><td><span class="status {{ 'ok' if services.mail_feature else 'degraded' }}">{{ 'aktiviert' if services.mail_feature else 'deaktiviert' }}</span></td><td>Worker: {{ 'aktiv' if services.mail_worker else 'aus' }} · benutzerbezogener IMAP-Import</td></tr>
+<tr><th>Web Research</th><td><span class="status {{ 'ok' if services.web else 'degraded' }}">{{ 'aktiviert' if services.web else 'deaktiviert' }}</span></td><td>globale Engine-Konfiguration</td></tr>
+<tr><th>Credential Store</th><td><span class="status {{ 'ok' if security_ok else 'degraded' }}">{{ 'verschlüsselt' if security_ok else 'prüfen' }}</span></td><td><a href="{{ request.app.url_path_for('admin_security') }}">Sicherheitsstatus</a></td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>Graph-Qualität</h2>
+<div class="cards small">
+  <div class="card"><span>Dokumente</span><strong>{{ stats.documents }}</strong><small>{{ stats.document_mentions }} MENTIONS</small></div>
+  <div class="card"><span>Observations</span><strong>{{ stats.entity_observations }}</strong><small>{{ stats.unresolved_entity_observations }} unresolved</small></div>
+  <div class="card"><span>Relationen</span><strong>{{ stats.relation_observations }}</strong><small>document-grounded claims</small></div>
+  <div class="card"><span>Research Findings</span><strong>{{ stats.research_findings }}</strong><small><a href="{{ request.app.url_path_for('admin_findings') }}">verifizierte Query-Ergebnisse</a></small></div>
+  <div class="card"><span>Kontaktquellen</span><strong>{{ contact_sources }}</strong><small>{{ stats.contact_records }} ContactRecords</small></div>
+  <div class="card"><span>Confirmed</span><strong>{{ stats.confirmed_entities }}</strong></div>
+  <div class="card"><span>Provisional</span><strong>{{ stats.provisional_entities }}</strong></div>
+  <div class="card"><span>Orphaned</span><strong>{{ stats.orphaned_entities }}</strong></div>
+  <div class="card"><span>Merged</span><strong>{{ stats.merged_entities }}</strong></div>
+  <div class="card"><span>NOT_SAME_AS</span><strong>{{ stats.not_same_as_decisions }}</strong></div>
+</div>
+</section>
+{% endblock %}

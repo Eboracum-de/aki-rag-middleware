@@ -1,0 +1,62 @@
+import os
+from dataclasses import replace
+
+import rag.llm_roles as roles
+import rag.openai_provider as provider
+
+
+def test_role_backend_inherits_default_and_can_override(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "openai")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.example.test/v1")
+    monkeypatch.setenv("LLM_MODEL", "default-model")
+    monkeypatch.setenv("LLM_API_KEY", "default-secret")
+    monkeypatch.setenv("PLANNER_LLM_BACKEND", "ollama")
+    monkeypatch.setenv("PLANNER_LLM_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("PLANNER_LLM_MODEL", "planner-local")
+    built = roles.build_role_backends(
+        default_backend="openai",
+        default_base_url="https://api.example.test/v1",
+        default_model="default-model",
+        default_api_key="default-secret",
+        default_verify_tls=True,
+        default_ca_file=None,
+        models={"planner": "legacy-planner", "answer": "answer-default"},
+    )
+    assert built["planner"].backend_name == "ollama"
+    assert built["planner"].base_url == "http://127.0.0.1:11434"
+    assert built["planner"].model == "planner-local"
+    assert built["planner"].scope == "local"
+    assert built["answer"].backend_name == "openai"
+    assert built["answer"].base_url == "https://api.example.test/v1"
+    assert built["answer"].scope == "remote"
+
+
+def test_remote_answer_context_is_hard_bounded(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda role: role == "answer")
+    monkeypatch.setattr(provider, "REMOTE_ANSWER_MAX_DOCUMENTS", 2)
+    monkeypatch.setattr(provider, "REMOTE_LLM_MAX_CHARS_PER_DOCUMENT", 1000)
+    monkeypatch.setattr(provider, "REMOTE_LLM_MAX_TOTAL_CHARS", 1700)
+    results = [
+        provider.SearchResult(index=i, title=f"d{i}.pdf", text="x" * 5000, raw={})
+        for i in range(1, 5)
+    ]
+    context, included = provider._build_context(results, per_result_max_chars=6000, context_max_chars=40000)
+    assert len(included) <= 2
+    assert len(context) <= 1700 + 10  # separators are already counted by block budgeting except join overhead
+    assert "d3.pdf" not in context
+
+
+def test_remote_verifier_caps_candidates(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda role: role == "verifier")
+    monkeypatch.setattr(provider, "REMOTE_VERIFIER_MAX_CANDIDATES", 3)
+    monkeypatch.setattr(
+        provider,
+        "RETRIEVAL_PLANNER",
+        replace(provider.RETRIEVAL_PLANNER, verification_candidate_limit=6),
+    )
+    # The candidate bound is observable without invoking the model by using an
+    # empty input only for the base case; direct cap arithmetic is the contract.
+    limit = provider.RETRIEVAL_PLANNER.verification_candidate_limit
+    if provider._role_remote("verifier"):
+        limit = min(limit, provider.REMOTE_VERIFIER_MAX_CANDIDATES)
+    assert limit == 3

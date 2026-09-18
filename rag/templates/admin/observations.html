@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Beobachtungen · RAG Admin{% endblock %}
+{% block content %}
+<h1>Beobachtungen</h1>
+<p class="muted">Standardmäßig werden nur Fälle gezeigt, bei denen menschliche Prüfung sinnvoll sein kann. Eindeutig automatisch aufgelöste Observations benötigen keine Bestätigung.</p>
+<form method="get" class="searchbar multi">
+<input type="search" name="q" value="{{ q }}" placeholder="Name, Dokument oder erkannter Text">
+<select name="status">
+<option value="needs_review" {% if status=='needs_review' %}selected{% endif %}>zu prüfen</option>
+<option value="all" {% if status=='all' %}selected{% endif %}>alle Beobachtungen</option>
+<option value="resolved_existing" {% if status=='resolved_existing' %}selected{% endif %}>automatisch eindeutig</option>
+<option value="created_provisional" {% if status=='created_provisional' %}selected{% endif %}>provisional erzeugt</option>
+<option value="ambiguous" {% if status=='ambiguous' %}selected{% endif %}>mehrdeutig</option>
+<option value="unresolved" {% if status=='unresolved' %}selected{% endif %}>nicht aufgelöst</option>
+<option value="rejected" {% if status=='rejected' %}selected{% endif %}>verworfen</option>
+<option value="corrected_observation" {% if status=='corrected_observation' %}selected{% endif %}>manuell korrigiert</option>
+<option value="manual_not_entity" {% if status=='manual_not_entity' %}selected{% endif %}>manuell Non-Entity</option>
+</select><button>Filtern</button></form>
+{% if not observations %}<p class="muted">Keine Beobachtungen für diesen Filter.</p>{% endif %}
+{% if observations %}<table><thead><tr><th>Erkannt</th><th>Aufgelöst auf</th><th>Dokument</th><th>Automatik</th><th>Curator</th><th></th></tr></thead><tbody>
+{% for o in observations %}<tr>
+<td><strong>{{ o.observed_text or o.canonical_name }}</strong><div class="muted">{{ o.suggested_type or '' }}{% if o.entity_kind %} / {{ o.entity_kind }}{% endif %}{% if o.mention_context %} · {{ o.mention_context }}{% endif %}</div></td>
+<td>{% if o.resolved_entity_id %}<a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=o.resolved_entity_id) }}">{{ o.resolved_entity_name }}</a>{% else %}—{% endif %}</td>
+<td>{{ o.document_path or o.document_title or o.document_id }} {% if o.nextcloud_url %}<a href="{{ o.nextcloud_url }}" target="_blank" rel="noopener">Nextcloud ↗</a>{% endif %}</td>
+<td>{% if o.needs_review %}<span class="status degraded">{{ o.status_label }}</span>{% else %}<span class="status ok">{{ o.status_label }}</span>{% endif %}</td>
+<td>{{ o.curator_status_label }}</td>
+<td><a class="button small secondary" href="{{ request.app.url_path_for('admin_observation_detail', observation_id=o.observation_id) }}">{% if o.needs_review %}Prüfen{% else %}Ansehen / korrigieren{% endif %}</a></td>
+</tr>{% endfor %}
+</tbody></table>{% endif %}
+{% endblock %}

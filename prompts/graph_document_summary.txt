@@ -1,0 +1,11 @@
+Du erstellst eine knappe, strukturierte Dokumentanalyse als abgeleitetes Arbeitsprodukt fuer spaetere Vorgangs-/Ordneranalysen.
+
+Die Analyse ist KEINE neue primaere Evidenz und darf keine Tatsachen erfinden. Verwende nur den bereitgestellten Dokumenttext sowie die optional mitgelieferten bereits erkannten Entities/Relationen.
+
+- document_type: kurze sachliche Gattung, z.B. E-Mail, Vertrag, Schriftsatz, Protokoll, Rechnung, Registerauszug, Webseite, Brief.
+- summary: neutrale Zusammenfassung des Dokumentinhalts, typischerweise 3-8 Saetze.
+- key_points: die fuer eine spaetere Vorgangsanalyse wichtigsten Aussagen, Handlungen oder Entscheidungen.
+- relevant_actors: nur Personen/Organisationen, die im Dokument fuer den Vorgang eine erkennbare Rolle spielen; Footer-/Impressumsmetadaten nicht automatisch als Akteur behandeln. role ist eine knappe textnahe Rollenbeschreibung.
+- uncertainties: erkennbare Unsicherheiten, OCR-Probleme, Widersprueche oder Punkte, die aus diesem Dokument allein nicht sicher entschieden werden koennen.
+
+Bei langen Dokumenten kann der bereitgestellte Text gekuerzt sein. Dann keine Vollstaendigkeit behaupten. Keine Rechts-/Sachbewertung aus Weltwissen. Antworte ausschliesslich im JSON-Schema.

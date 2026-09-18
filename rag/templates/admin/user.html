@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}{{ user.nextcloud_login }} · RAG Admin{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div>
+    <h1>{{ user.nextcloud_login }}</h1>
+    <p class="muted mono">{{ user.nextcloud_server }}</p>
+  </div>
+  <form method="post" action="{{ request.app.url_path_for('admin_user_enabled', canonical_user_id=user.canonical_user_id) }}">
+    <input type="hidden" name="enabled" value="{{ 'no' if user.enabled else 'yes' }}">
+    <button class="{{ 'danger-outline' if user.enabled else '' }}">{{ 'Benutzer deaktivieren' if user.enabled else 'Benutzer aktivieren' }}</button>
+  </form>
+</div>
+
+<section>
+<h2>Identity / Credentials</h2>
+<dl class="details">
+<dt>Nextcloud Login</dt><dd>{{ user.nextcloud_login }}</dd>
+<dt>Nextcloud Credential</dt><dd>{{ 'vorhanden' if has_nextcloud_credential else 'fehlt / Re-Auth erforderlich' }}</dd>
+<dt>Client Bindings</dt><dd>{% if bindings %}{% for b in bindings %}<div class="mono smalltext">{{ b.rag_user_id }}</div>{% endfor %}{% else %}—{% endif %}</dd>
+</dl>
+<p class="muted">Das Nextcloud-App-Passwort bleibt an das jeweilige Trusted-Client-Binding gebunden. Mail-, Web- und Kontakt-Einstellungen hängen am verifizierten Nextcloud-Benutzer.</p>
+<details class="topgap"><summary>Interne Identität (Diagnose)</summary><p class="mono smalltext">{{ user.canonical_user_id }}</p></details>
+<form method="post" action="{{ request.app.url_path_for('admin_user_reauth', canonical_user_id=user.canonical_user_id) }}">
+<button class="danger-outline">Nextcloud Re-Auth erzwingen</button>
+</form>
+</section>
+
+<section>
+<h2>Kontakt-DB</h2>
+<p class="muted">CardDAV-Kontakte dieses Nextcloud-Benutzers können als Seeds in Neo4j übernommen werden. Das bereits gespeicherte Nextcloud-Credential wird verwendet; eine kanonische UUID ist für die Bedienung nicht erforderlich.</p>
+{% if not has_nextcloud_credential %}<div class="alert warning">Kein Nextcloud-Credential vorhanden. Der Sync ist ein No-op, bis der Benutzer den Login Flow erneut abgeschlossen hat.</div>{% endif %}
+<dl class="details">
+<dt>Status</dt><dd>{% if contact_settings %}<span class="status {{ 'ok' if contact_settings.last_status == 'completed' else ('degraded' if contact_settings.last_status in ['failed', 'completed_with_errors'] else '') }}">{{ contact_settings.last_status or 'noch nicht synchronisiert' }}</span>{% else %}noch nicht synchronisiert{% endif %}</dd>
+<dt>Letzter Sync</dt><dd>{{ contact_last_sync }}</dd>
+<dt>Kontakte</dt><dd>{% if contact_settings %}gesehen {{ contact_settings.contacts_seen }} · geschrieben {{ contact_settings.contacts_written }}{% else %}—{% endif %}</dd>
+{% if contact_settings and contact_settings.last_error %}<dt>Letzter Fehler</dt><dd>{{ contact_settings.last_error }}</dd>{% endif %}
+</dl>
+<div class="topgap">
+  <div class="heading-row">
+    <div><h3>Verfügbare Adressbücher</h3><p class="muted smalltext">Anzeigename und technischer Slug können beide in den Include-/Exclude-Feldern verwendet werden.</p></div>
+    <a class="button small secondary" href="{{ request.app.url_path_for('admin_user_detail', canonical_user_id=user.canonical_user_id) }}?discover_addressbooks=1">Adressbücher ermitteln</a>
+  </div>
+  {% if contact_addressbook_discovery_requested %}
+    {% if contact_addressbook_error %}<div class="alert warning">{{ contact_addressbook_error }}</div>{% endif %}
+    {% if contact_addressbooks %}
+    <div class="table-wrap"><table><thead><tr><th>Anzeigename</th><th>Technischer Slug</th><th>Status</th></tr></thead><tbody>
+    {% for book in contact_addressbooks %}<tr><td>{{ book.displayname }}</td><td class="mono smalltext">{{ book.slug }}</td><td>{% if book.selected %}<span class="status ok">ausgewählt</span>{% elif book.excluded %}<span class="status degraded">ausgeschlossen</span>{% else %}<span class="status">nicht ausgewählt</span>{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% elif not contact_addressbook_error %}<p class="muted">Keine CardDAV-Adressbücher gefunden.</p>{% endif %}
+  {% endif %}
+</div>
+<form class="stack-form" method="post" action="{{ request.app.url_path_for('admin_user_contacts', canonical_user_id=user.canonical_user_id) }}">
+<label><span><input type="checkbox" name="enabled" {% if not contact_settings or contact_settings.enabled %}checked{% endif %}> Kontakt-Seeds für diesen Benutzer aktiv</span></label>
+<label>Nur diese Adressbücher (optional, eines pro Zeile)<textarea name="include_addressbooks" rows="3" placeholder="leer = alle">{% if contact_settings %}{{ contact_settings.include_addressbooks|join('\n') }}{% endif %}</textarea></label>
+<label>Adressbücher ausschließen (optional, eines pro Zeile)<textarea name="exclude_addressbooks" rows="3">{% if contact_settings %}{{ contact_settings.exclude_addressbooks|join('\n') }}{% endif %}</textarea></label>
+<div><button>Kontakt-DB-Konfiguration speichern</button></div>
+</form>
+{% if contact_sync_job and contact_sync_job.status == 'running' %}
+<div class="alert warning">Kontakt-Sync läuft: {{ contact_sync_job.contacts_seen or 0 }} / {{ contact_sync_job.contacts_total or '?' }} verarbeitet. <a href="{{ request.app.url_path_for('admin_user_contacts_sync_status', canonical_user_id=user.canonical_user_id, job_id=contact_sync_job.job_id) }}">Fortschritt ansehen</a></div>
+{% endif %}
+<form class="topgap" method="post" action="{{ request.app.url_path_for('admin_user_contacts_sync', canonical_user_id=user.canonical_user_id) }}">
+<button {% if not has_nextcloud_credential or (contact_sync_job and contact_sync_job.status == 'running') %}disabled{% endif %}>Jetzt synchronisieren</button>
+</form>
+<p class="muted smalltext">Fehlt ein Credential oder sind keine Kontakte vorhanden, wird nichts importiert; dies ist kein Stack-Fehler. Erweiterte Provenienz/Rollback-Funktionen bleiben unter „Kontaktquellen“ verfügbar.</p>
+</section>
+
+<section>
+<h2>Web Research</h2>
+{% if not web_engine_enabled %}<div class="alert warning">Die globale Web-Recherche ist in web.yaml derzeit deaktiviert. Die Benutzerkonfiguration kann trotzdem vorbereitet werden; wirksam wird sie erst nach globaler Freigabe.</div>{% endif %}
+<p class="muted">Der Admin entscheidet, ob Web-Recherche für diesen Nutzer aktiv ist und wohin archiviert wird. Schreibrechte prüft weiterhin Nextcloud mit dem Benutzer-Credential. Der Zielpfad ist für Web-Evidence reserviert und wird aus normalem internem Retrieval ausgeschlossen.</p>
+<form class="stack-form" method="post" action="{{ request.app.url_path_for('admin_user_web', canonical_user_id=user.canonical_user_id) }}">
+<label><span><input type="checkbox" name="enabled" {% if web_settings and web_settings.enabled %}checked{% endif %}> Web-Recherche für diesen Benutzer aktiv</span></label>
+<label><span><input type="checkbox" name="archive_enabled" {% if web_settings and web_settings.archive_enabled %}checked{% endif %}> Evidence in Nextcloud archivieren</span></label>
+<label>Nextcloud-Zielpfad<input name="target_path" value="{{ web_settings.target_path if web_settings and web_settings.target_path else 'RAG/Webarchiv' }}"></label>
+<div><button>Web-Konfiguration speichern</button></div>
+</form>
+</section>
+
+<section>
+<h2>Mail Sync</h2>
+{% if not mail_engine_enabled %}<div class="alert warning">Die globale Mail-Funktion ist derzeit deaktiviert. Kontodaten können vorbereitet werden; Hintergrund-Polling wird zusätzlich über mail.worker.enabled gesteuert.</div>{% endif %}
+{% if mail_accounts|length > 1 %}<div class="alert warning">Das Datenmodell enthält {{ mail_accounts|length }} Konten. Die Beta-UI bearbeitet nur das erste; 1:n ist für den späteren Ausbau bereits vorbereitet.</div>{% endif %}
+<form class="stack-form" method="post" action="{{ request.app.url_path_for('admin_user_mail', canonical_user_id=user.canonical_user_id) }}">
+{% if mail_account %}<input type="hidden" name="account_id" value="{{ mail_account.account_id }}">{% endif %}
+<label><span><input type="checkbox" name="enabled" {% if mail_account and mail_account.enabled %}checked{% endif %}> Mailkonto aktiv</span></label>
+<div class="form-grid">
+<label>Anzeigename<input name="name" value="{{ mail_account.name if mail_account else 'primary' }}"></label>
+<label>IMAP Host<input name="host" value="{{ mail_account.host if mail_account else '' }}" required></label>
+<label>Port<input name="port" type="number" min="1" max="65535" value="{{ mail_account.port if mail_account else 993 }}"></label>
+<label>Transport<select name="security"><option value="tls" {% if not mail_account or mail_account.security == 'tls' %}selected{% endif %}>TLS/IMAPS</option><option value="starttls" {% if mail_account and mail_account.security == 'starttls' %}selected{% endif %}>STARTTLS</option></select></label>
+<label>IMAP Username<input name="username" value="{{ mail_account.username if mail_account else '' }}" required></label>
+</div>
+<label><span><input type="checkbox" name="verify_tls" {% if not mail_account or mail_account.verify_tls %}checked{% endif %}> IMAP-Zertifikat prüfen</span></label>
+<label>Mailbox-Wurzeln (eine pro Zeile, Unterordner rekursiv)<textarea name="mailboxes" rows="4">{% if mail_account %}{{ mail_account.mailboxes|join('\n') }}{% else %}INBOX{% endif %}</textarea></label>
+<div class="form-grid">
+<label>Max. Nachrichten pro Mailbox/Lauf<input name="max_messages_per_run" type="number" min="0" value="{{ mail_account.max_messages_per_run if mail_account else 50 }}"></label>
+<label>Import nicht vor (YYYY-MM-DD)<input name="not_before" value="{{ mail_account.not_before if mail_account else '' }}" placeholder="2020-01-01"></label>
+</div>
+<label>Nextcloud-Zielpfad<input name="target_path" value="{{ mail_account.target_path if mail_account else '' }}" placeholder="RAG/Mail" required></label>
+<label>Separater EML-Zielpfad (optional)<input name="eml_target_path" value="{{ mail_account.eml_target_path if mail_account else '' }}" placeholder="leer = gleicher Zielpfad"></label>
+<label><span><input type="checkbox" name="store_eml" {% if mail_account and mail_account.store_eml %}checked{% endif %}> Roh-EML zusätzlich speichern</span><small class="muted">Optional. Der SHA-256-Hash und technische Provenienzheader werden unabhängig davon im versteckten Mail-Sidecar gespeichert.</small></label>
+<label><span><input type="checkbox" name="store_attachments" {% if mail_account and mail_account.store_attachments %}checked{% endif %}> Attachments separat speichern</span></label>
+<div><button>Mailkonto-Konfiguration speichern</button></div>
+</form>
+{% if mail_account %}
+<div class="credential-panel">
+  <div>
+    <h3>IMAP-Credential</h3>
+    <p class="muted">Status: <span class="status {{ 'ok' if mail_account.has_secret else 'degraded' }}">{{ 'verschlüsselt vorhanden' if mail_account.has_secret else 'fehlt' }}</span>. Der gespeicherte Wert wird nie zurückgegeben.</p>
+  </div>
+  <form class="credential-form" method="post" action="{{ request.app.url_path_for('admin_user_mail_credential', canonical_user_id=user.canonical_user_id) }}">
+    <input type="hidden" name="account_id" value="{{ mail_account.account_id }}">
+    <input name="password" type="password" value="" autocomplete="new-password" placeholder="Neues IMAP-Passwort" required>
+    <button>{{ 'Credential ersetzen' if mail_account.has_secret else 'Credential setzen' }}</button>
+  </form>
+</div>
+<div class="topgap">
+  <div class="heading-row">
+    <div>
+      <h3>Verfügbare Mailboxen</h3>
+      <p class="muted smalltext">Der Test verwendet das gespeicherte IMAP-Credential. Angezeigt werden die exakten IMAP-Namen, die im Feld „Mailbox-Wurzeln“ verwendet werden können; gewählte Wurzeln umfassen ihre Unterordner rekursiv.</p>
+    </div>
+    {% if mail_account.has_secret %}
+    <a class="button small secondary" href="{{ request.app.url_path_for('admin_user_detail', canonical_user_id=user.canonical_user_id) }}?discover_mailboxes=1">Verbindung testen &amp; Mailboxen ermitteln</a>
+    {% else %}
+    <span class="button small secondary disabled" aria-disabled="true">Credential fehlt</span>
+    {% endif %}
+  </div>
+  {% if mailbox_discovery_requested %}
+    {% if mailbox_error %}
+      <div class="alert warning">{{ mailbox_error }}</div>
+    {% elif mailboxes %}
+      <div class="alert success">IMAP-Verbindung erfolgreich · {{ mailboxes|length }} Mailboxen gefunden.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Mailbox</th><th>Flags</th><th>Trenner</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for box in mailboxes %}
+          <tr>
+            <td class="mono smalltext">{% if box.depth %}{{ '↳ ' * box.depth }}{% endif %}{{ box.name }}</td>
+            <td class="mono smalltext">{{ box.flags|join(' ') if box.flags else '—' }}</td>
+            <td class="mono smalltext">{{ box.delimiter if box.delimiter else '—' }}</td>
+            <td>
+              {% if not box.selectable %}<span class="status degraded">nicht selektierbar</span>
+              {% elif box.configured_root %}<span class="status ok">konfigurierte Wurzel</span>
+              {% elif box.covered_by %}<span class="status ok">über {{ box.covered_by }} enthalten</span>
+              {% else %}<span class="status">verfügbar</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+      <p class="muted smalltext">Zum Ändern der Auswahl die gewünschten exakten Namen oben unter „Mailbox-Wurzeln“ eintragen und die Mailkonto-Konfiguration speichern. <code>\Noselect</code>-Container können nicht selbst importiert werden; selektierbare Unterordner bleiben verfügbar.</p>
+    {% else %}
+      <p class="muted">IMAP-Verbindung erfolgreich, aber keine parsebaren Mailboxen gefunden.</p>
+    {% endif %}
+  {% endif %}
+</div>
+<form class="topgap" method="post" action="{{ request.app.url_path_for('admin_user_mail_delete', canonical_user_id=user.canonical_user_id) }}">
+<input type="hidden" name="account_id" value="{{ mail_account.account_id }}">
+<button class="danger-outline">Mailkonto-Konfiguration löschen</button>
+</form>
+{% endif %}
+</section>
+{% endblock %}

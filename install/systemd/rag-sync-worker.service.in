@@ -1,0 +1,18 @@
+[Unit]
+Description=AKI RAG Middleware Elasticsearch to Qdrant sync worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RAG_USER@
+Group=@RAG_GROUP@
+WorkingDirectory=@RAG_DIR@
+ExecStart=/bin/bash @RAG_DIR@/start-sync-worker.sh
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

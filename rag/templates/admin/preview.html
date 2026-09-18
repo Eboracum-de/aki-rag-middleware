@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Preview · RAG Admin{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<div class="alert {% if danger %}dangerbox{% else %}warning{% endif %}">Dies ist nur die Vorschau. Erst der Bestätigungsbutton führt die Änderung aus.</div>
+<pre class="preview">{{ preview_json }}</pre>
+<div class="preview-actions"><a class="button secondary" href="{{ cancel_url }}">Abbrechen</a><form method="post" action="{{ action_url }}">{% for f in hidden %}<input type="hidden" name="{{ f.name }}" value="{{ f.value }}">{% endfor %}<button class="{% if danger %}danger{% endif %}">{{ confirm_label }}</button></form></div>
+{% endblock %}

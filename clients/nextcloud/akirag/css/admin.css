@@ -1,0 +1,7 @@
+#akirag-admin input.long {
+    width: min(620px, 95%);
+}
+
+.akirag-admin-status {
+    margin-left: 10px;
+}

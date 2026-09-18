@@ -1,0 +1,429 @@
+# AKI RAG Middleware - 0.8.5-rc3 secure multi-user beta candidate
+
+health:
+  timeout_seconds: 4
+
+# Security escape hatches are explicit. Fresh beta installs are HTTPS + TLS verify.
+security:
+  allow_insecure_nextcloud: false
+
+# Normal TLS verification remains enabled. VERIFY_X509_STRICT is disabled by
+# default for compatibility with long-lived private PKIs; enable it explicitly
+# only when the complete PKI is known to satisfy the stricter RFC-5280 checks.
+tls:
+  x509_strict: false
+
+elasticsearch:
+  enabled: true
+  url: "http://127.0.0.1:9200"
+  index: "my_index"
+  timeout: 60
+  # Optional authentication. By convention this may be the same account used
+  # by Nextcloud FullTextSearch; administrators can instead provision a
+  # dedicated read-only account. Keep the password out of config.yaml.
+  username: ""
+  password_env: "ELASTICSEARCH_PASSWORD"
+  verify_tls: true
+  # Keep scroll pages moderate: _source contains complete extracted document text.
+  page_size: 50
+  # Optional private CA bundle for HTTPS Elasticsearch deployments.
+  ca_file: ""
+
+qdrant:
+  # Optional semantic arm. Installer sets false when no local/external Qdrant is selected.
+  enabled: true
+  url: "http://127.0.0.1:6333"
+  collection: "nextcloud_rag"
+
+# Embeddings are deliberately independent from the answer LLM.
+embedding:
+  # ollama | openai (OpenAI-compatible /v1/embeddings)
+  backend: ollama
+  url: "http://127.0.0.1:11434"
+  model: "qwen3-embedding:4b"
+  # Model-agnostic contract: the middleware never infers prefixes from model names.
+  # Configure the role formatting expected by the selected embedding model explicitly.
+  profile: custom  # diagnostic label only; prefixes below define behavior
+  document_prefix: ""
+  query_prefix: "Instruct: Given a user query, retrieve relevant passages from a private document archive that answer or relate to the query\nQuery: "
+  # Optional/backend-specific output dimension. null/omitted => native model dimension.
+  dimensions: 1024
+  # Prefer secrets via environment, especially for API-backed embeddings.
+  api_key_env: "EMBEDDING_API_KEY"
+  verify_tls: true
+  # ca_file: "/etc/ssl/certs/private-ca.pem"
+  timeout: 300
+
+search:
+  es_limit: 50
+  vector_limit: 80
+  vector_threshold: 0.55
+  rrf_k: 60
+  rerank_candidates: 10
+  final_limit: 15
+  rerank_min_score: null
+
+# Retrieval capability policy. Normal automatic retrieval uses files plus optional
+# vector; Neo4j is used for entity/alias expansion unless /graph is explicitly
+# requested. Backend routing is not decided by the LLM.
+retrieval_policy:
+  internal:
+    files: required
+    vector: optional
+    graph: optional
+  optional_default: include
+  web: planner  # disabled | explicit | planner
+
+# Legacy section name retained for config compatibility. Round 1 always performs
+# one structured Query-Rewrite. `enabled` controls only additional retrieval
+# rounds; max_retrieval_rounds=1 therefore means no automatic second round.
+retrieval_planner:
+  enabled: true
+  max_retrieval_rounds: 1
+  # Empty = use the provider's general LLM_MODEL for Query-Rewrite.
+  model: ""
+  max_tokens: 700
+  context_max_chars: 12000
+  # Exhaustive/list-like tasks stop instead of silently dropping matching docs
+  # when the strict ES query exceeds this post-ACL completeness budget.
+  max_complete_documents: 15
+  # Hard upper bound for strict-query ACL candidates. With the default ACL
+  # batch_size=100 this normally costs at most one additional WebDAV SEARCH.
+  overflow_acl_scan_limit: 80
+  # Normal-mode verifier: compact top-6 EvidenceFrames in one batch.
+  verification_candidate_limit: 6
+  # Concretely bounded sets such as "Rechnungen ... 2025" get a larger
+  # verifier window without claiming exhaustive completeness.
+  bounded_verification_candidate_limit: 30
+  exhaustive_verification_candidate_limit: 30
+  verification_max_chars_per_document: 2500
+  verification_max_tokens: 900
+  verification_batch_size: 6
+
+retrieval_signal:
+  enabled: true
+  reject_unspecific: true
+  unspecific_signal_floor: 0.08
+  min_curve_candidates: 8
+  head_size: 3
+  tail_fraction: 0.33
+  small_field_signal: 0.35
+  explicit_anchor_signal: 0.45
+  dominance_ratio: 1.50
+  dominance_margin: 0.10
+  secondary_weight_floor: 0.20
+  overlap_k: 10
+
+# Elasticsearch -> Qdrant incremental sync.
+# sync.* is the canonical location for chunk/state settings.
+# Periodic Elasticsearch -> Qdrant synchronization.  The worker performs the
+# same incremental state-aware rag.sync run as the CLI; it does not create a
+# second indexing implementation.  A complete ES scan is cheap for unchanged
+# documents but the interval can be raised for very large corpora.
+sync_worker:
+  enabled: true
+  poll_interval_seconds: 300
+  # 0 = unlimited. Keep 0 for a background worker so documents later in the
+  # Elasticsearch index cannot be starved by a fixed scan limit.
+  max_documents: 0
+  # Full-corpus graph extraction remains opt-in and independent.
+  enqueue_graph: false
+
+sync:
+  chunk_size: 3000
+  chunk_overlap: 400
+  embedding_batch_size: 8
+  # Add the file basename to the model input only; Qdrant evidence text stays raw.
+  embedding_include_basename: true
+  max_documents: 0
+  state_db: "state.sqlite"
+  # Context-length failures that remain after adaptive splitting are deferred here.
+  # The sync continues; existing Qdrant/state for that document stays untouched.
+  embedding_deferred_file: "embedding-deferred.jsonl"
+
+  # Semantic corpus gate. Qdrant/GraphQueue see only text already extracted by
+  # Elasticsearch/Nextcloud FullTextSearch; binary files are never decoded here.
+  # Raw mail/container formats and *.mailmeta.json remain hard exclusions.
+  # Images/audio/video are not excluded by type: if FullTextSearch provides useful
+  # content they may be indexed; if content is empty sync creates no chunks.
+  document_filter:
+    enabled: true
+    include_extensions: []
+    exclude_extensions:
+      - eml
+      - msg
+      - mbox
+      - zip
+      - 7z
+      - rar
+      - gz
+      - bz2
+      - xz
+      - tar
+      - tgz
+    # MIME is a fallback for extensionless/ambiguous raw mail or archive objects.
+    # A known text/document extension (e.g. *.txt) wins over a conflicting MIME.
+    exclude_mime_prefixes: []
+    exclude_mime_types:
+      - message/rfc822
+      - application/zip
+      - application/x-7z-compressed
+      - application/x-rar-compressed
+      - application/gzip
+      - application/x-gzip
+      - application/x-tar
+    # 0 disables a text-length gate; set e.g. 80 only after corpus testing.
+    min_text_chars: 0
+
+  # Empty = no path restriction. Paths are Nextcloud/Elasticsearch title prefixes.
+  include_paths: []
+  exclude_paths: []
+
+  # Full-corpus graph discovery is expensive and therefore opt-in.
+  # Answer-cited documents use the separate top-level graph_queue.auto_enqueue_cited_documents switch.
+  # Override per run with --enqueue-graph / --no-enqueue-graph.
+  graph_queue:
+    enabled: false
+    priority: background
+
+neo4j:
+  # Optional graph arm. Installer sets false when no local/external Neo4j is selected.
+  enabled: true
+  uri: "bolt://127.0.0.1:7687"
+  username: "neo4j"
+  password_env: "NEO4J_PASSWORD"
+  database: "neo4j"
+
+carddav:
+  # If absent, nextcloud.base_url + /remote.php/dav is used.
+  username_env: "NEXTCLOUD_USERNAME"
+  password_env: "NEXTCLOUD_APP_PASSWORD"
+  verify_tls: true
+  timeout: 120
+  include_addressbooks: []
+  exclude_addressbooks: []
+
+# Live authorization is deliberately downstream of retrieval/reranking.
+# Denied documents are removed from the already-final list; no lower-ranked
+# documents move up as replacements. Nextcloud itself remains the ACL source
+# of truth, so stale share metadata in ES/Qdrant/Neo4j cannot grant access.
+acl:
+  enabled: true
+  # Safe beta default: every frontend identity obtains a JIT-bound Nextcloud
+  # credential. Single-user is an explicit installer choice; ACL-off is diagnostic only.
+  # mapped_users remains a legacy/static compatibility mode.
+  identity_mode: credential_store
+  credential_store: "runtime/users.sqlite"
+  username_env: "NEXTCLOUD_USERNAME"
+  password_env: "NEXTCLOUD_APP_PASSWORD"
+  # Empty = derive <nextcloud.base_url>/remote.php/dav/
+  webdav_url: ""
+  verify_tls: true
+  timeout: 15
+  # WebDAV SEARCH ids per request; batching prevents pathological OR trees.
+  batch_size: 100
+entity_resolution:
+  enabled: true
+  fail_open: true
+  retry_seconds: 30
+  fuzzy: true
+  fuzzy_threshold: 86.0
+  fuzzy_max_candidates: 5
+  fuzzy_expansion_min_similarity: 90.0
+
+graph:
+  entity_admission:
+    use_default_blocked_generic_names: true
+    blocked_generic_names: []
+
+graph_queue:
+  enabled: true
+  # Capability and automatic processing are separate. Keep the worker off until
+  # the administrator explicitly wants automatic graph extraction.
+  auto_enqueue_cited_documents: false
+  database: "graph_queue.sqlite"
+  priority: 100
+  priorities:
+    high: 50
+    normal: 100
+    background: 200
+  # Automatic worker jobs skip very large/compiled documents before any LLM
+  # extraction. Explicit graph_rebuild --force may override these limits.
+  auto_limits:
+    max_text_chars: 200000
+    max_chunks: 60
+    max_file_bytes: 10000000
+  worker:
+    enabled: false
+    idle_seconds: 120
+    poll_seconds: 10
+    retry_seconds: 60
+    max_attempts: 3
+    stale_running_seconds: 3600
+    heartbeat_seconds: 15
+    heartbeat_stale_seconds: 90
+    quiet_hours:
+      enabled: false
+      start: "22:00"
+      end: "07:00"
+
+# RC10: persist only positive planner/verifier findings. This reuses semantic
+# work already performed for the user query; it never starts a graph-extraction
+# LLM pass and never stores rejected/uncertain document-query pairs.
+research_findings:
+  enabled: true
+  timeout: 5
+  max_documents_per_request: 30
+
+graph_indexer:
+  enabled: true
+  fuzzy: true
+  fuzzy_threshold: 92.0
+  fuzzy_max_candidates: 5
+  max_documents_per_call: 8
+  max_content_chars: 500000
+
+graph_retrieval:
+  enabled: true
+  limit: 30
+  pair_weight: 0.65
+  relation_weight: 0.90
+  direct_relation_weight: 0.75
+  single_entity_weight: 0.30
+  hydrate_limit: 15
+  snippet_chars: 2400
+
+graph_entity_discovery:
+  enabled: true
+  # Optional. If omitted, the worker inherits LLM_BACKEND / LLM_BASE_URL /
+  # LLM_API_KEY from its environment. This makes API-only nodes possible.
+  # backend: openai
+  # url: "https://provider.example/v1"
+  # api_key_env: "GRAPH_ENTITY_API_KEY"
+  verify_tls: true
+  # model inherits graph_entity_discovery.model unless explicitly overridden.
+  timeout: 300
+  chunk_chars: 12000
+  overlap_chars: 600
+  max_chunks: 0
+  min_confidence: 0.70
+  max_entities_per_chunk: 40
+  num_ctx: 16384
+  num_predict: 1400
+  # Invalid/truncated structured JSON is retried once. If it is still invalid,
+  # only that discovery chunk is split and retried at smaller granularity.
+  adaptive_split_min_chars: 3000
+  adaptive_split_max_depth: 2
+  think: false
+  prompt_file: "prompts/graph_entity_discovery.txt"
+  require_relevant_actor: true
+  organization_auto_create_confidence: 0.88
+  person_auto_create_confidence: 0.93
+  person_require_context_cue: true
+  context_max_chars: 500
+
+# Graph v3 relation/claim discovery. Only exact, already resolved entities in
+# the same text chunk are exposed to this second LLM pass. The result is stored
+# as document-grounded Claim/RelationObservation nodes, never as global fact edges.
+graph_relation_discovery:
+  enabled: true
+  # backend/url/api_key_env inherit graph_entity_discovery by default.
+  verify_tls: true
+  # Empty = inherit graph_entity_discovery.model / LLM_MODEL.
+  model: ""
+  timeout: 300
+  chunk_chars: 12000
+  overlap_chars: 600
+  max_chunks: 0
+  min_confidence: 0.72
+  max_relations_per_chunk: 24
+  evidence_max_chars: 900
+  num_ctx: 16384
+  num_predict: 1200
+  adaptive_split_min_chars: 3000
+  adaptive_split_max_depth: 2
+  think: false
+  prompt_file: "prompts/graph_relation_discovery.txt"
+
+admin_ui:
+  enabled: true
+  username_env: "RAG_ADMIN_USER"
+  password_env: "RAG_ADMIN_PASSWORD"
+  allow_unauthenticated: false
+
+reranker:
+  # local = CPU/host model; tei = external Text Embeddings Inference reranker.
+  backend: "local"
+  model: "BAAI/bge-reranker-v2-m3"
+  device: "cpu"
+  max_length: 512
+  batch_size: 4
+  # Used only when backend=tei. Example: http://127.0.0.1:8081
+  tei_url: ""
+  timeout_seconds: 30
+  tei_batch_size: 32
+  fallback_backend: "none"
+
+auth:
+  # Login Flow v2 populates the same credential store used by live ACL and the
+  # canonical-user registry. Reversible Nextcloud/IMAP credentials and Login Flow
+  # poll tokens are encrypted at rest using the separate credential master key.
+  nextcloud_login_flow_enabled: true
+  credential_store: "runtime/users.sqlite"
+  verify_tls: true
+  # Reuse one pending browser login for this many seconds instead of creating
+  # a new Nextcloud Login Flow on every repeated client request.
+  login_flow_ttl_seconds: 1200
+
+nextcloud:
+  # Replace before first start. HTTP requires security.allow_insecure_nextcloud=true.
+  base_url: "https://nextcloud.example.invalid/"
+  cloud_id: "nextcloud"
+
+dedup:
+  enabled: true
+  near_text_ratio: 0.96
+  min_text_chars: 500
+  min_length_ratio: 0.80
+
+context_enrichment:
+  enabled: true
+  head_chars: 2200
+  window_chars: 1800
+  max_windows: 2
+  max_chars: 7000
+
+# Hidden mail sidecars are read on demand. In multi-user mode the graph worker
+# receives the scoped request identity for answer-cited documents and uses that
+# user's current Nextcloud credential. No per-user WebDAV secret belongs here.
+mail_metadata:
+  enabled: true
+  timeout: 10
+
+# Mail engine settings are global. Account/server/login/password/mailboxes and
+# destination paths are admin-managed per canonical Nextcloud user in
+# runtime/users.sqlite. The schema is 1:n; the beta admin UI exposes one account.
+mail:
+  enabled: false
+  state_file: mail_state.sqlite
+  poll_interval_seconds: 300
+  worker:
+    # Mail capability/account configuration may exist without background polling.
+    enabled: false
+  # Every configured mailbox is treated as a recursive IMAP root. Selectable
+  # child mailboxes are discovered with LIST and mirrored as Nextcloud folders.
+  # Each imported message gets its own directory.
+
+  # Optional post-sync hooks may be added by an administrator. They are global
+  # execution policy, not user configuration. The dedicated sync_worker is the
+  # preferred ES->Qdrant path; therefore the qdrant hook should normally stay off.
+  # post_sync:
+  #   fulltextsearch:
+  #     enabled: false
+  #   qdrant:
+  #     enabled: false
+
+# Packaging metadata; retrieval/business logic does not branch on deployment mode.
+deployment:
+  profile: standard
+  mode: native

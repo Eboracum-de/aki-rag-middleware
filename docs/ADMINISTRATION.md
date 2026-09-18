@@ -1,0 +1,581 @@
+# Administration
+
+This document covers the administrator-owned runtime state introduced for the
+multi-user beta. Normal administration should use the Admin UI or CLI. Direct
+SQLite changes are a diagnostic/emergency tool only.
+
+## 1. RAG Admin and user UI paths
+
+The reverse proxy reserves paths by role:
+
+```text
+/             selected user UI (OpenWebUI is optional)
+/rag-admin/   protected RAG administration
+/rag-api/     protected middleware API/diagnostics
+/v1/          OpenAI-compatible provider (Bearer-authenticated)
+/auth/        Nextcloud Login Flow endpoints
+```
+
+Without a user UI, `/` redirects to `/rag-admin/`. OpenWebUI keeps its own
+`/admin/...` path because the RAG Admin no longer occupies `/admin/`.
+
+## 2. Trusted frontend clients
+
+A provider API key identifies a frontend client, not a person. Plaintext keys
+are shown only when created/rotated; `runtime/users.sqlite` stores their hashes.
+
+```bash
+cd /opt/nextcloud-rag
+sudo -u rag ./.venv/bin/python -m rag.provider_clients list
+sudo -u rag ./.venv/bin/python -m rag.provider_clients create office-ui --name "Office UI"
+sudo -u rag ./.venv/bin/python -m rag.provider_clients rotate office-ui
+sudo -u rag ./.venv/bin/python -m rag.provider_clients disable office-ui
+sudo -u rag ./.venv/bin/python -m rag.provider_clients enable office-ui
+sudo -u rag ./.venv/bin/python -m rag.provider_clients delete office-ui
+```
+
+`disable` is reversible and retains bindings. `rotate` changes only the key and
+retains bindings. `delete` removes the client and its frontend-scoped identity
+bindings, Nextcloud credentials and pending login flows. Canonical Nextcloud
+users plus their Mail/Web configuration are retained because another trusted
+frontend may still use them.
+
+For an external OpenWebUI, configure a dedicated client key and set the
+connection's **Additional headers (JSON)** to:
+
+```json
+{"X-OpenWebUI-User-Id":"{{USER_ID}}"}
+```
+
+This flow has been validated with more than one trusted OpenWebUI client.
+
+## 3. Canonical users and safe credential operations
+
+Canonical user key:
+
+```text
+(nextcloud_server, nextcloud_login)
+```
+
+Frontend identities remain scoped as:
+
+```text
+client_id::external_user_id
+```
+
+Useful CLI commands:
+
+```bash
+cd /opt/nextcloud-rag
+sudo -u rag ./.venv/bin/python -m rag.user_admin list
+sudo -u rag ./.venv/bin/python -m rag.user_admin show demo-user
+sudo -u rag ./.venv/bin/python -m rag.user_admin reauth demo-user
+sudo -u rag ./.venv/bin/python -m rag.user_admin set-mail-password demo-user
+```
+
+Use `--server https://cloud.example/nextcloud` if the same login exists on more
+than one Nextcloud instance. `reauth` removes only the user's frontend-scoped
+Nextcloud app passwords/pending flows; the internal canonical user, bindings and Mail/Web/Kontakt-DB
+settings remain. The next frontend request starts Login Flow v2 again.
+
+The Mail password command prompts through the terminal and does not print the
+secret. In the Admin UI, Mail account configuration and the IMAP credential are
+separate forms. The stored credential is never returned or pre-filled; replacing
+it requires an explicit credential POST.
+
+## 4. Credential encryption administration
+
+```bash
+cd /opt/nextcloud-rag
+./.venv/bin/python -m rag.secret_admin status
+sudo ./.venv/bin/python -m rag.secret_admin init-key --group rag
+sudo -u rag ./.venv/bin/python -m rag.secret_admin migrate
+sudo -u rag ./.venv/bin/python -m rag.secret_admin verify
+```
+
+Production uses `RAG_CREDENTIAL_ENCRYPTION=required`. Migration may temporarily
+use `preferred`. No command provides a secret-show/export operation. The Admin UI
+security page at `/rag-admin/security` shows only encryption state and whether
+global runtime secret variables are configured.
+
+## 5. `runtime/users.sqlite` layout
+
+The schema is initialized by `rag.credential_store.CredentialStore`.
+
+### `provider_clients`
+
+Trusted frontend registry.
+
+```text
+client_id (PK)
+name
+api_key_hash (UNIQUE)
+enabled
+created_at / updated_at / last_used_at
+```
+
+### `canonical_users`
+
+One row per verified Nextcloud identity.
+
+```text
+canonical_user_id (PK)
+nextcloud_server
+nextcloud_login
+enabled
+created_at / updated_at / last_seen_at
+UNIQUE(nextcloud_server, nextcloud_login)
+```
+
+### `identity_bindings`
+
+Maps one frontend-scoped identity to a canonical user.
+
+```text
+rag_user_id (PK)              # client_id::external_user_id
+canonical_user_id (FK)
+created_at / updated_at
+```
+
+### `credentials`
+
+Generic credential store used by more than one service.
+
+```text
+rag_user_id
+service
+account_id
+server
+username
+secret
+created_at / updated_at
+PRIMARY KEY(rag_user_id, service, account_id)
+```
+
+Important `service` values:
+
+```text
+nextcloud     frontend-scoped Nextcloud app password
+mail_imap     canonical-user-owned IMAP password
+```
+
+Mail secrets use `rag_user_id=canonical-user:<canonical_user_id>`; Nextcloud
+credentials use the frontend-scoped `client_id::external_user_id`. **Never
+update credentials by `username` alone.** A username can occur in several
+services and such an UPDATE can overwrite both IMAP and Nextcloud secrets.
+
+Reversible secrets are encrypted at rest with AES-256-GCM. The master
+key is stored outside SQLite (`runtime/credential-master.key` on a standard
+installation) and is normally `root:rag 0640`. Ciphertexts are bound by AEAD
+additional data to their user/service/account identity.
+
+### `nextcloud_login_flows`
+
+Pending Nextcloud Login Flow v2 state, keyed by `flow_id` and scoped
+`rag_user_id`.
+
+### `mail_accounts`
+
+Per-verified-Nextcloud-user mail configuration (intern über `canonical_user_id`). The schema is 1:n even though the beta
+Admin UI currently edits one account per user.
+
+Key fields include `account_id`, `canonical_user_id`, host/port/security,
+username, mailbox list, target paths, `store_eml`, `store_attachments` and
+polling/import limits. The password itself is not in this table; it is in
+`credentials(service='mail_imap')`.
+
+### `user_web_settings`
+
+Per-verified-Nextcloud-user Web Research enablement, archive enablement and target path (intern über `canonical_user_id`).
+
+### `contact_sync_settings`
+
+Per-user CardDAV seed configuration and last-run status. The foreign key is the
+internal `canonical_user_id`, but routine administration is keyed and displayed
+by `nextcloud_server + nextcloud_login`. Fields include enablement, optional
+address-book include/exclude lists, last sync time/status, contacts seen/written
+and the last bounded error text. No CardDAV password is stored in this table;
+the sync reuses the user's Nextcloud Login-Flow credential.
+
+### `web_archive_roots`
+
+History of Web archive roots that must stay excluded from ordinary internal
+retrieval even if an administrator later changes a user's archive target.
+
+### `store_meta`
+
+Schema/runtime migration markers and internal metadata.
+
+## 5. Mail/Web/Kontakt-DB global vs. per-user switches
+
+Mail requires both:
+
+```text
+config.yaml: mail.enabled=true
+mail_accounts.enabled=true
+canonical user enabled
+```
+
+The mail worker polls every enabled account across all enabled canonical users;
+a broken/missing credential for one user does not intentionally redefine the
+others' configuration. Configured mailbox names are recursive roots: selectable
+IMAP descendants are discovered with `LIST`, and new messages use a dedicated
+Nextcloud directory per mail.
+After storing/testable IMAP credentials, **Verbindung testen & Mailboxen ermitteln** runs the same IMAP `LIST` parser as the importer and shows server names, flags, hierarchy delimiter and `\Noselect` state. The configured mailbox list remains a set of recursive roots.
+
+Web Research has global policy in `web.yaml` and per-user enablement/target in
+`users.sqlite`. The Admin UI warns when Mail or Web is configured per user but
+the corresponding global engine is disabled.
+
+CardDAV contact seeds are configured under **Users → <Nextcloud login> → Kontakt-DB**.
+The UI deliberately does not expose the internal UUID as an operational selector.
+It uses the Nextcloud credential already stored by Login Flow. The matching CLI is:
+
+```bash
+# native
+./.venv/bin/python -m rag.contacts list
+./.venv/bin/python -m rag.contacts sync --user alice
+
+# dockerized super-light
+install/super-light/contacts.sh list
+install/super-light/contacts.sh sync --user alice
+```
+
+Add `--server URL` only if the same login exists on multiple Nextcloud instances.
+Missing credential, disabled source or an empty address book is a no-op rather than
+a stack failure. The Admin UI starts synchronization as a background job and shows a progress page with processed/total, written, repaired, removed and error counts. **Adressbücher ermitteln** shows both CardDAV display names and technical slugs. Full successful scans reconcile source deletions; limited/dry-run/failed scans never delete unseen contacts. `NEXTCLOUD_USERNAME` /
+`NEXTCLOUD_APP_PASSWORD` remains a legacy single-user compatibility path only.
+
+## 6. Elasticsearch credentials
+
+`config.yaml` contains the username and secret reference only:
+
+```yaml
+elasticsearch:
+  url: "https://es.example:9200"
+  index: "nextcloud"
+  username: "nextcloud"
+  password_env: "ELASTICSEARCH_PASSWORD"
+  verify_tls: true
+  ca_file: "/etc/nextcloud-rag/es-ca.pem"
+```
+
+`runtime.env` contains:
+
+```bash
+ELASTICSEARCH_PASSWORD='...'
+```
+
+The administrator decides which Elasticsearch account to use. It can be the
+same account as Nextcloud FullTextSearch or a separate read-only account. The
+middleware neither creates nor changes Elasticsearch users/roles.
+
+## 6.1 Private CA / internal PKI
+
+Do not use `verify_tls: false` as the normal solution for internally signed
+Nextcloud/Elasticsearch/LLM endpoints. Trust the issuing root/intermediate CA.
+
+For the **dockerized super-light deployment**, pass one or more PEM CA
+certificates during installation:
+
+```bash
+sudo ./install/install.sh --profile super-light \
+  --ca-certificate /secure/path/company-root.crt ...
+```
+
+The API/provider image receives the private anchors in addition to the public
+Debian CA bundle. A rerun rebuilds the image after CA changes.
+
+For the **native standard deployment**, install the CA into the host OS trust
+store. If the Python HTTP stack uses a separate CA bundle, set
+`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` in the RAG environment to the host's
+combined system bundle. Service-specific `ca_file` options (for example
+Elasticsearch) remain available when a private CA should apply only to one
+backend.
+
+The TLS certificate served by the RAG nginx and the trust anchors used by RAG
+as an HTTPS client are different concerns. Replacing `server.crt/server.key`
+does not automatically make the issuing CA trusted by API/provider clients.
+
+## 7. Direct SQLite access
+
+For diagnostics only:
+
+```bash
+sudo -u rag sqlite3 /opt/nextcloud-rag/runtime/users.sqlite
+.tables
+.schema credentials
+```
+
+Before changing data manually, inspect the exact schema and include all key
+columns (`rag_user_id`, `service`, `account_id`) in predicates. Prefer the CLI or
+Admin UI whenever an operation exists there.
+
+
+## OpenWebUI helper tasks
+
+For the beta, the provider refuses to generate OpenWebUI follow-up suggestions.
+A detected `ui:follow_ups` helper request returns `{"follow_ups":[]}` without an
+LLM call. This is a server-side security boundary and does not depend on an
+OpenWebUI UI setting.
+
+## Container image policy
+
+The beta installer manages only nginx plus optional Qdrant, Neo4j and OpenWebUI. Every shipped image reference is pinned to an immutable digest in `versions.lock.yaml` and `install/.env.example`; tags are retained only for readability. Ollama and web-search infrastructure are administrator-managed external services. Change an image pin only as an explicit upgrade followed by a fresh acceptance test.
+
+## Qdrant sync lifecycle
+
+Normal Elasticsearch -> Qdrant synchronization does not use payload-filter deletion. Stable UUIDv5 point IDs plus the committed SQLite `chunk_count` are used to overwrite and remove chunks deterministically. When a document shrinks, new chunks are upserted first and only the obsolete tail IDs are deleted afterward. A stale document is removed by its known explicit point IDs.
+
+Recommended existing-installation sync settings for large/heterogeneous corpora are `elasticsearch.page_size: 50` and `sync.embedding_batch_size: 8`. They affect peak memory/HTTP batch size, not semantic chunk boundaries.
+
+
+## Retrieval path: Query Rewriter, SearchSpec and verifier
+
+Canonical round/budget settings live in `config.yaml` under the legacy-named
+`retrieval_planner` section; `MAX_RETRIEVAL_ROUNDS` in `provider.env` remains
+only a compatibility fallback if the YAML key is absent. The section name is
+retained to avoid configuration churn, but the normal path no longer uses the
+old RC8 multi-probe planner.
+
+Current reference policy:
+
+```yaml
+retrieval_planner:
+  enabled: true              # enable additional rounds after round 1
+  max_retrieval_rounds: 1    # 1 = rewrite once, retrieve once
+  model: ""                  # inherit LLM_MODEL
+  max_tokens: 700
+  context_max_chars: 12000
+  max_complete_documents: 15
+  overflow_acl_scan_limit: 80
+  verification_candidate_limit: 6
+  bounded_verification_candidate_limit: 30
+  exhaustive_verification_candidate_limit: 30
+  verification_max_chars_per_document: 2500
+  verification_max_tokens: 900
+  verification_batch_size: 6
+```
+
+Round 1 always starts with one Query Rewrite. Before the rewrite the provider
+asks the API for a compact Neo4j Seed-/Alias context. The model then emits one
+small `SearchSpec` with a human-style Nextcloud `elastic_query`, a natural
+`semantic_query`, and lightweight `entities`, `concepts`, `constraints` and
+`verification_requirements`. It does **not** emit raw Elasticsearch JSON and does
+not select a free-form workflow.
+
+The same SearchSpec drives the enabled backends:
+
+```text
+elastic_query  -> parsed/compiled to Elasticsearch JSON
+semantic_query -> Qdrant, when enabled
+Neo4j seeds    -> context for query rewrite / alias expansion
+analysis fields -> verifier + Graph-Light provenance
+```
+
+The resulting candidate lists are fused, deduplicated and optionally reranked.
+Live Nextcloud ACL then removes unauthorized candidates. No lower-ranked
+candidates are backfilled after an ACL denial. The optional Candidate Verifier
+checks only the administrator-controlled authorized-candidate window. For a
+requested document type the document itself must be of that type; a bank
+statement that merely mentions an invoice is not an invoice match.
+
+Super-Light uses the exact same path with Qdrant and the local reranker disabled.
+Its normal verifier window is 10; concretely bounded and exhaustive requests use
+the separate 30-candidate limits above. These are verifier/candidate budgets, not
+claims that 30 relevant documents always exist.
+
+Additional retrieval rounds remain optional. If `enabled:true` and
+`max_retrieval_rounds > 1`, a later round may produce a revised SearchSpec after
+seeing the bounded result picture. Every round executes the **same**
+ES/Qdrant/fusion pipeline; there is no second probe language or arm-specific LLM
+syntax.
+
+### Exhaustive mode
+
+Ordinary wording such as “Suche die Rechnungen …” is **not** exhaustive merely because documents are requested. Broader completeness handling is reserved for explicit completeness/counting intent such as `alle`, `sämtliche`, `vollständige Liste`, `wie viele` or `zähle`.
+
+The completeness path remains bounded by `max_complete_documents` and `overflow_acl_scan_limit`; it fails conservatively rather than claiming completeness from an unbounded or partially authorized result set. No pre-ACL hit count is exposed to the user.
+
+### RetrievalRecord
+
+Optional query/evidence audit records can be enabled with:
+
+```yaml
+retrieval_record:
+  enabled: true
+  directory: "runtime/retrieval-records"
+```
+
+Records contain the original/normalized query, SearchSpec/derived QueryFrame, reviewed document metadata, verifier decisions/EvidenceFrames and provenance, but no complete document bodies and no user identity. They are intended for debugging/audit and a later **curated** graph-ingestion path; QueryFrames must never be auto-imported as facts.
+
+### Document-grounded indirect Graph chains
+
+Graph retrieval may return a two-hop `A -> C -> B` chain only when each hop is a document-grounded `RelationObservation`. Such results are explicitly indirect; `direct_relations` remains empty for the chain. Prompts forbid presenting `A -> C -> B` as a direct `A <-> B` relationship.
+
+### Web Research
+
+The public Web arm supports Brave Search and external SearXNG. Search results are discovery only: target pages are fetched, the best passage is selected, and a relevance LLM must make a complete per-source Structured-Output decision. Search snippets are never answer Evidence.
+
+When per-user archiving is enabled, selected pages may be stored as `recherche.md`, text snapshots, raw PDFs and raw HTML main responses. The configured archive root is excluded from normal internal retrieval to prevent archived Web Evidence from reappearing as an apparently independent internal source.
+
+## Worker switches and trust boundary
+
+Capabilities and background workers are deliberately separate:
+
+```yaml
+qdrant:
+  enabled: true
+sync_worker:
+  enabled: false
+
+mail:
+  enabled: true
+  worker:
+    enabled: false
+
+graph_queue:
+  enabled: true
+  auto_enqueue_cited_documents: false
+  worker:
+    enabled: false
+```
+
+This allows manual Qdrant synchronization, prepared mail accounts and an
+available Neo4j/Graph Queue without immediately starting CPU-intensive or
+privacy-relevant background work.
+
+For role-specific LLM routing and remote evidence limits, see
+`PRIVACY-ARCHITECTURE.md` and `provider.env.example`.
+
+## Administrator-managed CPU model services
+
+A tested CPU-oriented layout keeps model services outside the middleware install
+prefix, for example `/opt/nextcloud-rag-models`. The middleware does not own or
+upgrade these containers. A practical reference combination is Ollama 0.24.0
+with `qwen3-embedding:4b` plus a TEI CPU service running
+`Alibaba-NLP/gte-multilingual-reranker-base`. Bind both services to loopback when
+they run on the RAG VM.
+
+For Ollama embedding-only use, keeping one loaded model resident avoids repeated
+large disk reads on quiet/busy transitions:
+
+```yaml
+environment:
+  OLLAMA_KEEP_ALIVE: "-1"
+  OLLAMA_MAX_LOADED_MODELS: "1"
+```
+
+The initial ES→Qdrant synchronization is CPU intensive on a CPU-only VM. It can
+be disabled with `sync_worker.enabled: false` and run manually at a controlled
+time or on a suitable system.
+
+## Docker persistent data
+
+Bundled Qdrant, Neo4j and OpenWebUI use Docker named volumes rather than visible
+subdirectories below `/opt/nextcloud-rag`. Inspect them with:
+
+```bash
+docker volume ls
+docker volume inspect install_qdrant_data
+```
+
+The `rag` service account intentionally does not require Docker-socket access.
+Membership in the `docker` group is effectively root-equivalent and should not
+be granted merely to access the middleware.
+
+## Private Elasticsearch backend network
+
+For an Elasticsearch instance without authentication, do not expose TCP/9200 on
+the ordinary LAN. A pragmatic legacy setup is a dedicated isolated VM network
+with one backend NIC per VM, no gateway and a firewall rule allowing TCP/9200
+only from the RAG VM. Elasticsearch can bind only its HTTP interface to that
+backend address while keeping cluster transport local.
+
+
+## FullTextSearch reconciliation helper
+
+`helpers/fts_reconcile` contains a standalone Nextcloud maintenance app. Its `fts_reconcile:files` command is dry-run by default, `--reconcile` marks stale file-provider FTS rows for removal through the FullTextSearch status path, and `--unreconcile` removes a pending removal mark before FullTextSearch has processed it. The helper is not installed by the middleware installer.
+
+## TLS compatibility for private PKI
+
+Prefer `verify_tls: true`. Private CA trust and Python X.509 strictness are two
+separate controls:
+
+```yaml
+tls:
+  x509_strict: true
+```
+
+- `true` (default): Python 3.13 strict RFC-5280 validation.
+- `false`: keep normal CA/chain/SAN/hostname/validity verification but remove
+  only `VERIFY_X509_STRICT`; useful for established intranet PKIs lacking newer
+  extensions such as Authority Key Identifier on leaf certificates.
+- `verify_tls: false`: disables certificate verification for the affected
+  backend and should remain a diagnostic/legacy exception.
+
+For dockerized installs use `--ca-certificate` so API/provider containers receive
+the private CA in their own trust store. Installing a CA only on the Docker host
+does not automatically make it trusted inside containers.
+
+## Retrieval policy administration
+
+`retrieval_policy` controls which implemented capabilities are available, not
+their algorithms or resource budgets. The normal automatic private-document path
+uses `files` and, when configured, `vector`. Neo4j remains available for
+entity/alias expansion independently of graph document retrieval.
+
+```yaml
+retrieval_policy:
+  internal:
+    files: required
+    vector: optional
+    graph: optional
+  optional_default: include
+  web: planner
+```
+
+Neo4j entity resolution/query expansion is independent of the graph *document*
+retrieval arm. A super-light system can therefore use Neo4j aliases and AKI
+research findings while `retrieval_policy.internal.graph: disabled` and
+`graph_retrieval.enabled: false`.
+
+## AKI Recherche 0.2.3
+
+The Nextcloud client is under `clients/nextcloud/akirag`. It is intentionally a
+thin search frontend: Nextcloud session → server-side proxy → OpenAI-compatible
+provider. It sends the current Nextcloud UID as `X-RAG-User-ID`; the provider key
+never reaches browser JavaScript.
+
+AKI Recherche renders a safe Markdown subset without raw HTML and adds per-user-message
+controls:
+
+- **Erneut senden**: rerun exactly that question from that conversation point.
+- **Bearbeiten & erneut senden**: load the question into the composer, edit it,
+  and branch the conversation at that point before resubmitting.
+
+The old and edited variants are never sent together as competing user turns.
+
+### AKI installation/configuration
+
+The app targets Nextcloud 23+. Install the `akirag` directory below the Nextcloud
+`apps/` tree and enable it with `occ app:enable akirag`. Configure the middleware
+base URL and provider API key under **Settings → Administration → Additional
+settings**. The key is stored server-side through Nextcloud encryption and is not
+exposed to browser JavaScript.
+
+If the configured middleware URL points to an RFC1918/private address, Nextcloud may
+reject it with `Host violates local access rules`; in a deliberately internal
+deployment the global Nextcloud option `allow_local_remote_servers => true` permits
+that server-side proxy connection. The Nextcloud host must also trust the middleware
+TLS issuer. Version 0.2.3 registers the navigation through `<navigations>` and ships
+a dedicated compact `img/app.svg`, so the app appears in the normal Nextcloud app
+navigation rather than requiring a manual URL.
+
+### Findings administration and Graph-Lite boundary
+
+`ResearchFinding:AKIResearchFinding` nodes are visible in **Graph → Findings** with their query/evidence frame, verification/provenance and supporting document. The default view shows open findings grouped by unresolved entity text. Administrators can curate individual rows or use checkbox-based bulk assignment / bulk not-an-entity decisions; findings without any entity text can be suppressed as a batch without deleting provenance.
+
+A confirmed entity decision creates document-grounded observation/mention provenance. With at least two curated entities an administrator may create a manual document-grounded `RelationObservation` claim. RC3 still does **not** convert a Finding or Claim into a global Entity relation or query-expansion edge automatically. See `GRAPHLIGHT-FINDINGS.md`.
+
+Personal `Mailarchiv/`, `Webarchiv/` and `AKI-Chats/` content is initially private because it is stored in the owning user's Nextcloud file tree. Sharing folders through normal Nextcloud shares is the supported collaboration mechanism; retrieval still performs the live ACL check for the querying user.

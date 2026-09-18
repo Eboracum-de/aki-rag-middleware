@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Merge · RAG Admin{% endblock %}
+{% block content %}
+<h1>Merge für {{ current.display_name }}</h1>
+<p class="muted mono">{{ current.entity_id }}</p>
+<form method="get" class="searchbar"><input type="search" name="q" value="{{ q }}" placeholder="Andere Entity suchen" autofocus><button>Suchen</button></form>
+{% if candidates %}
+<table><thead><tr><th>Entity</th><th>Status</th><th>Alias-Policy</th><th>Aktion</th></tr></thead><tbody>
+{% for e in candidates %}
+<tr><td><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}">{{ e.display_name }}</a><div class="mono smalltext muted">{{ e.entity_id }}</div></td><td>{{ e.identity_status or '—' }}</td>
+<td colspan="2">
+<form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form">
+<input type="hidden" name="merge_id" value="{{ e.entity_id }}"><input type="hidden" name="keep_id" value="{{ current.entity_id }}"><input type="hidden" name="cancel_url" value="{{ request.url.path }}?{{ request.url.query }}">
+<select name="alias_policy">{% for p in policies %}<option value="{{ p }}" {% if p=='contextual' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+<button>Aktuelle Entity behalten …</button>
+</form>
+<form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form topgap">
+<input type="hidden" name="keep_id" value="{{ e.entity_id }}"><input type="hidden" name="merge_id" value="{{ current.entity_id }}"><input type="hidden" name="cancel_url" value="{{ request.url.path }}?{{ request.url.query }}"><input type="hidden" name="alias_policy" value="contextual">
+<button class="secondary">Andere Entity behalten …</button>
+</form>
+</td></tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}

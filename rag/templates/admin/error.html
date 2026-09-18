@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Fehler · RAG Admin{% endblock %}
+{% block content %}<h1>Fehler {{ status_code }}</h1><div class="alert dangerbox">{{ error }}</div><p><a href="{{ back_url }}">← zurück</a></p>{% endblock %}

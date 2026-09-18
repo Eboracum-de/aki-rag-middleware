@@ -1,0 +1,18 @@
+[Unit]
+Description=AKI RAG Middleware Graph Worker
+After=network-online.target rag-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@RAG_USER@
+Group=@RAG_GROUP@
+WorkingDirectory=@RAG_DIR@
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/bin/bash @RAG_DIR@/start-graph-worker.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

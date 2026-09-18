@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.entity.display_name }} · RAG Admin{% endblock %}
+{% block content %}
+{% if detail.is_tombstone %}
+<div class="alert tombstone-alert">
+  <strong>MERGED ENTITY · historischer Tombstone</strong>
+  {% if detail.merged_into %}
+  <div>Diese Entity wurde zusammengeführt mit <a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=detail.merged_into.entity_id) }}"><strong>{{ detail.merged_into.display_name }}</strong></a>. Änderungen erfolgen nur an der aktiven Entity.</div>
+  {% else %}<div>Diese Entity ist nicht mehr aktiv und wird nur zur Provenienz/Historie angezeigt.</div>{% endif %}
+</div>
+{% endif %}
+
+<div class="heading-row">
+  <div><h1>{{ detail.entity.display_name }}</h1><p class="muted mono">{{ detail.entity.entity_id }}</p></div>
+  {% if not detail.is_tombstone %}<a class="button secondary" href="{{ request.app.url_path_for('admin_entity_merge_search', entity_id=detail.entity.entity_id) }}">Merge mit …</a>{% endif %}
+</div>
+
+<div class="cards small">
+  <div class="card"><span>Typ</span><strong>{{ detail.entity.entity_type }}</strong></div>
+  <div class="card"><span>Status</span><strong>{{ detail.entity.identity_status or '—' }}</strong></div>
+  <div class="card"><span>Dokumente</span><strong>{{ detail.entity.document_mentions }}</strong></div>
+  <div class="card"><span>ContactRecords</span><strong>{{ detail.entity.contact_records }}</strong></div>
+  <div class="card"><span>Observations</span><strong>{{ detail.entity.observations }}</strong></div>
+</div>
+
+<section>
+<h2>Kanonischer Name</h2>
+{% if detail.is_tombstone %}
+<p><strong>{{ detail.entity.display_name }}</strong> <span class="pill">read-only</span></p>
+{% else %}
+<form method="post" action="{{ request.app.url_path_for('admin_entity_name', entity_id=detail.entity.entity_id) }}" class="inline-form wide">
+  <input name="new_name" value="{{ detail.entity.display_name }}" required>
+  <input name="reason" value="manual_name_correction" placeholder="Grund">
+  <button>Preview</button>
+</form>
+{% endif %}
+</section>
+
+<section>
+<h2>Namen / Aliase</h2>
+<table>
+<thead><tr><th>Form</th><th>Art</th><th>Relation</th><th>Policy</th><th>Herkunft</th><th>Aktiv</th><th></th></tr></thead>
+<tbody>
+{% for form in detail.forms %}
+<tr>
+  <td><strong>{{ form.value }}</strong>{% if form.preferred %} <span class="pill">preferred</span>{% endif %}</td>
+  <td>{{ form.form_kind }}</td>
+  <td>{{ form.relation_kind }}</td>
+  <td>
+    {% if detail.is_tombstone %}
+      {{ form.resolution_policy }}{% if not form.policy_explicit %}<div class="muted smalltext">Legacy-Default, nicht explizit gespeichert</div>{% endif %}
+    {% else %}
+    <form method="post" action="{{ request.app.url_path_for('admin_entity_policy', entity_id=detail.entity.entity_id) }}" class="inline-form">
+      <input type="hidden" name="form" value="{{ form.value }}">
+      <input type="hidden" name="form_kind" value="{{ form.form_kind }}">
+      <input type="hidden" name="relation_kind" value="{{ form.relation_kind }}">
+      <input type="hidden" name="source_merge_entity_id" value="{{ form.source_merge_entity_id or '' }}">
+      <select name="policy">
+        {% for policy in policies %}<option value="{{ policy }}" {% if policy == form.resolution_policy %}selected{% endif %}>{{ policy }}</option>{% endfor %}
+      </select>
+      <button class="small">Speichern</button>
+    </form>
+    {% if not form.policy_explicit %}<div class="muted smalltext">Legacy-Default, nicht explizit gespeichert</div>{% elif form.policy_set_by %}<div class="muted smalltext">gesetzt durch {{ form.policy_set_by }}</div>{% endif %}
+    {% endif %}
+  </td>
+  <td class="smalltext">
+    {% if form.source_merge_entity_id %}Merge · {{ form.source_merge_entity_id }}
+    {% elif form.source_contact_id %}Kontakt · {{ form.source_contact_id }}
+    {% elif form.source_document_id %}Dokument · {{ form.source_document_id }}
+    {% elif form.source_curator %}Curator · {{ form.source_curator }}
+    {% else %}{{ form.relation_kind }}{% endif %}
+  </td>
+  <td>{{ 'ja' if form.active else 'nein' }}</td>
+  <td>{% if not detail.is_tombstone and form.form_kind == 'alias' %}<form method="post" action="{{ request.app.url_path_for('admin_entity_alias_remove', entity_id=detail.entity.entity_id) }}" class="confirm-submit" data-confirm="Alias wirklich entfernen?"><input type="hidden" name="alias" value="{{ form.value }}"><button class="small danger-outline">Alias entfernen</button></form>{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+
+{% if not detail.is_tombstone %}
+<h3>Neuen Alias anlegen</h3>
+<p class="muted">Nur für eine zusätzliche Namensform. Wenn bereits eine zweite Entity existiert, stattdessen unten nach ihr suchen und einen Merge prüfen.</p>
+<form method="post" action="{{ request.app.url_path_for('admin_entity_alias_add', entity_id=detail.entity.entity_id) }}" class="inline-form wide">
+  <input name="alias" placeholder="Alias" required>
+  <select name="policy"><option>contextual</option><option>exclusive</option><option>search_only</option></select>
+  <button>Hinzufügen</button>
+</form>
+
+<h3>Bestehende Entity suchen / Merge prüfen</h3>
+<form method="get" action="{{ request.app.url_path_for('admin_entity_detail', entity_id=detail.entity.entity_id) }}" class="searchbar">
+  <input type="search" name="merge_q" value="{{ merge_q }}" placeholder="z. B. Postbank Dortmund Abt. Sgf">
+  <button>Suchen</button>
+</form>
+{% if merge_q and not merge_candidates %}<p class="muted">Keine aktive andere Entity gefunden.</p>{% endif %}
+{% if merge_candidates %}
+<table><thead><tr><th>Entity</th><th>Typ</th><th>Status</th><th>Dokumente</th><th>Aktion</th></tr></thead><tbody>
+{% for e in merge_candidates %}
+<tr>
+<td><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}"><strong>{{ e.display_name }}</strong></a><div class="mono smalltext muted">{{ e.entity_id }}</div></td>
+<td>{{ e.entity_type }}</td><td>{{ e.identity_status or '—' }}</td><td>{{ e.document_mentions }}</td>
+<td>
+<form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form">
+<input type="hidden" name="keep_id" value="{{ detail.entity.entity_id }}"><input type="hidden" name="merge_id" value="{{ e.entity_id }}"><input type="hidden" name="alias_policy" value="contextual"><input type="hidden" name="cancel_url" value="{{ request.url.path }}?merge_q={{ merge_q|urlencode }}">
+<button>Diese Entity behalten …</button>
+</form>
+<form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form topgap">
+<input type="hidden" name="keep_id" value="{{ e.entity_id }}"><input type="hidden" name="merge_id" value="{{ detail.entity.entity_id }}"><input type="hidden" name="alias_policy" value="contextual"><input type="hidden" name="cancel_url" value="{{ request.url.path }}?merge_q={{ merge_q|urlencode }}">
+<button class="secondary">Andere Entity behalten …</button>
+</form>
+</td>
+</tr>{% endfor %}
+</tbody></table>
+{% endif %}
+{% endif %}
+</section>
+
+<section>
+<h2>ContactRecords</h2>
+{% if detail.contacts %}
+<table><thead><tr><th>Quelle</th><th>UID</th><th>Auflösung</th><th>Letzter Sync</th><th></th></tr></thead><tbody>
+{% for c in detail.contacts %}
+<tr>
+<td><strong>{{ c.source_user_id or '—' }}</strong> / {{ c.addressbook_name or c.addressbook_slug or '—' }}<div class="muted">{{ c.cloud_id }}</div></td>
+<td class="mono smalltext">{{ c.vcard_uid or '—' }}</td>
+<td>{{ c.resolved_by or '—' }}</td><td>{{ c.last_seen_at or '—' }}</td>
+<td><a class="button small secondary" href="{{ request.app.url_path_for('admin_contact_detail', contact_id=c.contact_id) }}">Ansehen</a></td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">Keine Kontaktquelle.</p>{% endif %}
+</section>
+
+<section>
+<h2>Observations</h2>
+<p class="muted">Korrekte automatische Auflösungen müssen nicht bestätigt werden. Bearbeiten ist nur für Ausnahmen/Korrekturen nötig.</p>
+{% if detail.observations %}
+<table><thead><tr><th>Erkannt</th><th>Dokument</th><th>Auflösung</th><th>Curator</th><th></th></tr></thead><tbody>
+{% for o in detail.observations %}
+<tr>
+<td><strong>{{ o.observed_text or o.canonical_name }}</strong></td>
+<td>{{ o.document_path or o.document_title or o.document_id }} {% if o.nextcloud_url %}<a href="{{ o.nextcloud_url }}" target="_blank" rel="noopener">Nextcloud ↗</a>{% endif %}</td>
+<td>{% if o.needs_review %}<span class="status degraded">{{ o.status_label }}</span>{% else %}<span class="status ok">{{ o.status_label }}</span>{% endif %}</td>
+<td>{{ o.curator_status_label }}</td>
+<td><a class="button small secondary" href="{{ request.app.url_path_for('admin_observation_detail', observation_id=o.observation_id) }}">{% if o.needs_review %}Prüfen{% else %}Ansehen / korrigieren{% endif %}</a></td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">Keine Observations.</p>{% endif %}
+</section>
+
+<section>
+<h2>Relation Observations</h2>
+<p class="muted">Nur dokumentgebundene Beobachtungen. Die Relation ist keine globale Faktenkante; entscheidend bleibt die wörtliche Evidence-Passage.</p>
+{% if detail.relations %}
+<table><thead><tr><th>Relation</th><th>Dokument</th><th>Stance</th><th>Evidence</th></tr></thead><tbody>
+{% for r in detail.relations %}
+<tr>
+<td><strong>{{ r.subject_display_name }}</strong> — {{ r.predicate }} → <strong>{{ r.object_display_name }}</strong><div class="muted smalltext">{{ r.predicate_text }}</div></td>
+<td>{{ r.document_path or r.document_title or r.document_id }}{% if r.source_url %} <a href="{{ r.source_url }}" target="_blank" rel="noopener">Quelle ↗</a>{% endif %}</td>
+<td>{{ r.stance }}<div class="muted smalltext">confidence {{ '%.2f'|format(r.confidence or 0) }}</div></td>
+<td class="smalltext">{% if r.relation_text %}<strong>{{ r.relation_text }}</strong><br>{% endif %}{{ r.evidence_text }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">Noch keine Relation Observations.</p>{% endif %}
+</section>
+
+{% if detail.merged_from %}
+<section><h2>In diese Entity gemergt</h2><ul>{% for e in detail.merged_from %}<li><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}">{{ e.display_name }}</a> <span class="muted">{{ e.merged_at }}</span></li>{% endfor %}</ul></section>
+{% endif %}
+
+{% if not detail.is_tombstone %}
+<section class="danger-zone">
+<h2>Danger Zone</h2>
+<form method="post" action="{{ request.app.url_path_for('admin_entity_delete', entity_id=detail.entity.entity_id) }}" class="inline-form"><input name="reason" value="manual_not_an_entity"><button class="danger">Als Non-Entity entfernen …</button></form>
+</section>
+{% endif %}
+{% endblock %}

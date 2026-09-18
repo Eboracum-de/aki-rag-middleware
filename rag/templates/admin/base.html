@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}RAG Admin{% endblock %}</title>
+  <link rel="stylesheet" href="{{ request.app.url_path_for('admin_css') }}">
+  <script src="{{ request.app.url_path_for('admin_js') }}" defer></script>
+</head>
+<body>
+{% set path = request.url.path %}
+{% set graph_area = path.startswith('/rag-admin/entities') or path.startswith('/rag-admin/entity/') or path.startswith('/rag-admin/candidates') or path.startswith('/rag-admin/observations') or path.startswith('/rag-admin/observation/') or path.startswith('/rag-admin/relations') or path.startswith('/rag-admin/findings') or path.startswith('/rag-admin/finding/') or path.startswith('/rag-admin/contacts') or path.startswith('/rag-admin/contact/') or path.startswith('/rag-admin/queue') %}
+<header class="topbar">
+  <div class="brand"><a href="{{ request.app.url_path_for('admin_overview') }}">Nextcloud RAG Admin</a><span>v{{ version }}</span></div>
+  <nav class="primary-nav" aria-label="Hauptnavigation">
+    <a class="{{ 'active' if path == '/rag-admin/' else '' }}" href="{{ request.app.url_path_for('admin_overview') }}">Übersicht</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/users') else '' }}" href="{{ request.app.url_path_for('admin_users') }}">Benutzer</a>
+    <a class="{{ 'active' if graph_area else '' }}" href="{{ request.app.url_path_for('admin_findings') }}">Graph</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/security') else '' }}" href="{{ request.app.url_path_for('admin_security') }}">Sicherheit</a>
+  </nav>
+</header>
+{% if graph_area %}
+<nav class="sectionnav" aria-label="Graph-Navigation">
+  <div>
+    <a class="{{ 'active' if path.startswith('/rag-admin/entities') or path.startswith('/rag-admin/entity/') else '' }}" href="{{ request.app.url_path_for('admin_entities') }}">Entitäten</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/candidates') else '' }}" href="{{ request.app.url_path_for('admin_candidates') }}">Merge-Kandidaten</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/observations') or path.startswith('/rag-admin/observation/') else '' }}" href="{{ request.app.url_path_for('admin_observations') }}">Beobachtungen</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/relations') else '' }}" href="{{ request.app.url_path_for('admin_relations') }}">Relationen</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/findings') or path.startswith('/rag-admin/finding/') else '' }}" href="{{ request.app.url_path_for('admin_findings') }}">Findings</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/contacts') or path.startswith('/rag-admin/contact/') else '' }}" href="{{ request.app.url_path_for('admin_contacts') }}">Kontaktquellen</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/queue') else '' }}" href="{{ request.app.url_path_for('admin_queue') }}">Graph-Import / Queue</a>
+  </div>
+</nav>
+{% endif %}
+<main>
+  {% if unauthenticated_warning %}
+  <div class="alert warning">Admin UI läuft ohne Authentifizierung. Nur für bewusst abgeschottete interne Netze verwenden.</div>
+  {% endif %}
+  {% if message %}<div class="alert success">{{ message }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer>AKI RAG Middleware · Administration, Sicherheit und Graph-Kuration · Secret-Werte werden nie angezeigt.</footer>
+</body>
+</html>

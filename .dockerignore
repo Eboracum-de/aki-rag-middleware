@@ -1,0 +1,17 @@
+.git
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+# Never send runtime credentials/databases into the Docker build context.
+runtime/*
+!runtime/ca/
+!runtime/ca/**
+provider.env
+runtime.env
+install/super-light/.env
+install/super-light/docker-compose.override.yml
+install/nginx/tls/
+install/nginx/htpasswd
+install/nginx/generated.conf
+*.sqlite

@@ -1,0 +1,38 @@
+release: 0.8.5-rc3
+python:
+  torch: 2.13.0+cpu
+  transformers: 4.57.6
+  qdrant-client: 1.19.0
+  neo4j-driver: 5.28.4
+docker:
+  nginx:
+    tag: nginx:1.30.4-alpine3.24
+    digest: sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+    ref: nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+  qdrant:
+    tag: qdrant/qdrant:v1.19.0
+    digest: sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    ref: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+  neo4j:
+    tag: neo4j:5.26.29-community
+    digest: sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe
+    ref: neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe
+  openwebui:
+    tag: ghcr.io/open-webui/open-webui:v0.11.0
+    digest: sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+    ref: ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+models:
+  answer: gpt-5.6-luna (reference API configuration)
+  auxiliary: gpt-5.6-luna (reference API configuration)
+  embedding: qwen3-embedding:4b @ 1024 dimensions (local Ollama reference)
+  optional_graph_helper: gemma3:4b
+  reranker: BAAI/bge-reranker-v2-m3 local, or external TEI
+notes:
+- Docker services shipped by the installer are digest-pinned; Compose tags are retained
+  only for readability.
+- Ollama is no longer installed or managed by the middleware. LLM and embedding backends
+  are administrator-managed external services.
+- SearXNG/Valkey are not bundled; public web search providers are external administrator-managed
+  services.
+- Neo4j is intentionally pinned to the previously validated 5.26.29 image digest rather
+  than following the mutable 5.26.29-community tag.

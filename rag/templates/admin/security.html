@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Sicherheit · RAG Admin{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div>
+    <h1>Sicherheit & Credentials</h1>
+    <p class="muted">Reversible Benutzer-Credentials werden lokal verschlüsselt gespeichert. Secret-Werte werden in dieser Oberfläche niemals angezeigt.</p>
+  </div>
+  <span class="status {{ 'ok' if secret_status.credentials_plaintext == 0 and secret_status.flows_plaintext == 0 and secret_status.master_key.valid else 'degraded' }}">
+    {{ 'encrypted' if secret_status.credentials_plaintext == 0 and secret_status.flows_plaintext == 0 and secret_status.master_key.valid else 'attention' }}
+  </span>
+</div>
+
+<div class="cards">
+  <div class="card"><span>Encryption mode</span><strong class="metric-small">{{ secret_status.encryption_mode }}</strong><small>AES-256-GCM credential store</small></div>
+  <div class="card"><span>Credentials</span><strong>{{ secret_status.credentials_encrypted }}/{{ secret_status.credentials_total }}</strong><small>verschlüsselt</small></div>
+  <div class="card"><span>Login flows</span><strong>{{ secret_status.flows_encrypted }}/{{ secret_status.flows_total }}</strong><small>Poll-Tokens verschlüsselt</small></div>
+  <div class="card"><span>Legacy plaintext</span><strong>{{ secret_status.credentials_plaintext + secret_status.flows_plaintext }}</strong><small>muss im required-Modus 0 sein</small></div>
+</div>
+
+<section>
+<h2>Master Key</h2>
+<dl class="details">
+<dt>Pfad</dt><dd class="mono">{{ secret_status.master_key.path }}</dd>
+<dt>Vorhanden</dt><dd>{{ 'ja' if secret_status.master_key.exists else 'nein' }}</dd>
+<dt>Format gültig</dt><dd>{{ 'ja' if secret_status.master_key.valid else 'nein' }}</dd>
+<dt>Dateimodus</dt><dd class="mono">{{ secret_status.master_key.mode or '—' }}</dd>
+<dt>UID / GID</dt><dd class="mono">{{ secret_status.master_key.uid if secret_status.master_key.uid is not none else '—' }} / {{ secret_status.master_key.gid if secret_status.master_key.gid is not none else '—' }}</dd>
+<dt>Permissions</dt><dd>{{ 'geeignet' if secret_status.master_key.secure_permissions else 'prüfen' }}</dd>
+</dl>
+<p class="muted">Der Master-Key wird absichtlich nicht über die Weboberfläche erzeugt oder exportiert. Fresh Install: <span class="mono">root:rag 0640</span>. Für strengere Prozessisolation ist später ein systemd-Credential/TPM-Backend vorgesehen.</p>
+{% if secret_status.credentials_plaintext or secret_status.flows_plaintext %}
+<form method="post" action="{{ request.app.url_path_for('admin_security_migrate') }}">
+  <button>Legacy-Secrets jetzt verschlüsseln</button>
+</form>
+{% endif %}
+</section>
+
+<section>
+<h2>Runtime-Secrets – Stufe 2</h2>
+<p class="muted">Diese Werte liegen derzeit weiterhin außerhalb des verschlüsselten Benutzer-Credential-Stores, typischerweise in <span class="mono">runtime.env</span>. Angezeigt wird ausschließlich, ob ein Wert konfiguriert ist.</p>
+<div class="secret-grid">
+{% for item in env_status %}
+<div class="secret-row"><span class="mono">{{ item.name }}</span><span class="status {{ 'ok' if item.configured else 'stale' }}">{{ 'configured' if item.configured else 'empty' }}</span></div>
+{% endfor %}
+</div>
+</section>
+
+<section class="subtle-section">
+<h2>Rollenmodell</h2>
+<p>Stufe 1 trennt Secret-Inhalt und Administration: Der Dienstaccount <span class="mono">rag</span> kann die für den Betrieb nötigen Secrets entschlüsseln; Web-/RAG-Administratoren können Credentials setzen oder ersetzen, aber nicht auslesen. <span class="mono">root</span> verwaltet den Master-Key. Eine vollständige Trennung auch des Dienstaccounts vom Key ist bewusst Stufe 2.</p>
+</section>
+{% endblock %}

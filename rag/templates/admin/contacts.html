@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Kontaktquellen · RAG Admin{% endblock %}
+{% block content %}
+<h1>Kontaktquellen</h1>
+<p class="muted">ContactRecords bleiben Quellenobjekte. Rollback entfernt die ausgewählte Quelle, nicht manuelle Identity-Entscheidungen.</p>
+<table><thead><tr><th>Cloud / Nutzer / Adressbuch</th><th>Records</th><th>Entities</th><th>Überlappung</th><th>Letzter Sync</th><th></th></tr></thead><tbody>
+{% for s in sources %}<tr>
+<td><strong>{{ s.source_user_id or '—' }}</strong> / {{ s.addressbook_name or s.addressbook_slug or '—' }}<div class="muted">{{ s.cloud_id }}</div></td><td>{{ s.contact_records }}</td><td>{{ s.entities }}</td><td>{{ s.overlap_contact_records or 0 }} ({{ s.overlap_percent }}%)</td><td>{{ s.last_seen_at or '—' }}</td>
+<td class="actions"><a class="button small secondary" href="{{ request.app.url_path_for('admin_contacts') }}?{{ {'cloud_id':s.cloud_id,'source_user_id':s.source_user_id,'addressbook':s.addressbook_name or s.addressbook_slug}|urlencode }}">Records</a><form method="post" action="{{ request.app.url_path_for('admin_contacts_rollback') }}"><input type="hidden" name="cloud_id" value="{{ s.cloud_id }}"><input type="hidden" name="source_user_id" value="{{ s.source_user_id }}"><input type="hidden" name="addressbook" value="{{ s.addressbook_name or s.addressbook_slug }}"><button class="small danger-outline">Rollback …</button></form></td>
+</tr>{% endfor %}
+</tbody></table>
+
+{% if records %}
+<section><h2>ContactRecords</h2><table><thead><tr><th>Entity</th><th>Quelle</th><th>UID</th><th>Import Run</th><th></th></tr></thead><tbody>
+{% for c in records %}<tr><td>{% if c.entity_id %}<a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=c.entity_id) }}">{{ c.entity_display_name }}</a>{% else %}—{% endif %}</td><td>{{ c.source_user_id }} / {{ c.addressbook_name or c.addressbook_slug }}</td><td class="mono smalltext">{{ c.vcard_uid or '—' }}</td><td class="mono smalltext">{{ c.created_import_run_id or 'legacy' }}</td><td><a class="button small secondary" href="{{ request.app.url_path_for('admin_contact_detail', contact_id=c.contact_id) }}">Ansehen</a></td></tr>{% endfor %}
+</tbody></table></section>
+{% endif %}
+
+<section><h2>Letzte Importläufe</h2><table><thead><tr><th>Run</th><th>Quelle</th><th>Status</th><th>Seen/Written/Errors</th><th>Started</th><th></th></tr></thead><tbody>
+{% for r in runs %}<tr><td class="mono smalltext">{{ r.run_id }}</td><td>{{ r.source_user_id }}<div class="muted">{{ r.cloud_id }}</div></td><td>{{ r.status or '—' }}</td><td>{{ r.contacts_seen }}/{{ r.contacts_written }}/{{ r.error_count }}</td><td>{{ r.started_at or '—' }}</td><td>{% if not r.rolled_back_at %}<form method="post" action="{{ request.app.url_path_for('admin_contacts_rollback') }}"><input type="hidden" name="import_run_id" value="{{ r.run_id }}"><button class="small danger-outline">Run rollback …</button></form>{% else %}<span class="muted">rolled back</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table></section>
+{% endblock %}

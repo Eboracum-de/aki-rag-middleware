@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}ContactRecord · RAG Admin{% endblock %}
+{% block content %}
+<h1>ContactRecord</h1>
+<dl class="details"><dt>Quelle</dt><dd>{{ contact.cloud_id }} / <strong>{{ contact.source_user_id }}</strong> / {{ contact.addressbook_name or contact.addressbook_slug }}</dd><dt>vCard UID</dt><dd class="mono">{{ contact.vcard_uid or '—' }}</dd><dt>Href</dt><dd class="mono smalltext">{{ contact.href or '—' }}</dd><dt>Derzeitige Entity</dt><dd>{% if contact.entity_id %}<a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=contact.entity_id) }}">{{ contact.entity_display_name }}</a>{% else %}—{% endif %}</dd><dt>Resolved by</dt><dd>{{ contact.resolved_by or '—' }}</dd><dt>Import Run</dt><dd class="mono smalltext">{{ contact.created_import_run_id or 'legacy' }}</dd><dt>ID</dt><dd class="mono smalltext">{{ contact.contact_id }}</dd></dl>
+<h2>ContactRecord neu zuordnen</h2>
+<form method="get" class="searchbar"><input type="search" name="q" value="{{ q }}" placeholder="Ziel-Entity suchen" autofocus><button>Suchen</button></form>
+{% if candidates %}<table><thead><tr><th>Entity</th><th>Status</th><th></th></tr></thead><tbody>{% for e in candidates %}<tr><td><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}">{{ e.display_name }}</a></td><td>{{ e.identity_status or '—' }}</td><td><form method="post" action="{{ request.app.url_path_for('admin_contact_reassign', contact_id=contact.contact_id) }}"><input type="hidden" name="target_id" value="{{ e.entity_id }}"><button>Neu zuordnen …</button></form></td></tr>{% endfor %}</tbody></table>{% endif %}
+{% endblock %}

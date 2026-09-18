@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Entitäten · RAG Admin{% endblock %}
+{% block content %}
+<h1>Entitäten</h1>
+<form method="get" class="searchbar">
+  <input type="search" name="q" value="{{ q }}" placeholder="Name oder Alias, z. B. SK Consulting" autofocus>
+  <button>Suchen</button>
+</form>
+{% if q and not entities %}<p class="muted">Keine Entität gefunden.</p>{% endif %}
+{% if entities %}
+<table>
+<thead><tr><th>Name</th><th>Typ</th><th>Status</th><th>Dokumente</th><th>Observations</th><th>ID</th></tr></thead>
+<tbody>
+{% for e in entities %}
+<tr>
+  <td><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}"><strong>{{ e.display_name }}</strong></a>{% if e.merged_into_display_name %}<div class="tombstone-line"><span class="pill">MERGED</span> → {{ e.merged_into_display_name }}</div>{% endif %}</td>
+  <td>{{ e.entity_type }}</td>
+  <td><span class="pill">{{ e.identity_status or '—' }}</span></td>
+  <td>{{ e.document_mentions }}</td>
+  <td>{{ e.observations }}</td>
+  <td class="mono smalltext">{{ e.entity_id }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}

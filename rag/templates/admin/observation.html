@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Observation · RAG Admin{% endblock %}
+{% block content %}
+<h1>Observation</h1>
+{% if observation.needs_review %}
+<div class="alert warning"><strong>Prüfung sinnvoll:</strong> {{ observation.status_label }}</div>
+{% else %}
+<div class="alert success"><strong>Kein Handlungsbedarf:</strong> {{ observation.status_label }}. Nur ändern, wenn die Zuordnung sachlich falsch ist.</div>
+{% endif %}
+<dl class="details">
+<dt>Erkannt</dt><dd><strong>{{ observation.observed_text or observation.canonical_name }}</strong></dd>
+<dt>Kanonische Form</dt><dd>{{ observation.canonical_name or '—' }}</dd>
+<dt>Kontextklasse</dt><dd>{{ observation.mention_context or '—' }}</dd>
+<dt>Entity-Kind</dt><dd>{{ observation.entity_kind or '—' }}</dd>
+<dt>Admission-Grund</dt><dd>{{ observation.admission_reason or '—' }}</dd>
+<dt>Automatische Auflösung</dt><dd>{{ observation.status_label }}</dd>
+<dt>Manuelle Korrektur</dt><dd>{{ observation.curator_status_label }}</dd>
+<dt>Dokument</dt><dd>{{ observation.document_path or observation.document_title or observation.document_id }} {% if observation.nextcloud_url %}<a href="{{ observation.nextcloud_url }}" target="_blank" rel="noopener">In Nextcloud öffnen ↗</a>{% endif %}</dd>
+<dt>Derzeitige Entity</dt><dd>{% if observation.resolved_entity_id %}<a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=observation.resolved_entity_id) }}">{{ observation.resolved_entity_name }}</a>{% else %}—{% endif %}</dd>
+<dt>Entity-Status</dt><dd>{{ observation.resolved_entity_status or '—' }}</dd>
+<dt>Observation-ID</dt><dd class="mono">{{ observation.observation_id }}</dd>
+</dl>
+
+<section>
+<h2>Zuordnung korrigieren</h2>
+<p class="muted">Nur verwenden, wenn die derzeitige Zuordnung falsch ist. Eine korrekte automatische Observation muss nicht bestätigt werden.</p>
+<form method="get" class="searchbar"><input type="search" name="q" value="{{ q }}" placeholder="Andere Entity suchen"><button>Suchen</button></form>
+{% if q and not candidates %}<p class="muted">Keine andere aktive Entity gefunden.</p>{% endif %}
+{% if candidates %}<table><thead><tr><th>Andere Entity</th><th>Status</th><th>Grund der Korrektur</th><th></th></tr></thead><tbody>{% for e in candidates %}<tr>
+<td><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}"><strong>{{ e.display_name }}</strong></a><div class="mono smalltext muted">{{ e.entity_id }}</div></td><td>{{ e.identity_status or '—' }}</td>
+<td colspan="2"><form method="post" action="{{ request.app.url_path_for('admin_observation_correct', observation_id=observation.observation_id) }}" class="inline-form"><input type="hidden" name="target_id" value="{{ e.entity_id }}"><select name="reason"><option value="wrong_resolution" selected>Falsche automatische Zuordnung</option><option value="ocr">OCR-/Texterkennungsfehler</option><option value="manual_resolution">Manuelle Auflösung</option></select><button>Zuordnung ändern …</button></form></td>
+</tr>{% endfor %}</tbody></table>{% endif %}
+</section>
+{% endblock %}

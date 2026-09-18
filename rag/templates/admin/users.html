@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Benutzer · RAG Admin{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div><h1>Nextcloud-Benutzer</h1><p class="muted">Fachlicher Schlüssel: Nextcloud-Server + verifizierter Nextcloud-Login. Interne kanonische IDs bleiben im normalen Betrieb verborgen.</p></div>
+</div>
+{% if not rows %}
+<section><p>Noch keine verifizierten Nextcloud-Benutzer. Ein Benutzer erscheint nach erfolgreichem Login Flow.</p></section>
+{% else %}
+<table>
+<thead><tr><th>Nextcloud User</th><th>Status</th><th>Bindings</th><th>Nextcloud Credential</th><th>Mail</th><th>Web</th><th>Kontakt-DB</th></tr></thead>
+<tbody>
+{% for row in rows %}
+<tr>
+<td><a href="{{ request.app.url_path_for('admin_user_detail', canonical_user_id=row.user.canonical_user_id) }}"><strong>{{ row.user.nextcloud_login }}</strong></a><br><span class="muted smalltext">{{ row.user.nextcloud_server }}</span></td>
+<td><span class="status {{ 'ok' if row.user.enabled else 'down' }}">{{ 'enabled' if row.user.enabled else 'disabled' }}</span></td>
+<td>{{ row.bindings|length }}</td>
+<td>{{ 'vorhanden' if row.has_nextcloud_credential else 'fehlt' }}</td>
+<td>{% if row.mail_accounts %}{{ row.mail_accounts|length }} · {{ 'aktiv' if row.mail_accounts[0].enabled else 'aus' }}{% else %}nicht konfiguriert{% endif %}</td>
+<td>{% if row.web_settings %}{{ 'aktiv' if row.web_settings.enabled else 'aus' }}{% else %}nicht konfiguriert{% endif %}</td>
+<td>{% if row.contact_settings %}{{ 'aktiv' if row.contact_settings.enabled else 'aus' }} · {{ row.contact_settings.contacts_written }}{% else %}bereit{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}

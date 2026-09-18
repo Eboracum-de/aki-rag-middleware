@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Kontaktimport · RAG Admin{% endblock %}
+{% block content %}
+<h1>Kontaktimport</h1>
+<p class="muted">{{ user.nextcloud_login }} · {{ user.nextcloud_server }}</p>
+<section>
+  {% set running = job.status == 'running' %}
+  {% set failed = job.status == 'failed' %}
+  <div class="heading-row">
+    <div>
+      <h2>{{ 'Import läuft' if running else ('Import fehlgeschlagen' if failed else 'Import abgeschlossen') }}</h2>
+      <p class="muted">
+        {% if job.phase == 'starting' %}Vorbereitung …
+        {% elif job.phase == 'discovering' %}Adressbücher und Kontakte werden eingelesen …
+        {% elif job.phase == 'importing' %}Kontakte werden in den Graph übernommen …
+        {% elif job.phase == 'reconciling' %}Gelöschte CardDAV-Kontakte werden abgeglichen …
+        {% elif failed %}Der Import wurde abgebrochen.
+        {% else %}Der Importlauf ist beendet.{% endif %}
+      </p>
+    </div>
+    <span class="status {{ 'ok' if not running and not failed else ('down' if failed else 'degraded') }}">{{ job.status }}</span>
+  </div>
+  <progress class="sync-progress" max="100" value="{{ job.percent or 0 }}">{{ job.percent or 0 }}%</progress>
+  <div class="cards small">
+    <div class="card"><span>Fortschritt</span><strong>{{ job.contacts_seen or 0 }} / {{ job.contacts_total or '?' }}</strong><small>{{ job.percent or 0 }} %</small></div>
+    <div class="card"><span>Geschrieben</span><strong>{{ job.contacts_written or 0 }}</strong></div>
+    <div class="card"><span>Repariert</span><strong>{{ job.contacts_repaired or 0 }}</strong><small>konservativ bereinigte vCards</small></div>
+    <div class="card"><span>Entfernt</span><strong>{{ job.contacts_deleted or 0 }}</strong><small>in CardDAV nicht mehr vorhanden</small></div>
+    <div class="card"><span>Fehler</span><strong>{{ job.error_count or 0 }}</strong></div>
+  </div>
+  {% if job.current_addressbook %}<p><strong>Adressbuch:</strong> {{ job.current_addressbook }}</p>{% endif %}
+  {% if job.fatal_error %}<div class="alert dangerbox mono smalltext">{{ job.fatal_error }}</div>{% endif %}
+  {% if job.errors %}
+  <details class="topgap"><summary>Fehlerdetails (max. 10)</summary><ul class="smalltext">
+    {% for err in job.errors %}<li><span class="mono">{{ err.href or '—' }}</span>: {{ err.error or 'unbekannter Fehler' }}</li>{% endfor %}
+  </ul></details>
+  {% endif %}
+  <p class="topgap"><a class="button secondary" href="{{ request.app.url_path_for('admin_user_detail', canonical_user_id=user.canonical_user_id) }}">Zurück zum Benutzer</a></p>
+</section>
+{% endblock %}
