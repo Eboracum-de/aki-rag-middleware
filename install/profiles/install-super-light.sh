@@ -82,7 +82,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-AKI RAG Middleware 0.8.5-rc3 - super-light installation profile
+AKI RAG Middleware 0.8.5-rc4 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized
@@ -119,6 +119,99 @@ if [[ $START_STACK -eq 1 && ( -z "$NEXTCLOUD_URL" || -z "$ELASTICSEARCH_URL" ) ]
   exit 2
 fi
 
+preflight() {
+  local required
+  for required in     "$SOURCE_DIR/rag"     "$SOURCE_DIR/install/super-light/docker-compose.yml"     "$SOURCE_DIR/install/super-light/config.super-light.yaml"     "$SOURCE_DIR/install/super-light/provider.env.super-light.example"     "$SOURCE_DIR/install/super-light/runtime.env.super-light.example"     "$SOURCE_DIR/install/components/playwright-renderer/prepare.sh"; do
+    [[ -e "$required" ]] || {
+      echo "Installer source is incomplete; required path missing: $required" >&2
+      exit 2
+    }
+  done
+
+  if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
+    echo "Install prefix exists but is not a directory: $PREFIX" >&2
+    exit 2
+  fi
+  if [[ -d "$PREFIX" && ! -w "$PREFIX" ]]; then
+    echo "Existing install prefix is not writable: $PREFIX" >&2
+    exit 2
+  fi
+
+  # Never adopt an unrelated non-empty directory implicitly. The installer
+  # refreshes selected top-level paths with rm -rf/cp, so a typo in --prefix
+  # must fail before any host state is modified.
+  if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    source_is_prefix=0
+    [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
+    recognized_aki=0
+    [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
+    if [[ -f "$PREFIX/install/install-state.env" ]] && grep -Eq '^DEPLOYMENT_PROFILE=(super-light|standard)$' "$PREFIX/install/install-state.env"; then
+      recognized_aki=1
+    fi
+    if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
+      recognized_aki=1
+    fi
+    if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
+      echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
+      echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
+      exit 2
+    fi
+  fi
+
+  for ca_source in "${CA_CERTIFICATES[@]}"; do
+    [[ -r "$ca_source" ]] || {
+      echo "CA certificate is not readable: $ca_source" >&2
+      exit 2
+    }
+    cert_count="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$ca_source" || true)"
+    [[ "$cert_count" -eq 1 ]] || {
+      echo "--ca-certificate expects exactly one PEM certificate per file: $ca_source" >&2
+      echo "Repeat --ca-certificate for root/intermediate certificates." >&2
+      exit 2
+    }
+    if command -v openssl >/dev/null 2>&1; then
+      openssl x509 -in "$ca_source" -noout >/dev/null 2>&1 || {
+        echo "Invalid PEM X.509 certificate: $ca_source" >&2
+        exit 2
+      }
+    fi
+  done
+
+  if [[ -f "$PREFIX/install/super-light/docker-compose.yml" ]]; then
+    echo "[INFO] Existing Super-Light installation detected at $PREFIX."
+    if command -v docker >/dev/null 2>&1; then
+      if ! docker info >/dev/null 2>&1; then
+        echo "Docker is installed but the daemon is not reachable; rerun would not be able to rebuild/start the existing stack." >&2
+        exit 2
+      fi
+      existing_compose=()
+      if docker compose version >/dev/null 2>&1; then
+        existing_compose=(docker compose)
+      elif command -v docker-compose >/dev/null 2>&1; then
+        existing_compose=(docker-compose)
+      fi
+      if [[ ${#existing_compose[@]} -gt 0 ]]; then
+        existing_running="$(
+          cd "$PREFIX/install/super-light" &&
+          "${existing_compose[@]}" ps --services --filter status=running 2>/dev/null || true
+        )"
+        if [[ -n "$existing_running" ]]; then
+          echo "[WARN] Existing AKI RAG services are running: $(printf '%s' "$existing_running" | tr '\n' ' ')" >&2
+          echo "Stop the existing stack before rerunning the installer; no installation changes were made." >&2
+          exit 2
+        else
+          echo "[INFO] Existing AKI RAG stack is stopped; rerun may rebuild/start it."
+        fi
+      else
+        echo "[WARN] Existing installation found but Docker Compose is not currently available; package installation may repair this."
+      fi
+    else
+      echo "[WARN] Existing installation found but Docker is not currently available; package installation may repair this."
+    fi
+  fi
+}
+
+preflight
 print_plan
 if [[ $ASSUME_YES -ne 1 ]]; then
   if [[ ! -t 0 ]]; then
@@ -192,14 +285,6 @@ if [[ ${#CA_CERTIFICATES[@]} -gt 0 ]]; then
   rm -f "$PREFIX/runtime/ca"/installer-*.crt
   ca_index=0
   for ca_source in "${CA_CERTIFICATES[@]}"; do
-    [[ -r "$ca_source" ]] || { echo "CA certificate is not readable: $ca_source" >&2; exit 2; }
-    cert_count="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$ca_source" || true)"
-    [[ "$cert_count" -eq 1 ]] || {
-      echo "--ca-certificate expects exactly one PEM certificate per file: $ca_source" >&2
-      echo "Repeat --ca-certificate for root/intermediate certificates." >&2
-      exit 2
-    }
-    openssl x509 -in "$ca_source" -noout >/dev/null 2>&1 || { echo "Invalid PEM X.509 certificate: $ca_source" >&2; exit 2; }
     ca_index=$((ca_index + 1))
     printf -v ca_name 'installer-%02d.crt' "$ca_index"
     cp "$ca_source" "$PREFIX/runtime/ca/$ca_name"
@@ -277,6 +362,43 @@ PLAYWRIGHT_PORT=8090
 OPENWEBUI_PORT=3000
 ENV
 chmod 600 "$PREFIX/install/super-light/.env"
+
+# Machine-readable installer state for diagnostics/smoke tests. Site-owned
+# runtime/configuration remains authoritative; this file only records what this
+# installer selected on the current host.
+cat > "$PREFIX/install/install-state.env" <<ENVSTATE
+DEPLOYMENT_PROFILE=super-light
+DEPLOYMENT_MODE=dockerized
+LOCAL_QDRANT=0
+LOCAL_NEO4J=1
+LOCAL_PLAYWRIGHT=1
+LOCAL_OPENWEBUI=$WITH_OPENWEBUI
+LOCAL_PROXY=$WITH_PROXY
+MULTI_USER=1
+ENVSTATE
+chmod 0644 "$PREFIX/install/install-state.env"
+
+cat > "$PREFIX/.aki-rag-installation" <<MARKER
+AKI_RAG_INSTALLATION=1
+DEPLOYMENT_PROFILE=super-light
+DEPLOYMENT_MODE=dockerized
+MARKER
+chmod 0644 "$PREFIX/.aki-rag-installation"
+
+# Keep the exact wrapper invocation used for this deployment/rerun. This file is
+# root-owned operational metadata; it contains no generated secrets, but may
+# contain internal URLs and certificate paths and therefore is not world-readable.
+INSTALL_INVOCATION="${AKI_INSTALL_INVOCATION:-}"
+if [[ -z "$INSTALL_INVOCATION" ]]; then
+  printf -v INSTALL_INVOCATION '%q ' "$0" "$@"
+  INSTALL_INVOCATION="${INSTALL_INVOCATION% }"
+fi
+cat > "$PREFIX/install/last-install-command.sh" <<EOF
+#!/usr/bin/env bash
+# Last installer invocation recorded for reproducible reruns.
+$INSTALL_INVOCATION
+EOF
+chmod 0600 "$PREFIX/install/last-install-command.sh"
 
 if [[ $WITH_PROXY -eq 1 ]]; then
   log "Preparing nginx TLS/admin gate"

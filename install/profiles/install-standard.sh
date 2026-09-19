@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Bootstrap a blank Linux VM into a usable AKI RAG Middleware node.
-# 0.8.5-rc3 standard profile implementation.
+# 0.8.5-rc4 standard profile implementation.
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PREFIX="/opt/nextcloud-rag"
@@ -187,6 +187,31 @@ fi
 if [[ ${EUID} -ne 0 ]]; then
   echo "This bootstrap currently expects root (use sudo)." >&2
   exit 1
+fi
+
+# Safety boundary for --prefix: this installer refreshes selected top-level
+# paths with rm -rf/cp. Never treat an unrelated non-empty directory as an
+# installation target merely because root can write to it.
+if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
+  echo "Install prefix exists but is not a directory: $PREFIX" >&2
+  exit 2
+fi
+if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+  source_is_prefix=0
+  [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
+  recognized_aki=0
+  [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
+  if [[ -f "$PREFIX/install/install-state.env" ]] && grep -Eq '^DEPLOYMENT_PROFILE=(standard|super-light)$' "$PREFIX/install/install-state.env"; then
+    recognized_aki=1
+  fi
+  if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
+    recognized_aki=1
+  fi
+  if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
+    echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
+    echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
+    exit 2
+  fi
 fi
 
 confirm_plan
@@ -384,6 +409,12 @@ done
 if [[ ! -e "$PREFIX/provider.env" ]]; then
   cp -a "$SOURCE_DIR/provider.env.example" "$PREFIX/provider.env"
 fi
+cat > "$PREFIX/.aki-rag-installation" <<MARKER
+AKI_RAG_INSTALLATION=1
+DEPLOYMENT_PROFILE=standard
+DEPLOYMENT_MODE=native
+MARKER
+chmod 0644 "$PREFIX/.aki-rag-installation"
 mkdir -p "$PREFIX/runtime"
 chmod 700 "$PREFIX/runtime"
 chown -R "$RAG_USER:$RAG_GROUP" "$PREFIX"

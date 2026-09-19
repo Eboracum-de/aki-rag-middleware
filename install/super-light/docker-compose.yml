@@ -2,7 +2,7 @@ version: "2.4"
 
 services:
   api:
-    image: aki-rag:0.8.5-rc3
+    image: aki-rag:0.8.5-rc4
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider
@@ -23,7 +23,7 @@ services:
       - neo4j
 
   provider:
-    image: aki-rag:0.8.5-rc3
+    image: aki-rag:0.8.5-rc4
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider
@@ -45,7 +45,7 @@ services:
       - api
 
   mail-worker:
-    image: aki-rag:0.8.5-rc3
+    image: aki-rag:0.8.5-rc4
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider
@@ -81,7 +81,7 @@ services:
   playwright-renderer:
     build:
       context: ../components/playwright-renderer
-    image: rag-playwright-renderer:0.2.1
+    image: rag-playwright-renderer:0.2.2
     restart: unless-stopped
     init: true
     ipc: host

@@ -22,9 +22,12 @@ run_as_owner() {
 
 LOCAL_QDRANT=0
 LOCAL_NEO4J=0
+LOCAL_PLAYWRIGHT=0
 LOCAL_OPENWEBUI=0
 LOCAL_PROXY=0
 MULTI_USER=0
+DEPLOYMENT_PROFILE=""
+DEPLOYMENT_MODE=""
 if [[ -f "$PREFIX/install/install-state.env" ]]; then
   source "$PREFIX/install/install-state.env"
 fi
@@ -34,10 +37,50 @@ set -a
 [[ -f "$PREFIX/runtime.env" ]] && source "$PREFIX/runtime.env"
 set +a
 
+# Older install-state files predate profile/mode markers. Fall back to the
+# simple scalar deployment block in config.yaml so a Super-Light installation
+# is never mistaken for a native host-Python deployment.
+yaml_block_scalar() {
+  local section="$1" key="$2" file="$3"
+  awk -v section="$section" -v key="$key" '
+    $0 ~ "^" section ":[[:space:]]*$" { in_section=1; next }
+    in_section && $0 ~ "^[^[:space:]#]" { exit }
+    in_section {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      if (line ~ "^" key ":[[:space:]]*") {
+        sub("^" key ":[[:space:]]*", "", line)
+        gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$file"
+}
+
+if [[ -f "$PREFIX/config.yaml" ]]; then
+  [[ -n "$DEPLOYMENT_PROFILE" ]] || DEPLOYMENT_PROFILE="$(yaml_block_scalar deployment profile "$PREFIX/config.yaml")"
+  [[ -n "$DEPLOYMENT_MODE" ]] || DEPLOYMENT_MODE="$(yaml_block_scalar deployment mode "$PREFIX/config.yaml")"
+  QDRANT_ENABLED="$(yaml_block_scalar qdrant enabled "$PREFIX/config.yaml")"
+else
+  QDRANT_ENABLED=""
+fi
+
+if [[ "$DEPLOYMENT_PROFILE" == "super-light" || "$DEPLOYMENT_MODE" == "dockerized" ]]; then
+  LOCAL_PLAYWRIGHT=1
+fi
+
 ok() { echo "[ OK ] $*"; }
+warn() { echo "[WARN] $*"; }
 bad() { echo "[FAIL] $*"; FAIL=1; }
 
-[[ -x "$PY" ]] && ok "Python venv" || bad "Python venv missing"
+if [[ -x "$PY" ]]; then
+  ok "Python venv"
+elif [[ "$DEPLOYMENT_MODE" == "dockerized" || "$DEPLOYMENT_PROFILE" == "super-light" ]]; then
+  ok "Host Python venv not required ($DEPLOYMENT_PROFILE/$DEPLOYMENT_MODE)"
+else
+  bad "Python venv missing"
+fi
 if [[ -x "$PY" ]]; then
   echo "[INFO] Checking lightweight Python imports ..."
   run_as_owner "$PY" - <<'PY' >/dev/null 2>&1 && ok "Python core imports" || bad "Python core imports"
@@ -112,7 +155,9 @@ PY
   [[ ${#QDRANT_CFG[@]} -ge 2 ]] && QDRANT_COLLECTION="${QDRANT_CFG[1]}"
 fi
 
-if curl -fsS "$QDRANT_URL/collections" >/dev/null 2>&1; then
+if [[ "$QDRANT_ENABLED" == "false" ]]; then
+  ok "Qdrant disabled by configuration"
+elif curl -fsS "$QDRANT_URL/collections" >/dev/null 2>&1; then
   ok "Qdrant HTTP ($QDRANT_URL)"
   if [[ -x "$PY" ]]; then
     echo "[INFO] Testing configured embedding backend and Qdrant write/read ..."
@@ -123,13 +168,24 @@ if curl -fsS "$QDRANT_URL/collections" >/dev/null 2>&1; then
     fi
   fi
 else
-  [[ $LOCAL_QDRANT -eq 1 ]] && bad "Qdrant HTTP ($QDRANT_URL)" || echo "[INFO] Qdrant not reachable at configured URL: $QDRANT_URL"
+  [[ $LOCAL_QDRANT -eq 1 ]] && bad "Qdrant HTTP ($QDRANT_URL)" || echo "[INFO] Qdrant not selected/reachable at configured URL: $QDRANT_URL"
 fi
 
 if curl -fsS http://127.0.0.1:7474 >/dev/null 2>&1; then
   ok "Neo4j HTTP"
 else
   [[ $LOCAL_NEO4J -eq 1 ]] && bad "Neo4j HTTP" || echo "[INFO] Local Neo4j not selected; configure a remote endpoint if graph retrieval is required."
+fi
+
+if [[ $LOCAL_PLAYWRIGHT -eq 1 ]]; then
+  playwright_live="$(curl -fsS "http://127.0.0.1:${PLAYWRIGHT_PORT:-8090}/live" 2>/dev/null || true)"
+  if printf '%s' "$playwright_live" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    ok "Playwright renderer"
+  elif [[ -n "$playwright_live" ]]; then
+    warn "Playwright renderer is running but browser launch is degraded"
+  else
+    warn "Playwright renderer unavailable; Web research remains usable but rendered-PDF archival is disabled"
+  fi
 fi
 
 if [[ $LOCAL_OPENWEBUI -eq 1 ]]; then
