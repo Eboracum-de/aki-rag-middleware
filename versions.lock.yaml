@@ -1,4 +1,4 @@
-release: 0.8.5-rc3
+release: 0.8.5-rc4
 python:
   torch: 2.13.0+cpu
   transformers: 4.57.6

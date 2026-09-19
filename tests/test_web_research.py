@@ -361,3 +361,39 @@ def test_best_passage_skips_disabled_reranker_without_warning_path(monkeypatch):
     text = "Allgemeiner Inhalt.\n\nICHI BAN AG hat ihren Sitz in Berlin."
     passage = wr.best_passage("ICHI BAN AG Berlin", text, 1000)
     assert "ICHI BAN AG" in passage
+
+
+@pytest.mark.asyncio
+async def test_archive_run_reports_disabled_or_unconfigured_user_archive(monkeypatch):
+    import rag.web_research as wr
+
+    cfg = {
+        "archive": {"enabled": True, "root": "Webarchiv"},
+        "search": {"provider": "brave", "max_results": 10},
+        "relevance": {"min_score": 0.58, "max_sources": 5},
+    }
+    archive = wr.NextcloudWebArchive(
+        cfg,
+        {
+            "nextcloud": {"base_url": "https://cloud.example"},
+            "acl": {"enabled": True, "identity_mode": "credential_store"},
+            "auth": {"credential_store": "runtime/users.sqlite"},
+        },
+    )
+    monkeypatch.setattr(archive, "_root_for_user", lambda user: "")
+
+    source = wr.FetchedSource(
+        rank=1, title="Example", url="https://example.org", final_url="https://example.org",
+        text="Evidence", content_type="text/html", raw=b"<html></html>",
+        retrieved_at="2026-09-19T10:00:00+00:00", content_hash="abc",
+        search_provider="brave", search_rank=1,
+    )
+    result = await archive.archive_run(
+        "Example", [(source, 0.9, "relevant")], fetched=[source],
+        relevance_decisions=[], rag_user_id="frontend::user",
+        stats={"searched": 1, "fetched": 1},
+    )
+
+    assert result["skipped"] is True
+    assert result["skipped_reason"] == "archive_disabled_or_target_unconfigured"
+    assert result["run_path"] == ""
