@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Recherche · Findings-Kuration{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div><h1>{{ run.user_query or run.retrieval_query or run.run_id }}</h1>{% if run.retrieval_query and run.retrieval_query != run.user_query %}<p class="muted"><code>{{ run.retrieval_query }}</code></p>{% endif %}</div>
+  <a class="button secondary" href="{{ request.app.url_path_for('curation_home') }}">Zurück</a>
+</div>
+<section>
+<h2>Findings</h2>
+<p class="muted">Ein global bereits kuratiertes Finding muss nicht erneut entschieden werden.</p>
+{% if not run.findings %}<p class="muted">Keine aktuell per Nextcloud-ACL sichtbaren Findings.</p>{% else %}
+<form method="post" action="{{ request.app.url_path_for('curation_run_dismiss_findings', run_id=run.run_id) }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<table>
+<thead><tr><th></th><th>Dokument</th><th>Finding</th><th>Status</th><th></th></tr></thead>
+<tbody>
+{% for f in run.findings %}
+<tr>
+<td><input type="checkbox" name="finding_id" value="{{ f.finding_id }}"></td>
+<td><strong>{{ f.document_title or f.document_path or f.document_id }}</strong>{% if f.document_path %}<div class="muted">{{ f.document_path }}</div>{% endif %}</td>
+<td>{% if f.intent %}{{ f.intent }}{% endif %}{% if f.entity_texts %}<div class="muted">{{ f.entity_texts|join(', ') }}</div>{% endif %}</td>
+<td>{{ f.graph_state or 'open' }}{% if f.run_disposition == 'dismissed' %} · hier ausgeblendet{% endif %}</td>
+<td><a href="{{ request.app.url_path_for('curation_finding', finding_id=f.finding_id) }}">Kuratieren</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+<button class="secondary">Ausgewählte nur in dieser Recherche ausblenden</button>
+</form>
+{% endif %}
+</section>
+{% if run.curation_status != 'dismissed' %}
+<section>
+<h2>Recherche abschließen / ausblenden</h2>
+<form method="post" action="{{ request.app.url_path_for('curation_run_dismiss', run_id=run.run_id) }}" class="filter-row">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input name="reason" placeholder="Grund (optional)">
+<button class="danger-outline">Restliche Findings dieser Recherche ausblenden</button>
+</form>
+</section>
+{% endif %}
+{% endblock %}

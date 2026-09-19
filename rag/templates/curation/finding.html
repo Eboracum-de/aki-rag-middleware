@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Finding · Findings-Kuration{% endblock %}
+{% block content %}
+{% set f = detail.finding or {} %}
+{% set d = detail.document or {} %}
+<h1>Finding kuratieren</h1>
+<section>
+<h2>Dokument / Evidenz</h2>
+<p><strong>{{ d.title or d.path or d.document_id }}</strong></p>
+{% if d.path %}<p class="muted">{{ d.path }}</p>{% endif %}
+{% if f.intent %}<p><strong>Suchhypothese:</strong> {{ f.intent }}</p>{% endif %}
+{% set ev = detail.evidence_view or {} %}
+{% if ev.constraints %}<h3>Prüfkriterien</h3><table><thead><tr><th>Art</th><th>Wert</th><th>Status</th></tr></thead><tbody>{% for item in ev.constraints %}<tr><td>{{ item.kind or '—' }}</td><td>{{ item.value or '—' }}</td><td>{{ item.status or '—' }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+{% if ev.relations %}<h3>Beobachtete Beziehungen</h3><div class="evidence-relations">{% for item in ev.relations %}<div class="evidence-relation"><strong>{{ item.source or item.subject or '—' }}</strong><span>{{ item.predicate or 'unbenannte Beziehung' }}</span><strong>{{ item.target or item.object or '—' }}</strong><small>Verifier-Beobachtung · noch kein Ontologie-Claim</small></div>{% endfor %}</div>{% endif %}
+{% if not ev.has_content %}<p>—</p>{% endif %}
+<details class="topgap"><summary>Rohdaten anzeigen</summary><pre>{{ detail.evidence_pretty or '—' }}</pre></details>
+</section>
+
+<section>
+<h2>1. Entities</h2>
+{% if not detail.entity_options %}<div class="alert warning">Keine strukturierte Entity erkannt. Das Finding kann auf Rechercheebene ausgeblendet werden.</div>{% endif %}
+{% for item in detail.entity_options %}
+<div class="finding-entity">
+<h3>{{ item.text }}{% if item.role %} <span class="muted">· {{ item.role }}</span>{% endif %}</h3>
+{% if item.curated %}
+<p><span class="status ok">global zugeordnet</span> → {{ item.curated.display_name }}</p>
+{% elif item.suppressed %}
+<p><span class="status stale">global als keine Entity markiert</span></p>
+{% else %}
+  {% if item.auto_resolved %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ item.auto_resolved.entity_id }}">
+    <button>Exakten Treffer übernehmen: {{ item.auto_resolved.display_name }}</button>
+  </form>
+  {% endif %}
+  {% for candidate in item.suggestions %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ candidate.entity_id }}">
+    <button class="secondary small">{{ candidate.display_name }}</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_entity', finding_id=f.finding_id) }}" class="form-grid topgap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="create">
+    <label>Name<input name="new_name" value="{{ item.text }}" required></label>
+    <label>Typ<select name="entity_type" required><option value="">Bitte wählen</option><option>Person</option><option>Organization</option></select></label>
+    <input name="reason" placeholder="Grund (optional)"><button>Neue Entity anlegen</button>
+  </form>
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_entity', finding_id=f.finding_id) }}" class="inline-form topgap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="suppress">
+    <button class="danger-outline">Keine Entity</button>
+  </form>
+{% endif %}
+</div>
+{% endfor %}
+</section>
+
+<section>
+<h2>Bestehende Claims</h2>
+{% for claim in detail.claims or [] %}
+<div class="finding-entity">
+  <p><strong>{{ claim.subject_name or claim.subject_entity_id }} — {{ claim.predicate_text or claim.predicate }} → {{ claim.object_name or claim.object_entity_id }}</strong></p>
+  <p class="muted">Status: {{ claim.curator_status or '—' }}</p>
+  {% if claim.curator_status == 'review_required' %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_claim_review', finding_id=f.finding_id, relation_id=claim.relation_id) }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input name="reason" placeholder="Grund (optional)">
+    <button name="action" value="confirm">Erneut bestätigen</button>
+    <button name="action" value="dismiss" class="danger-outline">Als überholt markieren</button>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+
+<section>
+<h2>2. Beziehung</h2>
+{% if detail.all_entities_decided and not detail.has_active_claims %}
+  {% for pair in detail.claim_options %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_claim', finding_id=f.finding_id) }}" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="subject_entity_id" value="{{ pair.subject.entity_id }}">
+    <input type="hidden" name="object_entity_id" value="{{ pair.object.entity_id }}">
+    <label>{{ pair.subject.display_name }} →
+      <select name="predicate_id">{% for p in pair.predicates %}<option value="{{ p.id }}">{{ p.label }}</option>{% endfor %}</select>
+      → {{ pair.object.display_name }}
+    </label>
+    <input name="claim_text" placeholder="Notiz (optional)"><button>Dokumentgebundenen Claim anlegen</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="{{ request.app.url_path_for('curation_finding_status', finding_id=f.finding_id) }}" class="inline-form topgap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="status" value="mentions_only">
+    <button class="secondary">Nur Mentions – kein Claim</button>
+  </form>
+{% elif f.curator_status == 'mentions_only' %}
+<p><span class="status ok">Global als „Nur Mentions“ abgeschlossen.</span></p>
+{% elif detail.has_active_claims %}
+<p><span class="status ok">Bereits global kuratiert.</span></p>
+{% else %}
+<p class="muted">Zuerst die Entity-Entscheidungen abschließen.</p>
+{% endif %}
+</section>
+{% endblock %}
