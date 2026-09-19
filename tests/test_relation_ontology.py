@@ -1,4 +1,9 @@
-from rag.ontology import load_relation_ontology, validate_relation_semantics
+from rag.ontology import (
+    compatible_document_predicates,
+    load_relation_ontology,
+    predicate_label,
+    validate_relation_semantics,
+)
 
 
 ONTOLOGY = load_relation_ontology()
@@ -71,3 +76,53 @@ def test_seed_only_relation_is_not_document_extractable():
     allowed = schema["properties"]["relations"]["items"]["properties"]["predicate"]["enum"]
     assert "WORKS_IN" not in allowed
     assert "WORKS_IN:" not in ontology_prompt(ONTOLOGY)
+
+
+def test_ontology_exposes_curator_labels_and_pair_compatibility():
+    predicates = compatible_document_predicates(
+        ONTOLOGY,
+        subject_type="Organization",
+        subject_kind="Company",
+        object_type="Organization",
+        object_kind="Company",
+    )
+    assert "SHAREHOLDER_OF" in predicates
+    assert "REGISTERED_AT" not in predicates
+    assert predicate_label("SHAREHOLDER_OF", predicates["SHAREHOLDER_OF"], language="de") == "Gesellschafter/in von"
+
+
+def test_registered_at_is_offered_only_for_court_object_kind():
+    predicates = compatible_document_predicates(
+        ONTOLOGY,
+        subject_type="Organization",
+        subject_kind="Company",
+        object_type="Organization",
+        object_kind="Court",
+    )
+    assert "REGISTERED_AT" in predicates
+
+
+def test_supervisory_board_membership_requires_explicit_membership_cue():
+    allowed = validate_relation_semantics(
+        ONTOLOGY,
+        predicate="SUPERVISORY_BOARD_MEMBER_OF",
+        subject_type="Person",
+        subject_kind="Person",
+        object_type="Organization",
+        object_kind="Company",
+        relation_text="Aufsichtsratsmitglied",
+        evidence_text="Alexander Eichner ist Aufsichtsratsmitglied der FLG Automation AG.",
+    )
+    assert allowed is None
+
+    insufficient = validate_relation_semantics(
+        ONTOLOGY,
+        predicate="SUPERVISORY_BOARD_MEMBER_OF",
+        subject_type="Person",
+        subject_kind="Person",
+        object_type="Organization",
+        object_kind="Company",
+        relation_text="Nacharbeit eines Aufsichtsratschreibens",
+        evidence_text="Frau Seeger, bitte um Nacharbeit des Aufsichtsratschreibens von Alexander Eichner.",
+    )
+    assert insufficient == "missing_explicit_relation_cue"

@@ -65,7 +65,7 @@ def test_plaintext_migration_is_in_place(monkeypatch, tmp_path):
     monkeypatch.setenv("RAG_CREDENTIAL_ENCRYPTION", "required")
     secure = CredentialStore(db)
     changed = secure.migrate_plaintext_secrets()
-    assert changed == {"credentials": 1, "flows": 1}
+    assert changed == {"credentials": 1, "flows": 1, "curation_sessions": 0}
     assert secure.get_credential("u1", "nextcloud").secret == "legacy-secret"
     assert secure.get_nextcloud_flow(flow_id)["poll_token"] == "legacy-token"
     assert secure.verify_secret_encryption()["ok"] is True
@@ -139,3 +139,58 @@ def test_security_page_never_renders_secret_values():
     assert "item.configured" in template
     assert "item.value" not in template
     assert "secret_status.master_key.path" in template
+
+
+def test_curation_session_secret_is_encrypted_and_permission_scoped(monkeypatch, tmp_path):
+    db, _ = _prepare(monkeypatch, tmp_path)
+    store = CredentialStore(db)
+    user = store.ensure_canonical_user("https://nc.example", "alice")
+    with pytest.raises(PermissionError):
+        store.create_curation_session(
+            canonical_user_id=user.canonical_user_id,
+            nextcloud_server="https://nc.example",
+            nextcloud_login="alice",
+            app_password="temporary-app-secret",
+            lifetime_seconds=7200,
+        )
+
+    assert store.set_findings_curation_enabled(user.canonical_user_id, True)
+    token, session = store.create_curation_session(
+        canonical_user_id=user.canonical_user_id,
+        nextcloud_server="https://nc.example",
+        nextcloud_login="alice",
+        app_password="temporary-app-secret",
+        lifetime_seconds=7200,
+    )
+    assert session.app_password == "temporary-app-secret"
+    assert session.csrf_token
+    assert session.expires_at > session.created_at
+    with sqlite3.connect(db) as con:
+        raw = con.execute(
+            "select session_id_hash,app_password from curation_sessions"
+        ).fetchone()
+    assert raw[0] != token
+    assert raw[1].startswith(ENCRYPTED_PREFIX)
+    assert "temporary-app-secret" not in raw[1]
+    assert store.get_curation_session(token, touch=False).app_password == "temporary-app-secret"
+    status = store.secret_security_status()
+    assert status["curation_sessions_total"] == 1
+    assert status["curation_sessions_plaintext"] == 0
+
+
+def test_curation_session_absolute_expiry_does_not_slide(monkeypatch, tmp_path):
+    db, _ = _prepare(monkeypatch, tmp_path)
+    store = CredentialStore(db)
+    user = store.ensure_canonical_user("https://nc.example", "alice")
+    store.set_findings_curation_enabled(user.canonical_user_id, True)
+    token, session = store.create_curation_session(
+        canonical_user_id=user.canonical_user_id,
+        nextcloud_server="https://nc.example",
+        nextcloud_login="alice",
+        app_password="temporary-app-secret",
+        lifetime_seconds=7200,
+    )
+    expires = session.expires_at
+    touched = store.get_curation_session(token, touch=True)
+    assert touched is not None
+    assert touched.expires_at == expires

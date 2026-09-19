@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 import yaml
@@ -205,3 +206,60 @@ def test_super_light_contact_cli_executes_in_running_api_container():
     assert 'exec -T api python -m rag.contacts' in helper
     assert 'run --rm --no-deps api' not in helper
     assert './contacts.sh sync' in seed
+
+
+def test_super_light_smoke_test_does_not_require_host_venv_or_qdrant():
+    smoke = (ROOT / "install" / "smoke-test.sh").read_text(encoding="utf-8")
+    assert 'Host Python venv not required' in smoke
+    assert 'Qdrant disabled by configuration' in smoke
+    assert 'Playwright renderer unavailable' in smoke
+
+
+def test_super_light_installer_records_profile_state_for_diagnostics():
+    installer = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(encoding="utf-8")
+    assert 'DEPLOYMENT_PROFILE=super-light' in installer
+    assert 'DEPLOYMENT_MODE=dockerized' in installer
+    assert 'LOCAL_QDRANT=0' in installer
+    assert 'LOCAL_PLAYWRIGHT=1' in installer
+
+
+def test_playwright_renderer_stays_alive_in_degraded_browser_state():
+    renderer = (ROOT / "install/components/playwright-renderer/app/renderer.py").read_text(encoding="utf-8")
+    assert 'Chromium launch failed; renderer stays up in degraded mode' in renderer
+    assert '"launch_error": BROWSER_LAUNCH_ERROR' in renderer
+
+
+def test_installers_refuse_nonempty_foreign_prefixes():
+    super_light = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(encoding="utf-8")
+    standard = (ROOT / "install" / "profiles" / "install-standard.sh").read_text(encoding="utf-8")
+    marker = "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation"
+    assert marker in super_light
+    assert marker in standard
+    assert '.aki-rag-installation' in super_light
+    assert '.aki-rag-installation' in standard
+
+
+def test_install_profile_shell_scripts_are_syntax_valid():
+    for path in (
+        ROOT / "install/profiles/install-super-light.sh",
+        ROOT / "install/profiles/install-standard.sh",
+        ROOT / "install/install.sh",
+    ):
+        result = subprocess.run(
+            ["bash", "-n", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{path}: {result.stderr}"
+
+
+def test_super_light_rerun_aborts_for_running_stack_but_accepts_stopped_stack():
+    installer = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(encoding="utf-8")
+    running = '[WARN] Existing AKI RAG services are running:'
+    stopped = '[INFO] Existing AKI RAG stack is stopped; rerun may rebuild/start it.'
+    assert running in installer
+    assert stopped in installer
+    block = installer[installer.index(running):installer.index(stopped)]
+    assert "no installation changes were made" in block
+    assert "exit 2" in block
