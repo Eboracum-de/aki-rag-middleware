@@ -1,4 +1,4 @@
-# Super-light installation profile for 0.8.5-rc3.
+# Super-light installation profile for 0.8.5-rc4.
 # Elasticsearch is the only document retrieval arm; Neo4j is used only for entity/alias expansion.
 health:
   timeout_seconds: 4
@@ -196,6 +196,10 @@ research_findings:
   enabled: true
   timeout: 5
   max_documents_per_request: 30
+  curation:
+    admin_user_context: true
+    user_self_service: false
+    session_max_seconds: 7200
 
 graph_indexer:
   enabled: false

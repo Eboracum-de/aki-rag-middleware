@@ -6,6 +6,9 @@ set -euo pipefail
 # requirements do not leak into other profiles (notably old-OS super-light).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+printf -v AKI_INSTALL_INVOCATION '%q ' "$0" "$@"
+AKI_INSTALL_INVOCATION="${AKI_INSTALL_INVOCATION% }"
+export AKI_INSTALL_INVOCATION
 PROFILE="standard"
 PROFILE_EXPLICIT=0
 DEPLOYMENT=""

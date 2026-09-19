@@ -29,6 +29,7 @@ from rag.graph_indexer import GraphEvidenceIndexer
 from rag.graph_queue import GraphQueue
 from rag.graph import GraphStore, cfg_get, load_config
 from rag.admin_ui import create_admin_router
+from rag.curation_ui import create_curation_router, cleanup_stale_curation_sessions
 from rag.web_research import WebResearchArm, load_web_config
 from rag.retrieval_planner import load_retrieval_planner_settings
 from rag.reranker import get_reranker_status
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
     # --------------------------------------------------------
 
     require_secure_runtime_config(app_config)
+    cleanup_stale_curation_sessions(app_config)
     yield
 
 
@@ -165,6 +167,7 @@ app = FastAPI(
 
 # Browser-admin UI shares the same FastAPI/uvicorn process and backend curation logic.
 app.include_router(create_admin_router(app_config, graph_queue, load_web_config()))
+app.include_router(create_curation_router(app_config))
 
 
 # ------------------------------------------------------------
@@ -493,6 +496,7 @@ class ResearchFindingDocument(BaseModel):
     path: str | None = None
     source_url: str | None = None
     document_date: str | None = None
+    source_origin: str | None = None
     verification_status: str = "match"
     relation_binding: str = "direct"
     evidence_frame: dict[str, Any] = Field(default_factory=dict)
@@ -501,6 +505,12 @@ class ResearchFindingDocument(BaseModel):
 class ResearchFindingRequest(BaseModel):
 
     query_id: str | None = None
+    canonical_user_id: str = ""
+    nextcloud_login: str = ""
+    nextcloud_server: str = ""
+    user_query: str = ""
+    retrieval_query: str = ""
+    source_scopes: list[str] | None = None
     provenance_code: str = "aki_research"
     provenance_label: str = "AKI Recherche"
     query_frame: dict[str, Any] = Field(default_factory=dict)
@@ -1370,6 +1380,12 @@ def graph_research_findings(request: ResearchFindingRequest):
                 query_id=str(request.query_id or ""),
                 query_frame=request.query_frame,
                 documents=[item.model_dump() for item in request.documents],
+                canonical_user_id=str(request.canonical_user_id or ""),
+                nextcloud_login=str(request.nextcloud_login or ""),
+                nextcloud_server=str(request.nextcloud_server or ""),
+                user_query=str(request.user_query or ""),
+                retrieval_query=str(request.retrieval_query or ""),
+                source_scopes=request.source_scopes,
                 provenance_code=str(request.provenance_code or "aki_research"),
                 provenance_label=str(request.provenance_label or "AKI Recherche"),
                 software_version=str(request.software_version or ""),

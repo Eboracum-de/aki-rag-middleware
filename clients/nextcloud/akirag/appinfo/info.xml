@@ -4,7 +4,7 @@
     <name>AKI Recherche</name>
     <summary>KI-gestützte interaktive Suche über die RAG Middleware</summary>
     <description>Schlankes Nextcloud-Frontend für die AKI/RAG-Middleware. Die App speichert keine Suchdaten und übernimmt keine ACL-Logik; sie proxyt angemeldete Nextcloud-Nutzer zur bestehenden Middleware.</description>
-    <version>0.2.3</version>
+    <version>0.2.4</version>
     <licence>agpl</licence>
     <author>RAG Middleware Project</author>
     <namespace>AkiRag</namespace>

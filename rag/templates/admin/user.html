@@ -27,6 +27,15 @@
 </section>
 
 <section>
+<h2>Research Findings</h2>
+<p class="muted">Die Berechtigung zur Recherche und die Berechtigung zur Änderung des gemeinsamen Graph-Lite-Wissens sind getrennt. Self-Service ist global {{ 'aktiv' if user_self_service_enabled else 'deaktiviert' }}; eine Sitzung läuft maximal {{ (curation_session_max_seconds / 3600)|round(2) }} Stunden.</p>
+<form method="post" action="{{ request.app.url_path_for('admin_user_findings_curation', canonical_user_id=user.canonical_user_id) }}">
+<label><span><input type="checkbox" name="enabled" {% if user.findings_curation_enabled %}checked{% endif %}> Diesem Benutzer Self-Service-Kuration erlauben</span></label>
+<div><button>Findings-Berechtigung speichern</button></div>
+</form>
+</section>
+
+<section>
 <h2>Kontakt-DB</h2>
 <p class="muted">CardDAV-Kontakte dieses Nextcloud-Benutzers können als Seeds in Neo4j übernommen werden. Das bereits gespeicherte Nextcloud-Credential wird verwendet; eine kanonische UUID ist für die Bedienung nicht erforderlich.</p>
 {% if not has_nextcloud_credential %}<div class="alert warning">Kein Nextcloud-Credential vorhanden. Der Sync ist ein No-op, bis der Benutzer den Login Flow erneut abgeschlossen hat.</div>{% endif %}

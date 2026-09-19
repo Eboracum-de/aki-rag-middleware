@@ -1,185 +1,181 @@
 # AKI RAG Middleware
-## Architecture and design baseline 0.8.5-rc3
+## Architecture and design baseline 0.8.5-rc4
 
-**Stand:** 16. September 2026
-**Status:** Release Candidate
-**Referenzversion:** `0.8.5-rc3`
-
----
-
-## 1. Zusammenfassung
-
-Die AKI RAG Middleware verbindet einen bestehenden Nextcloud-Dokumentbestand mit mehreren voneinander unabhängigen Retrieval-Pfaden und einer nachgelagerten LLM-Antwortschicht. Ziel ist keine neue Dokumentenablage und keine zweite Berechtigungsdatenbank, sondern eine rechercheorientierte Vermittlungsschicht zwischen natürlicher Sprache, vorhandener Volltextsuche, semantischer Suche, einem dokumentengeerdeten Wissensgraphen und optionaler öffentlicher Web-Recherche.
-
-Das zentrale Sicherheitsprinzip lautet:
-
-> **Retrieval-Systeme liefern nur Kandidaten. Nextcloud selbst bleibt die letzte Autorisierungsinstanz.**
-
-Elasticsearch, Qdrant und Neo4j dürfen deshalb Kandidaten vorschlagen, aber kein Treffer erreicht Verifier oder Antwortmodell, wenn der aktuell angemeldete Nextcloud-Benutzer den Zugriff nicht live über Nextcloud bestätigt bekommt. Werden Kandidaten durch die ACL entfernt, werden bewusst **keine** schlechter gerankten Dokumente nachgeschoben.
-
-Die aktuelle Referenzarchitektur kombiniert:
-
-- Nextcloud FullTextSearch / Elasticsearch für lexikalisches Retrieval,
-- Qdrant für semantisches Retrieval,
-- Neo4j für Entity-/Relationssignale und dokumentengeerdete Graphpfade,
-- Reciprocal Rank Fusion (RRF) zur Zusammenführung,
-- einen optional lokalen oder externen Cross-Encoder-Reranker,
-- Live-Nextcloud-ACL,
-- einen kompakten dokumentengeerdeten Kandidaten-Verifier,
-- ein LLM für Antwortgenerierung,
-- optional Brave Search oder SearXNG als öffentliche Web-Discovery,
-- einen Web-Relevance-Gate, der nur tatsächlich geladene Seiten als Evidence zulässt,
-- ein WebDAV-Webarchiv in Nextcloud.
-
-Im Referenzbetrieb laufen Embeddings lokal (`qwen3-embedding:4b` über Ollama), während Query-Rewriter, Verifier, Evidence-Controller und Antwortmodell rollenweise lokal oder über einen OpenAI-kompatiblen Provider angesprochen werden können. Die LLM- und Embedding-Schichten sind bewusst getrennt. Das Embedding-Modell ist austauschbar; Prefixes/Rollenformatierung und optionale Ausgabedimension werden explizit konfiguriert und nicht aus Modellnamen abgeleitet.
+**Updated:** 19 September 2026  
+**Status:** Release Candidate  
+**Reference version:** `0.8.5-rc4`
 
 ---
 
-## 2. Problemstellung
+## 1. Overview
 
-Klassische Volltextsuche setzt voraus, dass der Benutzer die im Dokument verwendeten Wörter, Schreibweisen, Zeitangaben oder Suchsyntax hinreichend genau kennt. In realen Ablagen treten jedoch typischerweise folgende Probleme auf:
+AKI RAG Middleware connects an existing Nextcloud document estate to several retrieval paths and an LLM answer layer. It is not a document store and does not maintain an independent authorization database.
 
-- unterschiedliche Schreibweisen und Abkürzungen,
-- OCR-Fehler,
-- unvollständige oder umgangssprachliche Benutzerfragen,
-- Beziehungen, die nicht in einem einzelnen Schlüsselwort ausdrückbar sind,
-- relevante Dokumente, in denen gesuchte Rollen oder Beziehungen nur indirekt beschrieben werden,
-- viele semantisch ähnliche, aber sachlich falsche Treffer,
-- unterschiedliche Dokumentversionen und widersprüchliche Arbeitsstände,
-- Berechtigungen, die sich in Nextcloud laufend ändern.
+The core authorization rule is:
 
-Die Middleware übersetzt natürliche Sprache zunächst in einen kleinen SearchSpec. Das LLM formuliert dabei eine menschenlesbare Nextcloud-Volltextanfrage (`elastic_query`, z. B. `+examplehost +2025 +Rechnung`) und parallel eine natürliche `semantic_query` für Qdrant. `entities`, `concepts`, `constraints` und `verification_requirements` fallen als analytische Nebenprodukte für Graph-Light, Verifier und Provenienz an. Die Middleware erzeugt daraus weiterhin kontrolliert Elasticsearch-JSON; das LLM schreibt keine rohe Elasticsearch-DSL und keine frei kombinierbaren Probe-Workflows.
+> **Retrieval systems propose candidates. Nextcloud remains the final authorization authority for private document evidence.**
 
----
+Elasticsearch, Qdrant and Neo4j may contribute retrieval signals or candidate documents. Before private document content becomes verifier or answer evidence, the concrete file candidate is checked live through Nextcloud for the current user.
 
-## 3. Designziele
+If live authorization removes a candidate, the normal path does not adaptively fetch lower-ranked documents merely to fill the context window.
 
-### 3.1 Hoher Recall ohne feste Fachontologie
+The reference architecture can combine:
 
-Der Query Rewriter darf Begriffe, Rollen, Relationen und Constraints aus der Benutzerfrage in einem SearchSpec strukturieren, aber die Middleware enthält bewusst **keinen festen Katalog von Dokumenttypen oder Geschäftsprozessen**. Eine Rechnung, ein Vertrag, eine E-Mail oder ein Behördenvorgang werden nicht über hartcodierte Domänenregeln erkannt.
+- Nextcloud FullTextSearch / Elasticsearch for lexical retrieval;
+- optional Qdrant for semantic retrieval;
+- Neo4j for seed/alias/entity context and optional Graph-Lite functions;
+- result fusion and deduplication;
+- an optional local or external reranker;
+- live Nextcloud WebDAV authorization;
+- a compact document-grounded Candidate Verifier;
+- one or more configurable LLM roles;
+- optional public-Web research through Brave Search or SearXNG;
+- optional Nextcloud-backed Web, Mail and Chat archives.
 
-### 3.2 Dokumentengeerdete Präzision
-
-Eine semantische Ähnlichkeit allein genügt nicht. Ein Dokument, in dem dieselben Firmen und dieselbe Rechnungsnummer erwähnt werden, kann für die konkrete Relation trotzdem falsch sein. Deshalb gibt es nach Retrieval, Ranking und ACL einen kompakten Verifier.
-
-### 3.3 Nextcloud bleibt Berechtigungsquelle
-
-Die Middleware repliziert ACLs nicht dauerhaft in Qdrant oder Neo4j. Das vermeidet Synchronisationsfehler, bei denen veraltete Shares oder Gruppenrechte unbeabsichtigt Zugriff gewähren könnten.
-
-### 3.4 Fehlende Evidenz wird nicht erfunden
-
-Wenn relevante Dokumente wegen ACL ausfallen oder kein belastbarer Treffer vorhanden ist, antwortet das System lieber mit weniger Evidenz oder gar nicht, statt schlechtere Kandidaten nachzurücken.
-
-### 3.5 Provider und Modelle bleiben austauschbar
-
-Answer-LLM, Embedding-Backend, Reranker und Web-Suchprovider sind getrennte Komponenten. Ein Wechsel des Answer-LLM darf keine Neuindexierung des Vektorraums erzwingen; ein Wechsel des Embedding-Modells dagegen schon.
-
-### 3.6 Web-Recherche bleibt separater Evidence-Arm
-
-Öffentliche Webquellen sind nicht einfach zusätzliche interne Dokumente. Sie werden separat gesucht, tatsächlich abgerufen, auf Relevanz geprüft, mit `W1`, `W2`, ... zitiert und auf Wunsch in Nextcloud archiviert.
+The model layers are independently configurable. Embedding models, rerankers, planner/verifier roles and answer models can be local or external according to administrator policy.
 
 ---
 
-## 4. Architektur
+## 2. Scope and operating assumptions
+
+The architecture is designed for installations that already have a useful Nextcloud document corpus and, in many cases, an existing FullTextSearch/Elasticsearch deployment.
+
+Typical retrieval challenges include:
+
+- alternate spellings and abbreviations;
+- OCR errors;
+- incomplete or colloquial user questions;
+- relationships that cannot be expressed by one keyword;
+- semantically similar but factually irrelevant documents;
+- multiple versions or contradictory document states;
+- changing Nextcloud permissions.
+
+The middleware translates the user request into a constrained `SearchSpec`. The model may produce a human-style Nextcloud full-text expression and a semantic query, while the middleware itself constructs backend requests.
+
+The model does not emit raw Elasticsearch JSON DSL for execution.
+
+---
+
+## 3. Design principles
+
+### 3.1 Retrieval and authorization are separate concerns
+
+Search/index systems may have stale, broader or differently synchronized knowledge than the current Nextcloud file tree. They are therefore candidate sources, not permission authorities.
+
+### 3.2 Document evidence remains document-grounded
+
+A semantic match or graph relation signal is not sufficient evidence by itself. Where enabled, the Candidate Verifier checks whether the candidate document directly supports the information need.
+
+### 3.3 Missing evidence is represented explicitly
+
+When authorized, relevant evidence is not available, the system may return fewer results or an insufficient-evidence response. It does not intentionally replace missing evidence with weaker documents simply to maintain a result count.
+
+### 3.4 Models and providers are replaceable components
+
+Answer LLM, planner/verifier roles, embedding backend, reranker and Web search provider are independently configurable.
+
+Changing an answer model does not require re-indexing the vector corpus. Changing the embedding model normally does, because vector spaces from different embedding models must not be mixed.
+
+### 3.5 Public Web research is a separate evidence path
+
+Public Web discovery, fetch, passage selection, relevance review and archiving are handled separately from private document retrieval.
+
+### 3.6 Graph-Lite is optional enrichment
+
+Graph-Lite and Research Findings are not prerequisites for normal document search.
+
+Ordinary Elasticsearch/Qdrant retrieval, live ACL, verifier and answer generation continue to operate when Findings are disabled or left uncurated.
+
+Curated identity and relation knowledge can improve query expansion, entity resolution and later graph-assisted searches, but this is an optional learning/curation loop rather than a mandatory runtime dependency.
+
+---
+
+## 4. High-level architecture
 
 ```text
-                         Benutzer / AKI / OpenWebUI
-                                |
-                         OpenAI-kompatible API
-                                |
-                         Provider / Orchestrator
-                                |
-                +---------------+----------------+
-                |                                |
-          interner RAG-Pfad                öffentlicher Web-Pfad
-                |                                |
-        Query Rewriter                      Brave / SearXNG
-        -> SearchSpec                           |
-                |                           URL-Treffer
-        Neo4j Seed/Alias Expansion              |
-                |                           HTTP Fetch
-          +-----+------+                         |
-          |            |                   Passage Selection
-   Elasticsearch     Qdrant                      |
-      (files)       (optional)             Relevance Gate
-          |            |                         |
-          +-----+------+                   Web-Evidence W1..Wn
-                |                                |
-              Fusion                             |
-                |                                |
-             Dedup                               |
-                |                                |
-          optional Reranker                      |
-                |                                |
-          Live Nextcloud ACL                     |
-                |                                |
-        optional Candidate Verifier              |
-                |                                |
-                +---------------+----------------+
-                                |
-                          Antwortmodell
-                                |
-                   Quellen + optionale Archive
+                  AKI Recherche / OpenWebUI / trusted API client
+                                   |
+                         OpenAI-compatible provider
+                                   |
+                         Query rewrite / SearchSpec
+                                   |
+                 +-----------------+-----------------+
+                 |                                   |
+         private/internal path                  public Web path
+                 |                                   |
+        Neo4j seed/alias context               Brave / SearXNG
+                 |                                   |
+        +--------+---------+                    URL discovery
+        |                  |                         |
+ Elasticsearch         Qdrant                   HTTP fetch
+  required arm         optional                     |
+        |                  |                  passage selection
+        +--------+---------+                         |
+                 |                             relevance gate
+          fusion / dedup                           |
+                 |                           Web evidence W1..Wn
+        optional reranker                           |
+                 |                                  |
+        LIVE NEXTCLOUD ACL                          |
+                 |                                  |
+       optional Candidate Verifier                  |
+                 +-----------------+----------------+
+                                   |
+                             answer model
+                                   |
+                    sources + optional archives
 ```
 
-### 4.1 Komponenten und Rollen
+---
 
-| Komponente | Rolle | Autorisiert Dokumentzugriff? |
+## 5. Component responsibilities
+
+| Component | Responsibility | Authorizes private document access? |
 |---|---|---:|
-| Query Rewriter | erzeugt `elastic_query`, `semantic_query` und Analysemetadaten | Nein |
-| Neo4j | Seed-/Alias-/Entity-Expansion beim Rewrite; expliziter `/graph`-Dokumentarm bleibt optional | Nein |
-| Elasticsearch | lexikalische Kandidaten aus der Nextcloud-kompatiblen `elastic_query` | Nein |
-| Qdrant | semantische Kandidaten aus `semantic_query` | Nein |
-| Reranker | optionale gemeinsame Relevanzsortierung | Nein |
-| Nextcloud WebDAV ACL | Live-Sichtbarkeit des konkreten Benutzers | **Ja** |
-| Candidate Verifier | optionale sachliche Passung zur Suchhypothese | Nein |
-| Answer LLM | formuliert Antwort aus freigegebener Evidence | Nein |
-| Brave/SearXNG | öffentliche Such-Discovery | nicht anwendbar |
-| Web Relevance Gate | prüft tatsächlich geladene öffentliche Quellen | nicht anwendbar |
+| Query Rewriter | creates SearchSpec and lightweight analysis fields | No |
+| Neo4j | seed/alias/entity context; optional graph retrieval and curation | No |
+| Elasticsearch | lexical candidate discovery | No |
+| Qdrant | semantic candidate discovery | No |
+| Dedup/RRF/Reranker | candidate combination and ordering | No |
+| Nextcloud WebDAV ACL | current-user visibility of concrete files | **Yes** |
+| Candidate Verifier | document-level relevance and relation binding | No |
+| Answer model | answer generation from authorized evidence | No |
+| Brave/SearXNG | public URL discovery | N/A |
+| Web relevance gate | source relevance after actual fetch | N/A |
 
 ---
 
-## 5. Interner Retrieval-Pfad
+## 6. Internal retrieval path
 
-### 5.1 Normalmodus
+### 6.1 Normal path
 
-Der Normalpfad verwendet pro Retrieval-Runde immer dieselbe kleine Schnittstelle:
+Each retrieval round uses the same interface:
 
-1. Vor dem Rewrite wird aus Neo4j ein kompakter Seed-/Alias-Kontext geladen. Neo4j ist dabei kein automatischer Dokument-Retrieval-Arm.
-2. Die Benutzerfrage wird in **einen** SearchSpec umgeschrieben. Der Rewriter formuliert eine Nextcloud-kompatible `elastic_query` und parallel eine natürliche `semantic_query`.
-3. Der Files-Arm parst die `elastic_query` (`+must`, `-exclude`, Phrasen, weiche Begriffe) und kompiliert sie deterministisch in Elasticsearch-JSON mit den bewährten `content ODER title`-Semantiken.
-4. Qdrant erhält – sofern aktiviert – ausschließlich `semantic_query`.
-5. Elasticsearch und Qdrant werden fusioniert; Dubletten werden unabhängig vom Reranker unterdrückt.
-6. Der Cross-Encoder-Reranker ist optional.
-7. Die Live-Nextcloud-ACL entfernt nicht sichtbare Dokumente; es wird nicht mit schwächeren Treffern aufgefüllt.
-8. Der Candidate Verifier kann die sachliche Passung prüfen; bei angeforderten Dokumenttypen muss das Dokument selbst diesem Typ entsprechen.
-9. Das Antwortmodell formuliert quellengebunden.
+1. A compact Neo4j seed/alias context may be loaded before rewrite.
+2. The user question is rewritten into one `SearchSpec`.
+3. `elastic_query` is parsed and compiled deterministically into Elasticsearch JSON.
+4. `semantic_query` is sent to Qdrant when enabled.
+5. Candidate lists are fused and deduplicated.
+6. An optional reranker may reorder the bounded candidate set.
+7. Live Nextcloud ACL removes unauthorized files.
+8. The Candidate Verifier may check direct document support.
+9. The answer model receives only selected evidence.
 
-Beispiel:
+Example:
 
 ```text
-Benutzer: Suche Rechnungen von examplehost aus dem Jahr 2025
+User:
+Find invoices from Example Ltd. from 2025
 
 SearchSpec:
-  elastic_query:  +examplehost +2025 +Rechnung
-  semantic_query: Rechnungen von examplehost aus dem Jahr 2025
-  entities:       examplehost
-  concepts:       Rechnung
-  constraints:    Jahr=2025
-
-Super-Light:
-  Elasticsearch <- +examplehost +2025 +Rechnung
-  Qdrant         <- deaktiviert
-
-Standard:
-  Elasticsearch <- +examplehost +2025 +Rechnung
-  Qdrant         <- natürliche semantic_query
-  -> Fusion
+  elastic_query:  +Example +2025 +invoice
+  semantic_query: invoices from Example Ltd. from 2025
+  entities:       Example Ltd.
+  concepts:       invoice
+  constraints:    year=2025
 ```
 
-Die konkrete Elasticsearch-Query wird im SearchSpec-Pfad auf INFO geloggt. Dadurch ist administrativ nachvollziehbar, welche Query tatsächlich an ES ging.
-
-Die Referenzwerte in `config.yaml` sind derzeit:
+Reference configuration:
 
 ```yaml
 search:
@@ -190,8 +186,6 @@ search:
   rerank_candidates: 10
   final_limit: 15
 
-# Der historische Abschnittsname bleibt aus Kompatibilitätsgründen.
-# Runde 1 rewritet immer; enabled steuert nur zusätzliche Runden.
 retrieval_planner:
   enabled: true
   max_retrieval_rounds: 1
@@ -203,61 +197,65 @@ retrieval_planner:
   exhaustive_verification_candidate_limit: 30
 ```
 
-`max_retrieval_rounds: 1` bedeutet: Query-Rewrite + genau ein Retrieval-Lauf. Sind weitere Runden konfiguriert und `enabled: true`, bewertet der Rewriter das sichtbare Trefferbild und darf einen **neuen SearchSpec** erzeugen. Jede Runde durchläuft danach wieder dieselbe ES/Qdrant/Fusionspipeline; es gibt keine separate Probe-/Arm-Syntax.
+`max_retrieval_rounds: 1` means one rewrite followed by one retrieval run.
 
-### 5.2 Explizite Retrieval-Arme
+If more rounds are configured, a later round may produce a revised SearchSpec from the bounded visible result picture. It still uses the same retrieval pipeline and configured backend policy.
 
-Der Benutzer kann den normalen Pfad überschreiben:
+### 6.2 Explicit retrieval directives
 
-- `/files` – nur Elasticsearch, aber weiterhin über den strukturierten Query-Rewrite,
-- `/vector` – nur Qdrant mit `semantic_query`,
-- `/graph` – expliziter Legacy/Diagnose-Dokumentarm über Neo4j,
-- Kombinationen wie `/files /vector` sind möglich,
-- `/elastic` bleibt ein separater direkter Nextcloud-/Elasticsearch-Volltextmodus ohne Rewrite, Vector, Fusion oder Reranker.
+Supported specialist/diagnostic directives can override the normal arm selection:
 
-Neo4j-Seed/Alias-Expansion ist davon unabhängig und kann auch bei `graph: disabled` in der Retrieval-Policy aktiv bleiben.
+- `/files` — Elasticsearch only, still using structured rewrite;
+- `/vector` — Qdrant only;
+- `/graph` — explicit graph document-retrieval path where enabled;
+- combinations such as `/files /vector`;
+- `/elastic` — direct Nextcloud/Elasticsearch full-text mode without rewrite/vector/fusion/reranker.
+
+Neo4j seed/alias expansion is independent from the optional graph document-retrieval arm.
 
 ---
 
-## 6. SearchSpec, QueryFrame, EvidenceFrame und RetrievalRecord
+## 7. SearchSpec, QueryFrame, EvidenceFrame and RetrievalRecord
 
-### 6.1 SearchSpec und QueryFrame: Suchhypothese
+### 7.1 SearchSpec
 
-Der Query Rewriter erzeugt primär einen kleinen `SearchSpec`. Für Verifier-, Provenienz- und Research-Finding-Kompatibilität wird daraus zusätzlich ein offener `QueryFrame` abgeleitet:
+The SearchSpec is the executable retrieval description.
+
+Typical fields include:
 
 ```json
 {
-  "intent": "Rechnungen aus 2025 finden, die Nordstern GmbH an Example Logistics GmbH gestellt hat",
-  "entities": [
-    {"id": "q1", "text": "Nordstern GmbH", "role": "Rechnungsaussteller"},
-    {"id": "q2", "text": "Example Logistics GmbH", "role": "Rechnungsempfänger"}
-  ],
-  "relations": [
-    {"source": "q1", "predicate": "stellt Rechnung aus an", "target": "q2"}
-  ],
-  "constraints": [
-    {"kind": "Jahr", "value": "2025"}
-  ],
-  "concepts": ["Rechnung"]
+  "elastic_query": "+Example +2025 +invoice",
+  "semantic_query": "invoices from Example Ltd. in 2025",
+  "entities": ["Example Ltd."],
+  "concepts": ["invoice"],
+  "constraints": [{"kind": "year", "value": "2025"}],
+  "verification_requirements": [
+    "The document itself is an invoice from Example Ltd."
+  ]
 }
 ```
 
-Diese Struktur ist **keine Tatsache**. Sie beschreibt ausschließlich, was gesucht wird.
+### 7.2 QueryFrame
 
-### 6.2 EvidenceFrame: dokumentengeerdete Beobachtung
+For verifier/provenance/Findings compatibility, analysis fields can be represented as a QueryFrame.
 
-Der Verifier darf Relationen nur aus dem Kandidatendokument ableiten. Dadurch wird beispielsweise ein Dokument verworfen, das zwar `Nordstern GmbH`, `Example Logistics GmbH` und `2025` erwähnt, aber tatsächlich eine Rechnung von DL an einen dritten Empfänger beschreibt.
+A QueryFrame is a **search hypothesis**, not evidence and not a fact.
 
-Wichtige Bindungszustände sind insbesondere:
+### 7.3 EvidenceFrame
 
-- `direct` – die gesuchte Relation ist im Dokument direkt belegt,
-- `reference_only` – gesuchte Entitäten/Begriffe werden nur erwähnt,
-- `contradicted` – die dokumentierte Relation widerspricht der Suchhypothese,
-- `unclear` – aus dem Dokument nicht belastbar entscheidbar.
+The Candidate Verifier derives an EvidenceFrame only from the candidate document.
 
-### 6.3 RetrievalRecord
+Important relation bindings include:
 
-Optional kann pro Query ein strukturierter Datensatz archiviert werden:
+- `direct` — the document itself supports the requested relationship/object;
+- `reference_only` — the requested subject is only mentioned or referenced;
+- `contradicted` — the document supports a materially different relationship;
+- `unclear` — the document does not allow a reliable decision.
+
+### 7.4 RetrievalRecord
+
+Optional retrieval/evidence audit records:
 
 ```yaml
 retrieval_record:
@@ -265,19 +263,17 @@ retrieval_record:
   directory: "runtime/retrieval-records"
 ```
 
-Der Record speichert Query, SearchSpec/QueryFrame, Verifikationsmetadaten, Dokumentreferenzen und EvidenceFrames, aber **keine vollständigen Dokumentkörper**. Er eignet sich als Audit-/Debug-Artefakt und als spätere Eingabe für eine kuratierte Graph-Erweiterung.
+They store structured query, SearchSpec/QueryFrame, document references, verifier metadata and EvidenceFrames, but not complete document bodies.
 
-Die wichtigste Regel bleibt:
-
-> QueryFrame niemals automatisch als Graph-Fakt importieren.
+A QueryFrame must not be imported automatically as a graph fact.
 
 ---
 
-## 7. Reranking
+## 8. Reranking and deduplication
 
-Die Middleware unterstützt zwei Reranker-Backends:
+Supported reranker modes include a local cross-encoder and an external TEI endpoint.
 
-### Lokal
+Local example:
 
 ```yaml
 reranker:
@@ -286,9 +282,7 @@ reranker:
   device: cpu
 ```
 
-Dies funktioniert ohne GPU, kann aber auf CPU bei größeren Cross-Encodern teuer sein.
-
-### External TEI
+External TEI example:
 
 ```yaml
 reranker:
@@ -297,166 +291,256 @@ reranker:
   fallback_backend: none
 ```
 
-Der TEI-Pfad lädt im RAG-Prozess keine lokalen Torch-/Transformers-Gewichte, solange kein lokaler Fallback konfiguriert ist. Das ist insbesondere für kleine CPU-only-RAG-VMs sinnvoll.
+Super-Light can operate without a reranker. Deduplication remains a separate preprocessing step.
 
 ---
 
-## 8. Live-ACL und Fail-Closed-Verhalten
+## 9. Live ACL and bounded post-filtering
 
-Die ACL-Prüfung liegt bewusst **nach Retrieval und Ranking**. Das ermöglicht gute Suchqualität ohne ACL-Schattenindex, hält aber Nextcloud als verbindliche Quelle der Zugriffsrechte.
+The current normal order is:
 
 ```text
-Kandidaten:      [A, B, C, D, E]
-Reranking:       [C, A, E, B, D]
-Live ACL erlaubt [C, E]
-Antwortkontext:  [C, E]
+retrieve -> fuse/deduplicate -> optional rerank -> bounded candidates
+        -> live Nextcloud ACL -> verifier/answer
 ```
 
-Es werden **nicht** anschließend F, G oder H nachgeladen, nur um wieder eine bestimmte Trefferzahl zu erreichen.
-
-Dieses Verhalten hat zwei Vorteile:
-
-1. Ein Benutzer erhält keine durch niedrigere Kandidaten künstlich „vervollständigte“ Antwort.
-2. Die Tatsache, dass höher gerankte, aber gesperrte Dokumente existieren, wird nicht indirekt durch Nachrücklogik offengelegt.
-
----
-
-## 9. Graph: Entity Resolution statt universeller Wahrheitsspeicher
-
-Neo4j ist der dritte Retrieval-Pfad, nicht die primäre Dokumentenquelle.
-
-### 9.1 Seed und Provenienz
-
-CardDAV-Kontakte können als kuratierbarer Nucleus importiert werden. Dokumente ergänzen anschließend `Observation`-/`Claim`-/Relations-Evidence. Die Herkunft jeder Beobachtung bleibt erhalten.
-
-### 9.2 Namen und Aliase
-
-Formen besitzen eine `resolution_policy`:
-
-- `exclusive` – für Query und harte Ingestion-Identitätsauflösung,
-- `contextual` – für Query/Kandidaten, aber nicht für harte Dokumentauflösung,
-- `search_only` – nur Query-Erweiterung,
-- `document_only` – nicht als globaler Resolver exponiert.
-
-Damit können unsichere Varianten, OCR-Fehler oder Namensformen nutzbar sein, ohne sie vorschnell als globale Identität festzuschreiben.
-
-### 9.3 Merge/Split/Korrektur
-
-Die CLI unterstützt bereits u. a.:
-
-- Merge-Vorschläge,
-- manuelles Merge mit Preview,
-- persistentes `NOT_SAME_AS`,
-- Alias- und Policy-Pflege,
-- Namenskorrektur,
-- Re-Zuordnung einzelner Observations oder CardDAV-Records,
-- Provenienz- und Import-Run-Ansichten.
-
-Eine komfortablere Graph-Admin-Oberfläche ist für den Freeze-/Post-Freeze-Schritt vorgesehen; die CLI ist bereits die autoritative Administrationsschicht.
-
-### 9.4 Indirekte Beziehungen
-
-Eine dokumentengeerdete Kette `A → C → B` darf als **indirekte Verbindung** ausgegeben werden, wenn beide Hops jeweils durch Dokumente belegt sind. Sie darf niemals in eine direkte Relation `A ↔ B` umgedeutet werden.
-
----
-
-## 10. Öffentliche Web-Recherche
-
-### 10.1 Discovery-Provider
-
-Aktuell unterstützt der Web-Arm:
-
-- Brave Search API,
-- extern betriebenes SearXNG.
-
-Der Search-Provider liefert zunächst nur URLs, Titel und Discovery-Metadaten. **Suchmaschinen-Snippets gelten nicht als Evidence.**
-
-### 10.2 Evidence-Pipeline
+Example:
 
 ```text
-Search Provider
-   -> URL-Liste
-   -> echte HTTP-Abrufe
-   -> Text-/PDF-Extraktion
-   -> bestpassende Passage pro Seite
-   -> LLM-Relevance-Gate
-   -> maximal konfigurierte relevante Quellen
-   -> Antwort mit [W1], [W2], ...
+Candidates:      [A, B, C, D, E]
+Ranking:         [C, A, E, B, D]
+ACL authorized:  [C, E]
+Answer evidence: [C, E]
 ```
 
-Die aktuelle Implementierung verwendet für native OpenAI-Modelle ein Strict-Structured-Output-kompatibles Relevance-Schema. Unvollständige Quellenentscheidungen werden nicht als „irrelevant“ verschluckt, sondern erneut angefordert und bei erneutem Vertragsbruch als Fehler gemeldet.
+The middleware does not then fetch F, G or H merely to restore the original count.
 
-### 10.3 Explizit, gemischt oder als Fallback
+This has two operational consequences:
 
-Web kann genutzt werden als:
+- no replicated ACL shadow is required in Elasticsearch/Qdrant/Neo4j;
+- users with narrow permissions may receive fewer results than a user with broader rights.
 
-- expliziter Web-only-Arm: `/web ...`,
-- Teil eines natürlich beschriebenen Workflows,
-- Abgleich ausgewählter interner Dokumente mit dem Web,
-- automatischer Fallback bei unzureichender interner Evidence, sofern der vertrauenswürdige Client `X-RAG-Web-Allowed: true` setzt und der Benutzer vom Admin für Web Research freigeschaltet ist.
+A possible future optimization is a fixed-size ACL candidate pool before an expensive reranker. Such a pool would remain bounded and non-adaptive.
 
-Der automatische Fallback wird zusätzlich durch einen konservativen Web-Gate geprüft; ein interner Nulltreffer führt nicht blind zu einer externen Suchanfrage.
+### 9.1 WebDAV request cost
 
-### 10.4 Webarchiv
+Live ACL checks are batched. With the default:
 
-Für freigeschaltete Benutzer kann jeder Web-Recherchelauf per WebDAV in Nextcloud archiviert werden:
+```yaml
+acl:
+  batch_size: 100
+```
+
+up to 100 unique file IDs are checked in one authenticated WebDAV `SEARCH` request.
+
+The practical cost should be measured on the actual Nextcloud deployment. It is not a per-document HTTP request loop.
+
+---
+
+## 10. Graph and Graph-Lite
+
+Neo4j is used for identity/alias context, provenance and optional graph-assisted retrieval and curation.
+
+It is not an authorization store and is not treated as a universal fact database.
+
+### 10.1 CardDAV seeds and provenance
+
+CardDAV contacts can seed known Persons/Organizations. Document processing can add observations and relation evidence while retaining provenance.
+
+### 10.2 Name and alias policies
+
+Entity forms can carry a `resolution_policy`:
+
+- `exclusive` — query use plus hard ingestion identity resolution;
+- `contextual` — query/candidate use but no hard ingestion resolution;
+- `search_only` — query expansion only;
+- `document_only` — not exposed as a global resolver/search form.
+
+This allows uncertain OCR/name variants to be useful without automatically treating them as canonical identity.
+
+### 10.3 Shared retrieval knowledge
+
+Curated names and aliases can be reused across users.
+
+This reuse is retrieval knowledge, not access to the source document that originally motivated the alias. Document evidence still requires current-user live ACL.
+
+### 10.4 Graph curation operations
+
+Administrative tooling supports, among other operations:
+
+- merge proposals;
+- manual merge with preview;
+- persistent `NOT_SAME_AS`;
+- alias and policy maintenance;
+- name correction;
+- reassignment of observations or CardDAV records;
+- provenance and import-run inspection.
+
+### 10.5 Indirect relations
+
+A document-grounded chain:
 
 ```text
-<Benutzer-Archivroot>/YYYY-MM/DD-HHMMSS-xxxx/
+A -> C -> B
+```
+
+may be represented as an indirect connection only when both hops have supporting provenance.
+
+It must not be transformed into a direct `A <-> B` relation.
+
+### 10.6 Research Findings
+
+Research Findings are positive, document-bound verifier observations.
+
+A deterministic `finding_id` combines provenance, supporting document and canonical QueryFrame so repeated equivalent research can coalesce.
+
+Findings are an **optional learning layer**. The normal RAG pipeline does not depend on their curation.
+
+A typical enrichment loop is:
+
+```text
+query
+ -> SearchSpec
+ -> retrieval
+ -> live ACL
+ -> verifier
+ -> answer
+ -> optional ResearchFinding
+ -> optional curator decisions
+ -> improved shared graph knowledge
+```
+
+A well-curated graph can improve entity resolution and may support searches across recognized relationships. Leaving Findings uncurated or disabling `research_findings.enabled` does not disable normal retrieval or answering.
+
+Curated claims remain document-grounded `RelationObservation` records. The current release does not automatically promote them into global fact edges or query-expansion relations.
+
+User/query provenance is represented through a per-request `ResearchRun` while the Finding remains shared:
+
+```text
+CanonicalUser --PERFORMED--> ResearchRun --PRODUCED--> ResearchFinding
+                                                        |
+                                                  SUPPORTED_BY
+                                                        |
+                                                     Document
+```
+
+The ResearchRun stores the original user query and retrieval/runtime provenance. Equivalent runs may therefore converge on the same globally curated Finding. Run-level dismissal controls the work queue only; it does not alter the shared Finding.
+
+Both the administrator user-context view and optional end-user self-service re-check the supporting document through live Nextcloud ACL before exposing Finding evidence. End-user curation uses a separate, short-lived Nextcloud Login Flow session rather than a persistent RAG password or the ordinary provider credential. Self-service is disabled by default and can be gated per canonical user.
+
+---
+
+## 11. Public Web research
+
+### 11.1 Discovery
+
+Supported discovery backends include:
+
+- Brave Search API;
+- externally operated SearXNG.
+
+Search snippets are discovery metadata and are not answer evidence.
+
+### 11.2 Evidence pipeline
+
+```text
+Search provider
+   -> URL list
+   -> HTTP fetch
+   -> text/PDF extraction
+   -> passage selection
+   -> relevance review
+   -> bounded Web evidence
+   -> answer citations [W1], [W2], ...
+```
+
+### 11.3 Explicit, mixed and fallback use
+
+Web research can be:
+
+- explicit Web-only: `/web ...`;
+- part of a mixed workflow;
+- used after selected internal evidence;
+- allowed as a controlled fallback when the trusted client sets `X-RAG-Web-Allowed: true` and per-user Web research is enabled.
+
+A conservative Web gate decides whether automatic Web use is appropriate.
+
+### 11.4 Web-after egress boundary
+
+When Web queries are derived from private internal evidence, the query itself becomes data sent to an external search provider.
+
+The Web-after prompt therefore treats internal evidence as untrusted input and avoids transferring secret-like strings, e-mail addresses, API keys, tokens, internal identifiers or unusual verbatim text unless the user explicitly asks to search for that exact value.
+
+### 11.5 Web archive
+
+Selected Web research can be archived through the user's Nextcloud WebDAV credential:
+
+```text
+<archive-root>/YYYY-MM/DD-HHMMSS-xxxx/
     recherche.md
     fetch-log.jsonl
     01-source.txt
     .01-source.metadata.json
-    01-source.pdf        # Original-PDF oder optionales Playwright-Screen-PDF
-    01-source.html       # optionaler HTML-Rohsnapshot
+    01-source.pdf
+    01-source.html       # optional
     ...
 ```
 
-`recherche.md` dokumentiert Suchanfrage, Abrufzeitpunkt, verwendete Quellen, Relevance-Metadaten und nach Abschluss die LLM-Antwort. `fetch-log.jsonl` enthält **alle tatsächlich angeforderten Suchtreffer**, auch verworfene oder fehlgeschlagene Fetches, mit Original-/Final-URL, HTTP-Status, Redirect-Zahl, Content-Hash, Fetch-Ergebnis und Relevance-Entscheidung. Für jede ausgewählte Quelle wird zusätzlich eine `.metadata.json` mit Retrieval-, Relevance- und Snapshot-Metadaten geschrieben.
+Archive roots are excluded from ordinary internal retrieval so archived public material does not later appear as an independent private source.
 
-Ist der optionale lokale Playwright-Renderer aktiviert, werden ausgewählte HTML-Quellen zusätzlich mit einem 1440×900-Desktop-Viewport als A4-Landscape-PDF gerendert. Best-effort Consent/Overlay-Cleanup bleibt bewusst begrenzt; optionaler Browser-Storage wird pro angefordertem Host getrennt persistiert, damit gewöhnliche Cookie-Zustimmungen wiederverwendet werden können. Login-Walls, Paywalls, CAPTCHAs und Zugriffssperren werden nicht umgangen. Renderfehler sind fail-open und beeinflussen die Text-Evidence nicht. In RC2 läuft die Playwright-PDF-Erzeugung nach dem synchronen Evidenz-/Metadatenarchiv als begrenzte Hintergrundaufgabe; das Sidecar verfolgt `pending/complete/failed`. Bereits als PDF gelieferte Quellen werden unverändert archiviert und nicht erneut gerendert.
-
-Der Raw-HTML-Snapshot ist weiterhin nur der tatsächlich abgerufene HTTP-Body der Hauptseite. Auch das Playwright-PDF ist **kein vollständiges WARC-/forensisches Browser-Capture**; es dient als visuell lesbare Momentaufnahme.
-
-Webarchiv-Pfade werden aus der normalen internen Retrieval-Pipeline ausgeschlossen, damit archivierte Webquellen nicht später unbemerkt als unabhängige interne Quellen wieder auftauchen.
+Playwright rendering is optional and produces a readable research snapshot, not a complete WARC/WACZ forensic capture.
 
 ---
 
-## 11. Datenschutz und Datenflüsse
+## 12. Privacy and processing boundaries
 
-Die Trennung von Embedding- und Answer-LLM ist ein bewusstes Datenschutzmerkmal.
+### 12.1 Local embeddings
 
-### 11.1 Lokale Embeddings
+With local embedding infrastructure:
 
-Für lokale oder externe Embedding-Modelle gilt derselbe generische Vertrag. Die Referenz verwendet `qwen3-embedding:4b`; andere Ollama- oder OpenAI-kompatible Embedding-Modelle können mit expliziten Query-/Dokument-Prefixes eingesetzt werden:
+- document text can remain inside the administrator-controlled environment;
+- Qdrant can remain local;
+- only selected authorized evidence needs to be transmitted to a remote answer/verifier model when remote roles are configured.
 
-- vollständige Dokumenttexte bleiben für die Vektorisierung lokal,
-- Qdrant bleibt lokal,
-- an ein externes Answer-LLM gehen nur die für die konkrete Anfrage notwendigen Prompts und nach ACL freigegebenen Kandidatenausschnitte.
+### 12.2 External embeddings
 
-### 11.2 Externe Embeddings
+Using an external embedding provider transmits every indexed text chunk to that provider.
 
-Wird `embedding.backend` auf einen externen API-Provider umgestellt, müssen alle zu indexierenden Text-Chunks an diesen Provider gesendet werden. Bei einem Vollindex entspricht das praktisch dem gesamten indexierbaren Volltextbestand. Das ist datenschutzseitig eine wesentlich größere Grenze als der selektive Answer-/Verifier-Pfad.
+For a full index this can approach disclosure of the complete indexable corpus and should be treated as a different trust boundary from selective answer generation.
 
-### 11.3 CPU-only-Betrieb
+### 12.3 Role-specific LLM routing
 
-Embeddings sind nicht GPU-pflichtig. `qwen3-embedding:4b` mit 1024 Ausgabedimensionen kann auf einem CPU-only-Server über Ollama betrieben werden; die initiale Vollindexierung kann dort jedoch alle Kerne auslasten. Für den Erstlauf kann derselbe Modell-/Dimensionsstand einmalig über `rag.sync --embedding-url` auf einen GPU-Ollama umgeleitet werden; inkrementelle Folgesyncs können anschließend wieder über CPU laufen. Für einen CPU-Reranker ist ein separater TEI-Dienst eine saubere Option. Embedding- und Reranker-Dienste bleiben administratorverwaltet und können unabhängig von der Middleware skaliert werden.
+Planner, verifier, evidence-control and answer roles can inherit one default model/backend or use separate model configurations.
+
+Remote roles have explicit document/count/character budgets.
+
+### 12.4 Credential storage
+
+User-bound reversible Nextcloud and IMAP credentials, and Login Flow poll tokens, are encrypted with AES-256-GCM in the credential store.
+
+The master key remains outside SQLite.
+
+This protects stored database material from casual/plaintext disclosure but is not intended to protect secrets from `root` or a fully compromised middleware process.
+
+### 12.5 Untrusted content
+
+Documents, mail, Web pages and saved chats may contain text phrased as model instructions.
+
+Such text is treated as evidence content, not as middleware control input.
+
+The main residual risks are evidence integrity, persistent graph/finding pollution and Web-query egress, rather than arbitrary backend-command execution.
+
+See `THREAT-MODEL.md` for the security analysis.
 
 ---
 
-### 11.4 Verschlüsselter Credential-Store
+## 13. Mail integration
 
-In `0.8.3-rc6` werden reversible Benutzer-Credentials nicht als Klartext in `runtime/users.sqlite` gespeichert. Nextcloud-App-Passwörter, IMAP-Passwörter und kurzlebige Nextcloud-Login-Flow-Poll-Tokens werden mit AES-256-GCM verschlüsselt. Der Master-Key liegt außerhalb der SQLite-Datenbank und wird auf einer Standardinstallation von `root` verwaltet; der Dienstaccount `rag` erhält ausschließlich die zum Betrieb nötige Leseberechtigung.
+Mail synchronization is configured per canonical Nextcloud user.
 
-Die Verschlüsselung ist kontextgebunden: Authenticated Data bindet Ciphertexte an Benutzer, Service und Account. Ein aus der Datenbank kopierter Ciphertext lässt sich deshalb nicht unbemerkt einem anderen Credential-Datensatz zuordnen. Nicht reversible Trusted-Client-Keys werden weiterhin nur als Hash gespeichert.
+Configured IMAP mailbox names are recursive roots. Selectable descendants are discovered through IMAP `LIST`, and the hierarchy is mirrored into Nextcloud.
 
-Diese Maßnahme trennt Datenbank-/Admin-Zugriff besser vom tatsächlichen Secret-Inhalt, ist jedoch bewusst keine vollständige Isolation gegen `root` oder einen kompromittierten Dienstprozess. Globale Runtime-Secrets bleiben in diesem Release Candidate in `runtime.env`; eine spätere Ausbaustufe kann dafür systemd credentials/TPM oder einen privilegierten Secret-Helper verwenden.
-
-## 12. Mail-Integration
-
-Die Mail-Synchronisation ist administrativ pro kanonischem Nextcloud-Benutzer konfigurierbar. Passwörter werden getrennt nach Credential-Service gespeichert; insbesondere darf ein Mail-Passwort niemals durch ein unqualifiziertes SQL-Update denselben Nextcloud-Benutzernamen überschreiben.
-
-**Aktueller Implementierungsstand:** Konfigurierte IMAP-Mailboxen sind rekursive Wurzeln. Der Worker ermittelt selektierbare Unterordner mit IMAP `LIST`, übernimmt den serverseitigen Hierarchietrenner und spiegelt die Struktur in Nextcloud. Jede neue Nachricht erhält einen eigenen Ordner:
+New messages use a directory-per-message layout:
 
 ```text
 <target>/<account>/<mailbox-hierarchy>/<YYYY>/<MM>/
@@ -465,177 +549,157 @@ Die Mail-Synchronisation ist administrativ pro kanonischem Nextcloud-Benutzer ko
     .mailmeta.json
     a01_<attachment>
     ...
-    message.eml          # optional; neue Konten standardmäßig store_eml=false
+    message.eml          # optional
 ```
 
-Der Sidecar enthält deterministische Metadaten für Graph-/Thread-Verarbeitung und wird nicht als normaler Retrieval-Text behandelt. Alte flache Archive bleiben lesbar, werden aber nicht automatisch umsortiert.
+`mail.txt` is the indexable normalized representation. `.mailmeta.json` carries deterministic metadata for mail/thread processing.
+
+Legacy flat archives remain readable and are not moved automatically.
 
 ---
 
-## 13. OpenWebUI
+## 14. Frontends and provider boundary
 
-OpenWebUI ist Referenz-Frontend, nicht Bestandteil der Retrieval-Logik. Der Installer pinnt derzeit `v0.11.0` auf einen festen Image-Digest. Der Reverse Proxy reserviert:
+AKI Recherche is the bundled Nextcloud-native frontend.
+
+OpenWebUI or another OpenAI-compatible integration can use the same provider when registered as a Trusted Client.
+
+The frontend boundary is intentionally independent from retrieval implementation:
 
 ```text
-/             -> OpenWebUI, falls installiert
-/rag-admin/   -> RAG-Administration
-/rag-api/     -> Middleware API
-/v1/          -> OpenAI-kompatibler Provider
-/auth/        -> Nextcloud Login Flow
+frontend/integration
+      |
+trusted client key
+      |
+OpenAI-compatible provider
+      |
+retrieval/orchestration
 ```
 
-Ein externes OpenWebUI kann mit einem eigenen Trusted-Client-Key und dem Header
+A Trusted Client key authenticates the integration server, not the human user. The external user identifier supplied by that integration is scoped as:
 
-```json
-{"X-OpenWebUI-User-Id":"{{USER_ID}}"}
+```text
+client_id::external_user_id
 ```
 
-angebunden werden. Für den automatischen Web-Fallback kommt optional hinzu:
+and selects the corresponding server-side Nextcloud credential binding.
 
-```json
-{"X-RAG-Web-Allowed":"true"}
-```
+Provider keys therefore belong only on trusted integration servers. Externally reachable provider endpoints should be restricted with network policy, reverse-proxy allowlists, mTLS or equivalent controls where appropriate.
 
-Die gewünschte restriktive Endnutzer-Vorkonfiguration – insbesondere Abschalten von eigenem OpenWebUI-RAG, Tools/Plugins, Websuche, Update-Check, Workspaces und sonstigen Konfigurationsmöglichkeiten – ist **noch nicht vollständig in den Installer integriert**. Sie gehört zu den letzten Freeze-Arbeiten.
+This boundary also allows AKI to be composed with other local RAG systems, agents or research tools when the administrator explicitly permits it.
 
 ---
 
-## 14. Referenzbetrieb und beobachtete Performance
+## 15. Process model and latency
 
-In einem Live-Beta-Test mit einer Rechnungsanfrage und OpenAI GPT-5.6 Luna ergaben sich ungefähr:
+The normal AKI request path is served by long-running API/provider processes and is independent from Nextcloud's background-job scheduler.
+
+Total latency depends on:
+
+- query rewrite;
+- Elasticsearch/Qdrant response time;
+- hydration/fusion/dedup/reranking;
+- live WebDAV ACL;
+- verifier;
+- answer model;
+- public Web fetch/relevance stages when enabled.
+
+One observed development run with GPT-5.6 Luna was approximately:
 
 ```text
 Query Rewrite            ~4 s
 Retrieval/Rerank/ACL     ~9-10 s
 Verifier                 ~5 s
-Antwort                  ~3 s
-Gesamt                   ~24 s
+Answer                   ~3 s
+Total                    ~24 s
 ```
 
-Der gleiche Workflow war mit lokalem Qwen3 auf der vorhandenen Hardware deutlich langsamer. Die Zahlen sind keine Benchmark-Garantie; sie zeigen aber, dass nach der Umstellung auf einen schnellen externen LLM-Provider der größte weitere Latenzhebel nicht mehr das Antwortmodell, sondern Retrieval/Hydration/ACL ist.
+This is an observation from one environment, not a performance guarantee.
+
+Latency measurements should separate live ACL time from the rest of retrieval. Because ACL uses batched WebDAV SEARCH, benchmarking 10/50/100 candidates on the target Nextcloud instance is more useful than assuming linear per-document cost.
 
 ---
 
-## 15. Fehler- und Unsicherheitsmodell
+## 16. Background workers and deployment profiles
 
-Die Middleware bevorzugt explizite Unsicherheit gegenüber scheinbarer Vollständigkeit:
+Capabilities and workers are configured separately.
 
-- fehlende oder unvollständige Structured Outputs werden retried oder als Fehler behandelt,
-- ACL-Denials führen nicht zu Backfill,
-- indirekte Graphketten werden als indirekt markiert,
-- Web-Snippets sind keine Evidence,
-- nicht abrufbare Webseiten gelten nicht als Quellen,
-- ein Dokument, das eine Suchentität nur erwähnt, kann als `reference_only` verworfen werden,
-- fehlende Treffer werden als „in den gefundenen/vorliegenden Quellen nicht belegt“ formuliert, nicht als globale Nichtexistenzaussage.
+Example:
 
----
+```yaml
+qdrant:
+  enabled: true
+sync_worker:
+  enabled: false
 
-## Mail- und Vektorsynchronisation im Freeze-Stand
+mail:
+  enabled: true
+  worker:
+    enabled: false
 
-Der Mail-Import behandelt konfigurierte IMAP-Mailboxen als rekursive Wurzeln. Selektierbare Unterordner werden mit `LIST` entdeckt und als echte Nextcloud-Hierarchie gespiegelt. Jede neue E-Mail erhält einen eigenen Ordner mit indexierbarer Textrepräsentation, verstecktem Metadaten-Sidecar, Attachments und optionalem RFC822-Original. Damit bleibt das Archiv für Benutzer und Administratoren navigierbar und zugleich maschinell eindeutig strukturiert.
-
-Der Elasticsearch→Qdrant-Abgleich ist als eigener periodischer Worker operationalisiert. Dieser Worker implementiert keine zweite Indexlogik, sondern startet denselben zustandsbehafteten `rag.sync`, der auch manuell verwendet wird. Dadurch gelten für periodische und manuelle Läufe dieselben Chunking-, Embedding-, Update- und Löschregeln.
-
----
-
-## 16. Grenzen des Release Candidates
-
-`0.8.5-rc3` ist der erste öffentliche Release Candidate und der
-aktuelle Beta-Kandidat. Der Architektur-/Deployment-Stand ist für den Beta-Betrieb
-weitgehend eingefroren. Erwartete nächste Änderungen liegen primär bei Query-Rewrite, optionalen Retrieval-Runden und Retrieval-Qualität und UI-Komfort, nicht bei einer erneuten Aufteilung
-des Stacks.
-
-Die in 0.8.5 bewusst verbleibenden Grenzen sind in `KNOWN-LIMITATIONS.md` gesammelt.
-Wesentlich sind: nur die Kombinationen `standard+native` und
-`super-light+dockerized` sind als Deploymentpfade freigegeben; der Kontakt-Sync hat
-die Installer-CA-Datei wird noch nicht als allererste
-Preflight-Prüfung validiert; Web-PDFs sind best-effort Research-Snapshots und kein
-WARC/WACZ-Archiv.
-
-Nicht Bestandteil dieses Release Candidates sind ein vollständiger Browser-/WARC-Crawler,
-eine unkontrollierte automatische QueryFrame-zu-Global-Fact-Übernahme oder ein frei
-programmierbarer LLM-Workflow.
-
----
-
-## 17. Schlussfolgerung
-
-Die aktuelle Middleware trennt vier Aufgaben, die in vielen RAG-Systemen unnötig vermischt werden:
-
-1. **Kandidaten finden** – Elasticsearch, Qdrant, Neo4j, Web Search,
-2. **Zugriff autorisieren** – ausschließlich Nextcloud für private Dokumente,
-3. **Evidenz verifizieren** – dokumentengeerdete Verifier/Relevance-Gates,
-4. **Antwort formulieren** – LLM auf freigegebener und geprüfter Evidence.
-
-Diese Trennung ist der zentrale Architekturwert des Systems. Sie erlaubt den Austausch einzelner Modelle und Provider, ohne die Sicherheits- oder Provenienzlogik neu zu erfinden, und verhindert zugleich, dass semantische Ähnlichkeit oder ein Wissensgraph fälschlich als Berechtigung oder Wahrheit interpretiert werden.
-
-## Role routing and private retrieval plane
-
-The LLM path is no longer a single implicit backend. Planner, candidate
-verifier, evidence control and final answer generation can inherit the default
-backend or override it independently. This makes the trust boundary explicit:
-full-corpus retrieval, embeddings, vector storage, reranking and live ACL can
-remain local while selected evidence is processed by a remote model.
-
-Remote roles are subject to hard evidence budgets. Graph extraction is excluded
-from that normal evidence path because it may inspect substantially larger
-portions of a document; its backend remains separately configured and automatic
-graph processing is disabled by default in the current reference configuration. See
-`PRIVACY-ARCHITECTURE.md` for the normative deployment model.
-
-## RC10: AKI-Recherche-Findings – bereits geleistete Semantik wiederverwenden
-
-RC10 führt **keinen weiteren Graphisierungs-Lauf** für erfolgreiche Recherchen ein. Der Query Rewriter erzeugt den SearchSpec; daraus wird für Provenienz/Verifier ein kompatibler `query_frame` (Intent, Entities/Rollen, Constraints, Concepts) abgeleitet. Der Candidate-Verifier erzeugt für geprüfte Dokumente einen `evidence_frame` und entscheidet `match` / `uncertain` / `reject` sowie die Dokumentbindung.
-
-Nur positive Treffer mit `verification_status=match` und `relation_binding=direct` werden als `ResearchFinding:AKIResearchFinding` persistiert. Unsichere und abgelehnte Kandidaten werden nicht gespeichert. Das Finding verweist über `SUPPORTED_BY` auf das Dokument und trägt die Provenienz `AKI Recherche` sowie Query-Rewriter-/Verifier-Versionen. Query-Frame-Relationen bleiben Beobachtungsdaten des Findings und werden **nicht** automatisch zu globalen Entity-Relationen.
-
-Existierende CardDAV-/kuratierte Entities können über `QUERY_ENTITY` verlinkt werden, aber ausschließlich bei eindeutigem exaktem Query-Form-/Alias-Treffer. Es werden durch diesen Pfad keine neuen Entities, Aliase oder Merge-Entscheidungen erzeugt. Wiederholte gleichartige Recherchen koaleszieren anhand eines kanonischen Frame-Hashes plus Dokument-ID; dadurch wächst der Graph mit bestätigter Nutzung statt mit negativen Suchpaaren.
-
-Der Pfad ist bewusst fail-open und leichtgewichtig:
-
-```text
-query -> query rewrite/SearchSpec + Neo4j seed expansion -> ES [+ Qdrant] -> fusion/rerank -> live ACL
-      -> candidate verifier (positive match + evidence_frame)
-      -> answer path
-      -> batch write: AKI Recherche finding -> Neo4j
+graph_queue:
+  enabled: true
+  auto_enqueue_cited_documents: false
+  worker:
+    enabled: false
 ```
 
-Es gibt keinen zusätzlichen Modellaufruf. Die Konfiguration erfolgt über `research_findings.enabled`; bei deaktiviertem oder nicht erreichbarem Neo4j bleibt die Benutzerantwort unverändert verfügbar.
+This permits a component to be configured without automatically starting periodic CPU-intensive or privacy-sensitive processing.
 
+The current release line tests:
 
-## 0.8.4 Packaging: Funktionsprofil und Deployment-Modus
+- `standard + native`;
+- `super-light + dockerized`.
 
-Die Middleware-Codebasis ist unabhängig von der Verpackung. Zwei Achsen sind zu
-unterscheiden:
+These are combinations of two independent axes:
 
-- **Funktionsprofil:** welche Retrieval-/Graph-/UI-Fähigkeiten aktiviert sind
-  (`standard`, `super-light`, perspektivisch weitere Profile).
-- **Deployment-Modus:** wie API/Provider und Hilfsdienste betrieben werden
-  (`native` oder `dockerized`).
+- **functional profile** — enabled retrieval/graph/UI capabilities;
+- **deployment mode** — native or containerized service operation.
 
-0.8.4 unterstützt und testet `standard + native` und `super-light + dockerized`.
-Bei `super-light + dockerized` laufen API und Provider im selben Python-Image;
-Neo4j und Playwright sind ebenfalls Container, während Nextcloud/Elasticsearch
-und das LLM externe Dienste bleiben. Das ist eine Installationsvariante, kein
-Fork. Die Trennung erlaubt später beispielsweise `standard + dockerized`, ohne
-Retrieval-/ACL-/Query-Rewrite-Code zu duplizieren.
+Super-Light uses the same middleware core and can remain Elasticsearch-centric without Qdrant or a local reranker.
 
-## Policy between query understanding and execution
+---
 
-The normal retrieval contract is intentionally small:
+## 17. Error and uncertainty handling
 
-```text
-Query Rewriter -> SearchSpec
-       + Neo4j seed/alias expansion
-       -> Elasticsearch + optional Qdrant
-       -> fusion / dedup / optional reranker
-       -> live ACL / optional verifier
-```
+The middleware uses explicit states for incomplete or uncertain processing:
 
-The LLM does not choose backend syntax or invent retrieval-arm workflows. Administrator policy decides which implemented arms are available; normal automatic retrieval uses `files` plus optional `vector`, while Neo4j participates in entity/alias expansion. Explicit user directives can still request supported diagnostic/specialized arms.
+- invalid/incomplete structured model output is retried or reported as failure;
+- ACL denial removes evidence and does not trigger adaptive refill;
+- indirect graph chains remain labeled indirect;
+- search-engine snippets are not evidence;
+- unfetchable Web pages are not evidence;
+- mere mention can be classified `reference_only`;
+- missing evidence is phrased as absence from the retrieved/available sources rather than global nonexistence.
 
-Retrieval rounds remain an optional outer controller. A later round may emit a revised SearchSpec after seeing the bounded result picture, but it runs through the exact same retrieval pipeline. Round counts, candidate budgets, verifier limits and backend enablement remain deterministic configuration.
+---
 
-### RC3 Findings / Graph-Lite boundary
+## 18. Current release-candidate boundaries
 
-Research Findings preserve verified query/evidence frames and supporting-document provenance. Administrators may manually resolve finding entities into document-grounded mentions and may create document-grounded RelationObservation claims. **Findings and Claims are deliberately not retrieval edges in RC3**: there is no automatic promotion into global Entity relations or alias/query-expansion structures.
+`0.8.5-rc4` is the current public beta baseline.
+
+Known limits include:
+
+- only `standard+native` and `super-light+dockerized` are released/tested deployment combinations;
+- no unified cross-store purge/restore workflow;
+- no complete prompt-injection defense;
+- Web snapshots are research artifacts, not full WARC/WACZ captures;
+- ResearchRun provenance and user-scoped live-ACL curation are implemented, but curation still writes shared Graph-Lite knowledge and should therefore be granted deliberately;
+- no automatic conversion of QueryFrames or Finding claims into global facts.
+
+See `KNOWN-LIMITATIONS.md`, `THREAT-MODEL.md`, `DATA-LIFECYCLE.md` and `GRAPHLIGHT-FINDINGS.md` for details.
+
+---
+
+## 19. Responsibility separation
+
+The current middleware separates four responsibilities:
+
+1. **candidate retrieval** — Elasticsearch, optional Qdrant, optional Graph/Web paths;
+2. **private-document authorization** — Nextcloud live ACL;
+3. **evidence review** — Candidate Verifier and Web relevance checks;
+4. **answer generation** — the configured answer model.
+
+This separation defines component boundaries and failure handling. It also permits individual retrieval/model components to be replaced without changing the live authorization rule.
+
+It is an architectural choice with explicit trade-offs rather than a claim that the same decomposition is required for every RAG deployment.

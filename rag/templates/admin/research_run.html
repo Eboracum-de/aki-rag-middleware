@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Recherche · Research Findings{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div>
+    <h1>{{ run.user_query or run.retrieval_query or run.run_id }}</h1>
+    <p class="muted">Benutzerkontext: <strong>{{ user.nextcloud_login }}</strong> · {{ user.nextcloud_server }}</p>
+    {% if run.retrieval_query and run.retrieval_query != run.user_query %}<p class="muted">Retrieval: <code>{{ run.retrieval_query }}</code></p>{% endif %}
+  </div>
+  <a class="button secondary" href="{{ request.app.url_path_for('admin_findings') }}?canonical_user_id={{ user.canonical_user_id }}">Zur Recherche-Liste</a>
+</div>
+
+<section>
+<h2>Findings dieser Recherche</h2>
+<p class="muted">Globale Kurationsentscheidungen gelten für alle ResearchRuns, die dasselbe Finding referenzieren. „Nur hier ausblenden“ verändert dagegen ausschließlich diese Recherche-Queue.</p>
+{% if not run.findings %}
+<p class="muted">Keine aktuell per Nextcloud-ACL sichtbaren Findings.</p>
+{% else %}
+<form method="post" action="{{ request.app.url_path_for('admin_research_run_dismiss_findings', run_id=run.run_id) }}">
+<input type="hidden" name="canonical_user_id" value="{{ user.canonical_user_id }}">
+<div class="bulk-toolbar">
+  <label><input type="checkbox" class="bulk-toggle"> alle sichtbaren auswählen</label>
+  <button type="submit" class="secondary">Auswahl nur hier ausblenden</button>
+</div>
+<table>
+<thead><tr><th class="checkcol"></th><th>Dokument</th><th>Finding</th><th>Globaler Status</th><th>Run</th><th></th></tr></thead>
+<tbody>
+{% for f in run.findings %}
+<tr>
+<td><input type="checkbox" name="finding_id" value="{{ f.finding_id }}" class="bulk-item"></td>
+<td>
+<strong>{{ f.document_title or f.document_path or f.document_id }}</strong>
+{% if f.document_path %}<div class="muted">{{ f.document_path }}</div>{% endif %}
+{% if f.nextcloud_url %}<a href="{{ f.nextcloud_url }}" target="_blank" rel="noopener">Nextcloud ↗</a>{% endif %}
+</td>
+<td>
+{% if f.intent %}<div>{{ f.intent }}</div>{% endif %}
+{% if f.entity_texts %}<div class="muted">Entities: {{ f.entity_texts|join(', ') }}</div>{% endif %}
+</td>
+<td>
+{% if f.graph_state in ['claimed','mentions_only','entities_resolved'] %}<span class="status ok">{{ f.graph_state }}</span>
+{% elif f.graph_state == 'review_required' %}<span class="status degraded">review_required</span>
+{% elif f.graph_state == 'suppressed' %}<span class="status stale">suppressed</span>
+{% else %}<span class="status degraded">{{ f.graph_state or 'open' }}</span>{% endif %}
+</td>
+<td>{{ f.run_disposition or 'pending' }}</td>
+<td><a href="{{ request.app.url_path_for('admin_finding_detail', finding_id=f.finding_id) }}?canonical_user_id={{ user.canonical_user_id }}">Details / kuratieren</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</form>
+{% endif %}
+</section>
+
+{% if run.curation_status != 'dismissed' %}
+<section>
+<h2>Recherche aus Arbeitsliste entfernen</h2>
+<p class="muted">Dies löscht weder Findings noch Provenienz und ändert keine globale Kurationsentscheidung. Noch offene Findings dieser Recherche werden lediglich für diesen ResearchRun als ausgeblendet markiert.</p>
+<form method="post" action="{{ request.app.url_path_for('admin_research_run_dismiss', run_id=run.run_id) }}" class="filter-row confirm-submit" data-confirm="Diese Recherche aus der Kurations-Queue entfernen?">
+  <input type="hidden" name="canonical_user_id" value="{{ user.canonical_user_id }}">
+  <input type="text" name="reason" placeholder="Grund (optional)">
+  <button class="danger-outline">Recherche ausblenden</button>
+</form>
+</section>
+{% endif %}
+{% endblock %}

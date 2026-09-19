@@ -50,12 +50,35 @@ class GraphCurator:
         return self.graph.list_relation_observations(query=query, limit=limit)
 
     def search_observations(
-        self, *, query: str = "", status: str = "", limit: int = 200
+        self, *, query: str = "", status: str = "needs_review", limit: int = 200
     ) -> list[dict[str, Any]]:
         return self.graph.list_observations(query=query, status=status, limit=limit)
 
     def get_observation(self, observation_id: str) -> dict[str, Any] | None:
         return self.graph.observation_detail(observation_id)
+
+    def list_research_runs(
+        self, *, canonical_user_id: str = "", query: str = "", state: str = "open", limit: int = 200
+    ) -> list[dict[str, Any]]:
+        return self.graph.list_research_runs(
+            canonical_user_id=canonical_user_id, query=query, state=state, limit=limit
+        )
+
+    def research_finding_observed_by_user(self, canonical_user_id: str, finding_id: str) -> bool:
+        return self.graph.research_finding_observed_by_user(canonical_user_id, finding_id)
+
+    def get_research_run(self, run_id: str) -> dict[str, Any] | None:
+        return self.graph.research_run_detail(run_id)
+
+    def dismiss_research_run(self, run_id: str, *, actor: str = "admin", reason: str = "") -> dict[str, Any]:
+        return self.graph.dismiss_research_run(run_id, actor=actor, reason=reason)
+
+    def set_research_run_finding_disposition(
+        self, run_id: str, finding_ids: list[str], *, disposition: str, actor: str = "admin"
+    ) -> dict[str, Any]:
+        return self.graph.set_research_run_finding_disposition(
+            run_id, finding_ids, disposition=disposition, actor=actor
+        )
 
     def list_research_findings(self, query: str = "", *, limit: int = 200) -> list[dict[str, Any]]:
         return self.graph.list_research_findings(query=query, limit=limit)
@@ -63,12 +86,17 @@ class GraphCurator:
     def get_research_finding(self, finding_id: str) -> dict[str, Any] | None:
         return self.graph.research_finding_detail(finding_id)
 
-    def curate_research_finding(self, finding_id: str, *, status: str, reason: str = "", apply: bool = False) -> dict[str, Any]:
+    def curate_research_finding(
+        self, finding_id: str, *, status: str, reason: str = "", apply: bool = False,
+        curator_actor: str = "manual_admin",
+    ) -> dict[str, Any]:
         detail = self.graph.research_finding_detail(finding_id)
         if detail is None:
             raise ValueError(f"Finding nicht gefunden: {finding_id}")
         if apply:
-            return self.graph.curate_research_finding(finding_id, status=status, reason=reason)
+            return self.graph.curate_research_finding(
+                finding_id, status=status, reason=reason, curator_actor=curator_actor
+            )
         return {
             "action": "curate_research_finding",
             "finding_id": finding_id,
@@ -81,23 +109,40 @@ class GraphCurator:
     def research_finding_entity_options(self, finding_id: str, *, limit: int = 6) -> list[dict[str, Any]]:
         return self.graph.research_finding_entity_options(finding_id, limit=limit)
 
+    def research_finding_claim_options(self, finding_id: str) -> list[dict[str, Any]]:
+        return self.graph.research_finding_claim_options(finding_id)
+
     def curate_research_finding_entity(
         self, finding_id: str, *, entity_text: str, action: str, target_entity_id: str = "",
         new_name: str = "", entity_type: str = "", reason: str = "", apply: bool = False,
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         if apply:
             return self.graph.curate_research_finding_entity(
                 finding_id, entity_text=entity_text, action=action, target_entity_id=target_entity_id,
                 new_name=new_name, entity_type=entity_type, reason=reason,
+                curator_actor=curator_actor,
             )
         return self.graph.curate_research_finding_entity_preview(
             finding_id, entity_text=entity_text, action=action, target_entity_id=target_entity_id,
             new_name=new_name, entity_type=entity_type, reason=reason,
+            curator_actor=curator_actor,
+        )
+
+    def accept_research_finding_entity_defaults(
+        self,
+        finding_id: str,
+        *,
+        curator_actor: str = "manual_admin",
+    ) -> dict[str, Any]:
+        return self.graph.accept_research_finding_entity_defaults(
+            finding_id, curator_actor=curator_actor
         )
 
     def bulk_curate_research_finding_entities(
         self, finding_ids: list[str], *, entity_text: str, action: str,
         target_entity_id: str = "", reason: str = "", apply: bool = False,
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         clean_ids = list(dict.fromkeys(str(x or "").strip() for x in finding_ids if str(x or "").strip()))
         if not clean_ids:
@@ -114,6 +159,7 @@ class GraphCurator:
                 self.graph.curate_research_finding_entity(
                     finding_id, entity_text=entity_text, action=graph_action,
                     target_entity_id=target_entity_id, reason=reason,
+                    curator_actor=curator_actor,
                 )
                 updated += 1
             except Exception as exc:
@@ -128,15 +174,34 @@ class GraphCurator:
     def curate_research_finding_claim(
         self, finding_id: str, *, subject_entity_id: str, predicate_id: str, object_entity_id: str,
         predicate_label: str = "", claim_text: str = "", apply: bool = False,
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         if apply:
             return self.graph.create_research_finding_claim(
                 finding_id, subject_entity_id=subject_entity_id, predicate_id=predicate_id,
                 object_entity_id=object_entity_id, predicate_label=predicate_label, claim_text=claim_text,
+                curator_actor=curator_actor,
             )
         return self.graph.research_finding_claim_preview(
             finding_id, subject_entity_id=subject_entity_id, predicate_id=predicate_id,
             object_entity_id=object_entity_id, predicate_label=predicate_label, claim_text=claim_text,
+        )
+
+    def review_research_finding_claim(
+        self,
+        finding_id: str,
+        *,
+        relation_id: str,
+        action: str,
+        reason: str = "",
+        curator_actor: str = "manual_admin",
+    ) -> dict[str, Any]:
+        return self.graph.review_research_finding_claim(
+            finding_id,
+            relation_id=relation_id,
+            action=action,
+            reason=reason,
+            curator_actor=curator_actor,
         )
 
     def list_candidates(self) -> list[dict[str, Any]]:

@@ -6,24 +6,40 @@ name: nextcloud-rag-relations-v1
 predicates:
   BOARD_MEMBER_OF:
     description: Person is a member of the executive/management board of an organization.
+    label_de: "Vorstandsmitglied von"
+    label_en: "board member of"
     subject_types: [Person]
     object_types: [Organization]
     relation_cues_any: ["vorstand", "vorstandsmitglied", "mitglied des vorstands"]
 
+  SUPERVISORY_BOARD_MEMBER_OF:
+    description: Person is a member of the supervisory board of an organization.
+    label_de: "Aufsichtsratsmitglied von"
+    label_en: "supervisory board member of"
+    subject_types: [Person]
+    object_types: [Organization]
+    relation_cues_any: ["mitglied des aufsichtsrats", "mitglied im aufsichtsrat", "aufsichtsratsmitglied", "aufsichtsrat:"]
+
   SUPERVISORY_BOARD_CHAIR_OF:
     description: Person is chair of the supervisory board of an organization.
+    label_de: "Aufsichtsratsvorsitz von"
+    label_en: "chair of the supervisory board of"
     subject_types: [Person]
     object_types: [Organization]
     relation_cues_any: ["vorsitzender des aufsichtsrats", "vorsitzende des aufsichtsrats", "aufsichtsratsvorsitzender", "aufsichtsratsvorsitzende"]
 
   DIRECTOR_OF:
     description: Person is managing director / Geschaeftsfuehrer of an organization.
+    label_de: "Geschäftsführer/in von"
+    label_en: "managing director of"
     subject_types: [Person]
     object_types: [Organization]
     relation_cues_any: ["geschäftsführer", "geschaeftsfuehrer", "geschäftsführerin", "geschaeftsfuehrerin", "managing director"]
 
   WORKS_AT:
     description: Person works for or is employed by an organization.
+    label_de: "arbeitet bei"
+    label_en: "works at"
     subject_types: [Person]
     object_types: [Organization]
     sources: [seed, document]
@@ -32,6 +48,8 @@ predicates:
 
   WORKS_IN:
     description: Person is assigned to an organizational unit within an organization.
+    label_de: "arbeitet in"
+    label_en: "works in"
     subject_types: [Person]
     object_types: [Organization]
     sources: [seed]
@@ -40,30 +58,40 @@ predicates:
 
   SHAREHOLDER_OF:
     description: Person or organization is a shareholder/member holding an interest in an organization.
+    label_de: "Gesellschafter/in von"
+    label_en: "shareholder of"
     subject_types: [Person, Organization]
     object_types: [Organization]
     relation_cues_any: ["gesellschafter", "gesellschafterin", "anteil", "beteiligung", "geschäftsanteil", "geschaeftsanteil"]
 
   OWNS:
     description: Person or organization owns the other organization.
+    label_de: "ist Eigentümer/in von"
+    label_en: "owns"
     subject_types: [Person, Organization]
     object_types: [Organization]
     relation_cues_any: ["eigentümer", "eigentümerin", "eigentuemer", "eigentuemerin", "im eigentum", "gehört", "gehoert"]
 
   REPRESENTS:
     description: Person or organization legally or professionally represents another person or organization.
+    label_de: "vertritt"
+    label_en: "represents"
     subject_types: [Person, Organization]
     object_types: [Person, Organization]
     relation_cues_any: ["vertreten durch", "vertritt", "bevollmächtigt", "bevollmaechtigt", "prozessbevollmächtigt", "prozessbevollmaechtigt"]
 
   CONTRACTS_WITH:
     description: Two persons/organizations are explicitly identified as contractual parties to the same contract.
+    label_de: "ist Vertragspartner von"
+    label_en: "contracts with"
     subject_types: [Person, Organization]
     object_types: [Person, Organization]
     relation_cues_any: ["vertragspartner", "vertrag zwischen", "vereinbarung zwischen", "kaufvertrag zwischen", "mietvertrag zwischen"]
 
   PART_OF:
     description: An organization or organizational unit is explicitly part of another organization.
+    label_de: "ist Teil von"
+    label_en: "part of"
     subject_types: [Organization]
     object_types: [Organization]
     sources: [seed, document]
@@ -72,6 +100,8 @@ predicates:
 
   REGISTERED_AT:
     description: An organization is registered in a register maintained by a named court/register authority.
+    label_de: "ist registriert bei"
+    label_en: "registered at"
     subject_types: [Organization]
     object_types: [Organization]
     object_kinds: [Court]

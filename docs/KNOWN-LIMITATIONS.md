@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc3`
+**Reference:** `0.8.5-rc4`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
@@ -9,9 +9,12 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 - Only `standard + native` and `super-light + dockerized` are supported/tested
   deployment mappings in 0.8.5.
-- The Super-Light `--ca-certificate` path/PEM check is not the first global
-  installer preflight. A bad path aborts safely but can do so after earlier setup
-  work. Correct the input and rerun the installer.
+- Installer/rerun preflight now validates the install source, non-empty install
+  prefix, CA files and Docker availability before destructive refresh steps, and
+  refuses a running existing AKI stack. It still cannot prove that external
+  Nextcloud/Elasticsearch/model endpoints will remain reachable after install;
+  use the smoke/acceptance checks and archive the generated
+  `install/last-install-command.sh` for reproducible reruns.
 - Super-Light intentionally relies on external Nextcloud, Elasticsearch and LLM
   services. Their availability and backup are outside the local Compose stack.
 - Bundled nginx and OpenWebUI are opt-in in Super-Light. AKI Recherche is the
@@ -37,14 +40,31 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Super-Light has no local reranker. Deduplication is independent and remains
   active, but Elasticsearch ranking plus verifier behavior can still be less
   precise than a well-tuned reranked standard deployment on difficult corpora.
+- Exact duplicate grouping in the retrieval path currently relies on path/format
+  variants and normalized retrieved text. Nextcloud FullTextSearch's per-document
+  `hash` (MD5 of extracted FullTextSearch content, not a raw-file byte hash) is
+  already available to synchronization code but is not yet the primary cross-file
+  duplicate key during retrieval. Using it ACL-safely across distinct Nextcloud
+  file IDs is planned for RC5; see `ROADMAP.md`.
 - Query rewriting is intentionally conservative. The model emits a small SearchSpec with a Nextcloud-compatible `elastic_query` and a natural
   `semantic_query`; it never emits raw Elasticsearch JSON DSL. Grammatical normalization is allowed,
   but factual synonyms must not be invented and explicit names/identifiers/years must
   not be silently discarded. Additional retrieval rounds are optional and remain
   bounded by administrator configuration.
-- ACL-denied documents are removed without backfilling lower-ranked candidates.
-  This can yield less evidence rather than a weaker synthetic answer; that is a
-  deliberate security/quality rule.
+- ACL-denied documents are removed without adaptive backfill of lower-ranked candidates.
+  This can yield less evidence even when an authorized document existed below the
+  bounded final window. The current order is retrieval/fusion, optional reranking,
+  then live ACL. A fixed bounded pre-rerank ACL pool is a possible future
+  optimization, but "keep fetching until N authorized results exist" is not part of
+  the design because it creates variable work and another inference/timing surface.
+  RC5 is expected to evaluate a separately configurable, bounded ACL metadata
+  **prefilter** for Elasticsearch/Qdrant (including owner/users/groups/circles)
+  while retaining the live WebDAV check as the final authorization boundary.
+- Shared Neo4j names/aliases can influence retrieval across users by design. They are
+  retrieval knowledge, not answer evidence. The current search API still exposes
+  fairly rich entity-resolution diagnostics (matched forms/candidates/search forms);
+  this diagnostic surface should be minimized or gated before it is treated as a
+  normal end-user contract.
 
 ## Web Research and archive
 
@@ -55,11 +75,14 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   archive. Dynamic/video-heavy content can still render incompletely.
 - Raw HTML, when enabled, contains the fetched main response rather than a package
   of every referenced resource.
-- Background PDF rendering uses an in-process bounded task queue in RC3. If the API container is restarted while a render is pending, that render job is not durable and its sidecar may remain `pending`; text evidence and the answer are unaffected.
+- Background PDF rendering uses an in-process bounded task queue. If the API container is restarted while a render is pending, that render job is not durable and its sidecar may remain `pending`; text evidence and the answer are unaffected.
+- Web pages, incoming mail and saved chats can contain adversarial or instruction-like
+  text. Structured verifier/Graph schemas and evidence separation reduce risk, but
+  0.8.5 does not claim a complete prompt-injection defense. See `THREAT-MODEL.md`.
 
 ## AKI Recherche
 
-- AKI 0.2.3 targets Nextcloud 23+. Saved chats live in the user-owned `AKI-Chats/` Nextcloud folder. They are a separate `/chatarchive` source scope, not automatically trusted as primary document evidence.
+- AKI 0.2.3 targets Nextcloud 23+. Saved chats live in the user-owned `AKI-Chats/` Nextcloud folder. They are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
 - The app is deliberately thin. Advanced provider diagnostics and administration
   remain in RAG Admin rather than being duplicated in AKI.
 
@@ -69,6 +92,20 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   document graph extraction remains comparatively expensive and opt-in.
 - `AKI Recherche` stores only positive, direct, verifier-supported findings; it
   does not turn query hypotheses into global facts automatically. Research Findings are admin-visible and may be manually curated into document-grounded entity mentions and claims. They are still not automatically promoted into global facts or retrieval/query expansion.
+- Equivalent Findings remain shared/deduplicated curation objects, while per-user
+  observation provenance is represented through
+  `CanonicalUser -> ResearchRun -> ResearchFinding`. Findings, Observations and
+  Relations in RAG Admin require a selected canonical-user context and are filtered
+  fail-closed through that user's current Nextcloud live ACL before evidence is
+  rendered. **RAG Admin itself is nevertheless a trusted operator surface, not a
+  personal Nextcloud-user surface:** an authenticated RAG administrator may select
+  another configured user's context and thereby inspect evidence that *that selected
+  user* may currently access. Do not expose RAG Admin to ordinary users or treat the
+  administrator's own Nextcloud ACL as an isolation boundary.
+- Optional self-service curation is narrower: a user sees only ResearchRuns produced
+  for that canonical user and only Findings whose supporting document still passes
+  that user's temporary Login-Flow credential. Shared Entity/Finding/Claim decisions
+  can still affect later users because curation knowledge is intentionally global.
 - Graph extraction worker startup and automatic enqueue of cited documents are off
   by default in the reference configuration.
 
@@ -82,6 +119,16 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## Operations
 
+- There is no unified cross-store `purge-document` / data-subject workflow that
+  proves deletion across Elasticsearch, Qdrant, Neo4j, optional RetrievalRecords
+  and retained archive derivatives. Live ACL prevents unauthorized answer evidence;
+  it is not a physical-deletion mechanism. See `DATA-LIFECYCLE.md`.
+- Backup/restore is not orchestrated across Nextcloud, users.sqlite/master key,
+  Neo4j and optional Qdrant. Manual Graph/Findings curation makes Neo4j non-disposable
+  once operators rely on that work. Master-key rotation also lacks a dedicated
+  documented zero-downtime command.
+- `/health` reports whether live ACL is enabled, but the human-facing status/admin
+  surfaces do not yet display a prominent warning banner when ACL is disabled.
 - Global service secrets such as provider/backend API keys still live in protected
   environment files rather than a dedicated external secret manager.
 - The measured 4 GiB Super-Light success point is not a hard upper bound. Chromium
@@ -94,7 +141,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 ### Verifier/Answer budgets
 
 - The verifier and answer model may intentionally be different backends, so their
-  remote limits remain separate in rc3. The current configuration still has
+  remote limits remain separate in the current release candidate. The current configuration still has
   overlapping candidate/document caps (`bounded_verification_candidate_limit`,
   `REMOTE_VERIFIER_MAX_CANDIDATES`, `REMOTE_ANSWER_MAX_DOCUMENTS`, character
   budgets). These should be consolidated behind a small set of base values with
@@ -106,7 +153,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 ## Identity administration
 
 - Nextcloud Login Flow must be completed by the actual target user. Nextcloud impersonation/"Nachahmen" does not safely pre-create another user's app password and can bind an external client identity to the impersonator's Nextcloud account. Revoke erroneous Nextcloud app passwords and remove the corresponding binding before reuse.
-- RC3 does not yet expose a dedicated per-binding delete button in RAG Admin.
+- The current Admin UI does not yet expose a dedicated per-binding delete button in RAG Admin.
 
 ## Mail backfill cutoff changes
 

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}AKI Findings{% endblock %}</title>
+<link rel="stylesheet" href="{{ request.app.url_path_for('css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div><strong>AKI · Findings-Kuration</strong> <span class="muted">v{{ version }}</span></div>
+  {% if session %}
+  <form method="post" action="{{ request.app.url_path_for('curation_logout') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <span class="muted">{{ session.nextcloud_login }}</span>
+    <button class="secondary small">Abmelden</button>
+  </form>
+  {% endif %}
+</header>
+<main class="container">
+{% if message %}<div class="alert">{{ message }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

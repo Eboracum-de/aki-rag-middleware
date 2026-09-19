@@ -6,6 +6,7 @@ from rag.openai_provider import (
     _auxiliary_task_kind,
     _previous_source_map,
     _probable_followup,
+    _short_acronym_continues_prior_user,
     _request_allows_web,
     _source_suffix,
 )
@@ -58,6 +59,30 @@ def test_standalone_name_is_not_followup():
 
 def test_pronoun_question_is_followup():
     assert _probable_followup("Was ist mit ihm?") is True
+
+
+def test_web_acronym_can_continue_immediately_prior_user_entity():
+    messages = [
+        {"role": "user", "content": "Suche im Internet nach FLG Automation in Karben"},
+        {"role": "assistant", "content": "Ergebnis zur FLG Automation AG."},
+        {"role": "user", "content": "/web FLG"},
+    ]
+    assert _short_acronym_continues_prior_user(messages, "FLG") is True
+
+
+def test_web_acronym_does_not_inherit_unrelated_or_exact_prior_query():
+    unrelated = [
+        {"role": "user", "content": "Suche aktuelle Informationen zu Acme Automation"},
+        {"role": "assistant", "content": "Ergebnis."},
+        {"role": "user", "content": "/web FLG"},
+    ]
+    exact = [
+        {"role": "user", "content": "FLG"},
+        {"role": "assistant", "content": "Mehrdeutig."},
+        {"role": "user", "content": "/web FLG"},
+    ]
+    assert _short_acronym_continues_prior_user(unrelated, "FLG") is False
+    assert _short_acronym_continues_prior_user(exact, "FLG") is False
 
 
 def test_normal_source_suffix_contains_snippet():

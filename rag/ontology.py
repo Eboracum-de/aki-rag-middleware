@@ -53,6 +53,8 @@ def load_relation_ontology(path: str | os.PathLike[str] | None = None) -> dict[s
             raise RuntimeError(f"Ontology predicate {name} needs subject_types/object_types")
         predicates[name] = {
             "description": str(spec.get("description") or "").strip(),
+            "label_de": str(spec.get("label_de") or "").strip(),
+            "label_en": str(spec.get("label_en") or "").strip(),
             "subject_types": subject_types,
             "object_types": object_types,
             # Predicates are document-extractable by default. Seed-only relations
@@ -110,6 +112,58 @@ def document_predicates(ontology: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for name, spec in (ontology.get("predicates") or {}).items()
         if "document" in set(spec.get("sources") or ["document"])
     }
+
+
+def entity_type_from_labels(labels: Any) -> str:
+    """Return the graph ontology type represented by Neo4j labels."""
+    values = {str(x) for x in (labels or [])}
+    if "Person" in values:
+        return "Person"
+    if "Organization" in values or "OrganizationalUnit" in values:
+        return "Organization"
+    return "Entity"
+
+
+def predicate_label(name: str, spec: dict[str, Any], *, language: str = "de") -> str:
+    """Return a curator-facing label without changing the canonical predicate ID."""
+    language = str(language or "de").strip().casefold()
+    if language == "de":
+        label = str(spec.get("label_de") or spec.get("label_en") or "").strip()
+    else:
+        label = str(spec.get("label_en") or spec.get("label_de") or "").strip()
+    return label or str(name or "").strip().upper()
+
+
+def compatible_document_predicates(
+    ontology: dict[str, Any],
+    *,
+    subject_type: str,
+    subject_kind: str = "",
+    object_type: str,
+    object_kind: str = "",
+) -> dict[str, dict[str, Any]]:
+    """Return document predicates whose ontology domain/range fits one Entity pair.
+
+    This is deliberately narrower than validate_relation_semantics: a human
+    curator may confirm a relation even when the small automatic cue vocabulary
+    does not contain the exact wording used in the source. The curator still
+    cannot bypass the ontology, source admission, type signature, or kind
+    constraints.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for name, spec in document_predicates(ontology).items():
+        if subject_type not in set(spec.get("subject_types") or []):
+            continue
+        if object_type not in set(spec.get("object_types") or []):
+            continue
+        subject_kinds = set(spec.get("subject_kinds") or [])
+        object_kinds = set(spec.get("object_kinds") or [])
+        if subject_kinds and subject_kind not in subject_kinds:
+            continue
+        if object_kinds and object_kind not in object_kinds:
+            continue
+        out[name] = spec
+    return out
 
 
 def relation_schema(ontology: dict[str, Any]) -> dict[str, Any]:

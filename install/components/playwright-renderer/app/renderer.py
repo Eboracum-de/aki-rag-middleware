@@ -23,6 +23,7 @@ log = logging.getLogger("aki-playwright-renderer")
 
 PLAYWRIGHT: Playwright | None = None
 BROWSER: Browser | None = None
+BROWSER_LAUNCH_ERROR = ""
 
 NAV_TIMEOUT_MS = int(os.getenv("RENDER_NAV_TIMEOUT_MS", "30000"))
 POSTLOAD_WAIT_MS = int(os.getenv("RENDER_POSTLOAD_WAIT_MS", "750"))
@@ -370,9 +371,18 @@ async def _cleanup_page(page, req: RenderRequest) -> dict[str, object]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global PLAYWRIGHT, BROWSER
-    PLAYWRIGHT = await async_playwright().start()
-    BROWSER = await PLAYWRIGHT.chromium.launch(headless=True)
+    global PLAYWRIGHT, BROWSER, BROWSER_LAUNCH_ERROR
+    BROWSER_LAUNCH_ERROR = ""
+    try:
+        PLAYWRIGHT = await async_playwright().start()
+        BROWSER = await PLAYWRIGHT.chromium.launch(headless=True)
+    except Exception as exc:
+        # Rendering is archival enrichment, not a prerequisite for Web search or
+        # the synchronous text/metadata archive. Keep the service alive in a
+        # diagnosable degraded state instead of entering a container restart loop.
+        BROWSER = None
+        BROWSER_LAUNCH_ERROR = f"{type(exc).__name__}: {exc}"[:1200]
+        log.exception("Chromium launch failed; renderer stays up in degraded mode")
     try:
         yield
     finally:
@@ -384,12 +394,17 @@ async def lifespan(_: FastAPI):
         PLAYWRIGHT = None
 
 
-app = FastAPI(title="RAG Playwright Renderer", version="0.2.1", lifespan=lifespan)
+app = FastAPI(title="RAG Playwright Renderer", version="0.2.2", lifespan=lifespan)
 
 
 @app.get("/live")
 async def live() -> dict[str, object]:
-    return {"ok": BROWSER is not None, "service": "rag-playwright-renderer", "version": "0.2.1"}
+    return {
+        "ok": BROWSER is not None,
+        "service": "rag-playwright-renderer",
+        "version": "0.2.2",
+        "launch_error": BROWSER_LAUNCH_ERROR,
+    }
 
 
 @app.post("/render", response_class=Response)

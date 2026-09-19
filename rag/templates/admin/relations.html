@@ -2,12 +2,24 @@
 {% block title %}Relationen · RAG Admin{% endblock %}
 {% block content %}
 <h1>Dokumentengeerdete Relationen</h1>
-<p class="muted">Nur quellengebundene RelationObservations/Claims. Keine dieser Zeilen ist eine ungeprüfte globale Faktenkante.</p>
-<form method="get" class="searchbar">
+<p class="muted">Nur quellengebundene RelationObservations/Claims aus Dokumenten, auf die der ausgewählte Benutzer aktuell Zugriff hat. Keine dieser Zeilen ist eine ungeprüfte globale Faktenkante.</p>
+<form method="get" class="searchbar multi">
+  <label>Benutzer
+    <select name="canonical_user_id" required>
+      <option value="">Benutzer auswählen …</option>
+      {% for user in users %}
+      <option value="{{ user.canonical_user_id }}" {{ 'selected' if selected_user and selected_user.canonical_user_id == user.canonical_user_id else '' }}>{{ user.nextcloud_login }} · {{ user.nextcloud_server }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <input type="text" name="q" value="{{ q }}" placeholder="Entity, Predicate, Dokument oder Evidence">
   <button type="submit">Suchen</button>
 </form>
-{% if relations %}
+{% if not selected_user %}
+<section><p>Bitte zuerst einen Nextcloud-Benutzer auswählen. Die Anzeige wird anhand der aktuell zugänglichen Dokumente per Live-ACL begrenzt.</p></section>
+{% elif acl_error %}
+<div class="alert warning">{{ acl_error }}</div>
+{% elif relations %}
 <table>
   <thead><tr><th>Relation</th><th>Stance / Confidence</th><th>Evidence</th><th>Dokument</th></tr></thead>
   <tbody>
@@ -19,7 +31,16 @@
         <a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=r.object_entity_id) }}">{{ r.object_display_name }}</a>
       </td>
       <td>{{ r.stance or 'asserted' }}<br>{% if r.confidence is not none %}{{ '%.2f'|format(r.confidence) }}{% endif %}{% if r.evidence_date %}<br><span class="muted">Quelle: {{ r.evidence_date }}{% if r.evidence_date_precision and r.evidence_date_precision != 'day' %} ({{ r.evidence_date_precision }}){% endif %}</span>{% endif %}</td>
-      <td class="mono-wrap">{% if r.relation_text %}<strong>{{ r.relation_text }}</strong><br>{% endif %}{{ r.evidence_text }}</td>
+      <td class="mono-wrap">
+        {% if r.relation_text %}<strong>{{ r.relation_text }}</strong>{% endif %}
+        {% if r.evidence_display %}
+          {% if r.evidence_is_json %}
+          <details class="topgap"><summary>Verifier-Rohdaten anzeigen</summary><pre>{{ r.evidence_display }}</pre></details>
+          {% else %}
+          <div class="topgap">{{ r.evidence_display }}</div>
+          {% endif %}
+        {% endif %}
+      </td>
       <td>
         {{ r.document_title or r.document_path or r.document_id }}
         {% if r.nextcloud_url %}<br><a href="{{ r.nextcloud_url }}" target="_blank" rel="noopener">Nextcloud ↗</a>{% endif %}
@@ -29,6 +50,6 @@
   </tbody>
 </table>
 {% else %}
-<p>Keine RelationObservations gefunden.</p>
+<p>Keine RelationObservations für diesen Benutzer und Filter gefunden.</p>
 {% endif %}
 {% endblock %}

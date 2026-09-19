@@ -1,7 +1,7 @@
-# Super-light installation profile (0.8.5-rc3)
+# Super-light installation profile (0.8.5-rc4)
 
 
-0.8.5-rc3 uses X.509 strict mode **off by default** while normal TLS certificate/hostname verification remains enabled. Use `--x509-strict` only for PKIs that require and satisfy the additional strict checks.
+0.8.5-rc4 uses X.509 strict mode **off by default** while normal TLS certificate/hostname verification remains enabled. Use `--x509-strict` only for PKIs that require and satisfy the additional strict checks.
 The profile uses legacy Compose file format **2.4** so it also works with the `docker-compose 1.25.1` commonly found on Leap 15.3. OpenWebUI and the bundled nginx proxy are disabled by default; add `--with-openwebui` and/or `--with-proxy` explicitly.
 
 This deployment is intended for small/older Linux hosts where the middleware

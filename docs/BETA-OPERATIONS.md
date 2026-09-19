@@ -1,6 +1,6 @@
 # Beta operations runbook
 
-**Reference:** `0.8.5-rc3`  
+**Reference:** `0.8.5-rc4`  
 **Target:** controlled beta deployment behind an administrator-managed network boundary
 
 This document is the short operational path for the current beta candidate. For
@@ -60,9 +60,23 @@ sudo ./install/install.sh \
 `--no-x509-strict` does **not** disable normal CA-chain, hostname/SAN, signature
 or validity checks. Do not replace it with `verify_tls:false` in normal operation.
 
-Current small limitation: CA file validation is not the first global installer
-preflight. A typo can therefore abort after some setup steps. Correct the path and
-rerun; the installer is designed to be rerunnable.
+### Reruns and recorded installation command
+
+The installer also refuses a non-empty `--prefix` that is not recognized as an AKI RAG installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh installs should use a dedicated empty path; current installations carry `.aki-rag-installation` plus installer state for future reruns.
+
+
+After installation, keep `/opt/nextcloud-rag/install/last-install-command.sh` with the
+host's operational records. The installer writes the exact shell-escaped wrapper command
+used on the last run so later maintenance does not depend on reconstructing profile,
+URLs, CA files or optional component switches from memory.
+
+Before a rerun, review the stored command and run the equivalent command with `--plan`
+first. The Super-Light installer performs an early preflight for required source paths,
+the installation prefix, CA files and Docker availability. If an existing stack is
+detected it reports running services; stopped application containers are warned about,
+not rejected, because a rerun may legitimately be used to repair/rebuild them. Missing
+input files or an unreachable installed Docker daemon fail before the source tree is
+replaced.
 
 ## 3. First post-install configuration
 
@@ -134,7 +148,7 @@ Super-Light uses Elasticsearch as the required document arm and Neo4j for
 entity/alias expansion and lightweight research findings. Qdrant and the local
 reranker are disabled.
 
-Every normal request first produces one small small SearchSpec. In
+Every normal request first produces one small SearchSpec. In
 Super-Light its lexical fields are compiled to Elasticsearch; `semantic_query`
 is retained for portability but is not executed because Qdrant is disabled.
 Neo4j may add known seed/alias forms before the Elasticsearch request. The actual
@@ -149,8 +163,11 @@ The normal verifier window is 10 authorized candidates in Super-Light (6 in the
 standard reference profile); bounded/exhaustive requests use separate configured
 limits.
 
-Live Nextcloud ACL remains mandatory. Unauthorized results are removed and are not
-backfilled with lower-ranked documents merely to fill the context.
+Live Nextcloud ACL remains mandatory. Unauthorized results are removed and do not
+trigger adaptive retrieval/backfill merely to fill the context. In the current
+normal path ACL follows the bounded ranking decision, so a narrow-rights user may
+receive fewer results; this is an explicit acceptance-test case rather than a hidden
+failure.
 
 If Elasticsearch is unavailable, the API returns service-unavailable semantics and
 the UI should show `Dokumentensuche derzeit nicht verfügbar` rather than exposing a
@@ -159,7 +176,7 @@ generic 500/502 as the user-facing result.
 ## 7. Web Research and archive
 
 The shared Playwright renderer uses a 1440×900 desktop viewport and A4 Landscape
-PDF. In RC3 rendering is archival enrichment scheduled after the synchronous evidence/archive write, so slow Chromium rendering does not block the user answer. Cookie/harmless-overlay handling is bounded best effort; ordinary browser
+PDF. Rendering is archival enrichment scheduled after the synchronous evidence/archive write, so slow Chromium rendering does not block the user answer. Cookie/harmless-overlay handling is bounded best effort; ordinary browser
 storage can persist per requested host so a consent choice may survive future
 captures. The archive deliberately does not bypass login walls, paywalls,
 CAPTCHAs or access restrictions.
@@ -188,9 +205,12 @@ different ACLs.
 7. A Web Research run archives a source as desktop/Landscape PDF plus hidden metadata.
 8. Stop Elasticsearch temporarily and verify the friendly unavailable response.
 9. Restore Elasticsearch and verify retrieval recovers without state repair.
-10. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
+10. Verify that `/health` reports `live_acl.enabled=true` on a shared beta instance.
+11. If shared alias/Graph-Lite is enabled, verify that User 2 may benefit from a curated alias without receiving the protected source document as evidence.
+12. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
+13. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
 
-The Leap 15.3 beta host exercised the underlying RC2 field paths carried into RC3 for document retrieval, CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. RC3-specific Findings/Admin publication hardening is regression-tested; rerun this acceptance checklist before production rollout.
+The Leap 15.3 beta host exercised document retrieval, CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Findings/Admin hardening is regression-tested; rerun this acceptance checklist before production rollout.
 
 ## 9. Resource reference
 
@@ -210,11 +230,13 @@ will be used. Nextcloud, Elasticsearch and the LLM are external in this figure.
 
 ## 10. Beta freeze
 
-0.8.5-rc3 is the consolidated deployment/operations baseline for the next beta iteration.
-Expected follow-up work is primarily query-rewrite/retrieval-round/retrieval quality
-and small UI/operator improvements. A change that alters the trust model, live ACL
-invariant, credential ownership, deployment axes or evidence pipeline should be
-treated as an architectural change and not slipped into a retrieval-quality patch.
+0.8.5-rc4 is the consolidated deployment/operations baseline for the next beta iteration.
+Expected follow-up work before broader feature expansion is security/curation
+hardening, documentation consistency and adversarial code-vs-docs tests (ACL,
+aliases, Findings, archive boundaries and untrusted content). A change that alters
+the trust model, live ACL invariant, credential ownership, deployment axes or
+evidence pipeline should be treated as an architectural change and not slipped into
+a retrieval-quality patch.
 
 
 ## Source-origin mirror and reconcile

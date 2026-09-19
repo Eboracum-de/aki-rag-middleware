@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Meine Recherchen · Findings-Kuration{% endblock %}
+{% block content %}
+<div class="heading-row">
+  <div>
+    <h1>Meine Recherchen</h1>
+    <p class="muted">Nur Findings aus eigenen Recherchen und aktuell per Nextcloud-ACL sichtbaren Dokumenten werden angezeigt. Kurationsentscheidungen am Finding gelten gemeinsam; das Ausblenden einer Recherche gilt nur für diese Arbeitsliste.</p>
+  </div>
+</div>
+<form method="get" class="searchbar multi">
+  <input type="search" name="q" value="{{ q }}" placeholder="Recherche suchen …">
+  <select name="state">
+    <option value="open" {{ 'selected' if state == 'open' else '' }}>Offen</option>
+    <option value="completed" {{ 'selected' if state == 'completed' else '' }}>Abgeschlossen</option>
+    <option value="dismissed" {{ 'selected' if state == 'dismissed' else '' }}>Ausgeblendet</option>
+    <option value="all" {{ 'selected' if state == 'all' else '' }}>Alle</option>
+  </select>
+  <button>Filtern</button>
+</form>
+{% if not runs %}<p class="muted">Keine aktuell sichtbaren Recherchen für diesen Filter.</p>{% endif %}
+{% for run in runs %}
+<section>
+<div class="heading-row">
+  <div>
+    <h2>{{ run.user_query or run.retrieval_query or run.run_id }}</h2>
+    <p class="muted">{{ run.visible_finding_count }} Finding(s) · {{ run.visible_open_count }} offen · Status {{ run.effective_status }}</p>
+  </div>
+  <a class="button" href="{{ request.app.url_path_for('curation_run', run_id=run.run_id) }}">Öffnen</a>
+</div>
+</section>
+{% endfor %}
+{% endblock %}

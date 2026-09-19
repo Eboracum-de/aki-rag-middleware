@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Anmeldung · Findings-Kuration{% endblock %}
+{% block content %}
+<h1>Findings-Kuration</h1>
+{% if not enabled %}
+<div class="alert warning">Self-Service-Kuration ist durch den RAG-Administrator deaktiviert.</div>
+{% elif flow %}
+<section>
+<h2>Nextcloud-Identität bestätigen</h2>
+<p>Die Anmeldung erzeugt ein temporäres Nextcloud-App-Passwort ausschließlich für diese Kurationssitzung. Es wird nicht als normales AKI-Credential gespeichert.</p>
+<p><a class="button" href="{{ flow.login_url }}" target="_blank" rel="noopener">Bei Nextcloud anmelden ↗</a></p>
+<form method="post" action="{{ request.app.url_path_for('curation_login_poll', flow_id=flow.flow_id) }}">
+  <button>Nextcloud-Anmeldung abgeschlossen</button>
+</form>
+</section>
+{% else %}
+<section>
+<h2>Mit Nextcloud anmelden</h2>
+<p>Die Kurationssitzung ist auf maximal {{ session_hours }} Stunden begrenzt. Danach ist eine erneute Nextcloud-Authentisierung erforderlich.</p>
+<form method="post" action="{{ request.app.url_path_for('curation_login') }}">
+  <button>Nextcloud Login Flow starten</button>
+</form>
+</section>
+{% endif %}
+{% endblock %}

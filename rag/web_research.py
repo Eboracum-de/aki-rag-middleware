@@ -1423,9 +1423,15 @@ class NextcloudWebArchive:
             return {"run_path": "", "source_records": [], "errors": [], "fetch_log_path": ""}
         root = self._root_for_user(rag_user_id)
         if not root:
+            reason = "archive_disabled_or_target_unconfigured"
+            log.info(
+                "web archive skipped: reason=%s rag_user_id=%r",
+                reason, str(rag_user_id or "")[:160],
+            )
             return {
                 "run_path": "", "source_records": [], "errors": [],
                 "fetch_log_path": "", "skipped": True,
+                "skipped_reason": reason,
             }
         if not self.dav_base:
             raise RuntimeError("nextcloud.base_url missing for web archive")
@@ -1663,6 +1669,7 @@ class WebResearchArm:
         archive_records: list[dict[str, str]] = []
         archive_errors: list[dict[str, str]] = []
         archive_render_pending = 0
+        archive_skipped_reason = ""
         archive_started = time.perf_counter()
         if fetched:
             try:
@@ -1684,6 +1691,7 @@ class WebResearchArm:
                 archive_records = list(archived.get("source_records") or [])
                 archive_errors.extend(list(archived.get("errors") or []))
                 archive_render_pending = int(archived.get("render_pending") or 0)
+                archive_skipped_reason = str(archived.get("skipped_reason") or "")
             except Exception as exc:
                 archive_errors.append({"url": "archive-run", "error": f"{type(exc).__name__}: {exc}"})
                 log.warning("web archive run failed: %s", exc)
@@ -1736,6 +1744,7 @@ class WebResearchArm:
             "archive_run_path": archive_run_path,
             "archive_fetch_log_path": archive_fetch_log_path,
             "archive_render_pending": archive_render_pending,
+            "archive_skipped_reason": archive_skipped_reason,
             "fetch_errors": [
                 {"url": source.url, "error": source.fetch_error}
                 for source in fetched if source.fetch_error

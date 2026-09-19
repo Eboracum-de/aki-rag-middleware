@@ -92,3 +92,23 @@ def test_acl_credential_store_mode(tmp_path):
     cred = NextcloudLiveAcl(cfg).credential_for_user("owui-1")
     assert cred.username == "alice"
     assert cred.password == "secret"
+
+
+def test_acl_accepts_explicit_temporary_credential():
+    cfg = {
+        "nextcloud": {"base_url": "https://nc.example"},
+        "acl": {"enabled": True, "verify_tls": False},
+    }
+    response = httpx.Response(
+        207,
+        content=MULTISTATUS_ONE,
+        request=httpx.Request("SEARCH", "https://nc.example/remote.php/dav/"),
+    )
+    with patch("rag.acl.httpx.request", return_value=response) as request_mock:
+        decision = NextcloudLiveAcl(cfg).authorize_with_credential(
+            [{"document_id": "files:1"}, {"document_id": "files:2"}],
+            username="alice",
+            password="temporary",
+        )
+    assert [x["document_id"] for x in decision.results] == ["files:2"]
+    assert request_mock.call_args.kwargs["auth"] == ("alice", "temporary")

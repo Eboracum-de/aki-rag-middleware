@@ -66,7 +66,9 @@ class ChatController extends Controller {
         }
     }
 
-    /** @NoAdminRequired */
+    /**
+     * @NoAdminRequired
+     */
     public function listChats() {
         try {
             return new DataResponse(['chats' => $this->store->listChats()]);
@@ -75,7 +77,9 @@ class ChatController extends Controller {
         }
     }
 
-    /** @NoAdminRequired */
+    /**
+     * @NoAdminRequired
+     */
     public function load($id = '') {
         try {
             return new DataResponse(['chat' => $this->store->load($id)]);
@@ -86,7 +90,9 @@ class ChatController extends Controller {
         }
     }
 
-    /** @NoAdminRequired */
+    /**
+     * @NoAdminRequired
+     */
     public function rename($id = '', $title = '') {
         try {
             $chat = $this->store->rename($id, $title);
@@ -98,7 +104,9 @@ class ChatController extends Controller {
         }
     }
 
-    /** @NoAdminRequired */
+    /**
+     * @NoAdminRequired
+     */
     public function delete($id = '') {
         try {
             $this->store->delete($id);

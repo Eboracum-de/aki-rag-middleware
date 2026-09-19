@@ -1758,6 +1758,27 @@ def _probable_followup(question: str) -> bool:
     )
 
 
+_SHORT_ACRONYM_RE = re.compile(r"^[A-ZÄÖÜ][A-ZÄÖÜ0-9&.+-]{1,5}$")
+
+
+def _short_acronym_continues_prior_user(
+    request_messages: list[dict[str, Any]],
+    question: str,
+) -> bool:
+    """Narrow web-only continuation such as FLG after a prior FLG Automation query."""
+    token = str(question or "").strip()
+    if not _SHORT_ACRONYM_RE.fullmatch(token):
+        return False
+    for item in reversed(_prior_conversation(request_messages)):
+        if item.get("role") != "user":
+            continue
+        previous = str(item.get("content") or "").strip()
+        if previous.casefold() == token.casefold():
+            return False
+        return bool(re.search(rf"(?<!\w){re.escape(token)}(?!\w)", previous, re.IGNORECASE))
+    return False
+
+
 def _auxiliary_task_kind(request: Request, question: str) -> str | None:
     """Detect OpenWebUI helper requests that must bypass document retrieval.
 
@@ -1863,6 +1884,8 @@ async def _ollama_complete(
 async def _rewrite_query_if_needed(
     request_messages: list[dict[str, Any]],
     question: str,
+    *,
+    allow_short_acronym_context: bool = False,
 ) -> str:
     # 0.5.7: context membership is explicit.  Every turn after the first one in
     # the active /new segment may use that segment for rewrite; a heuristic no
@@ -1873,7 +1896,13 @@ async def _rewrite_query_if_needed(
     if QUERY_REWRITE_MODE == "followup" and not _probable_followup(question):
         # A standalone query such as a person's name must remain standalone.
         # Otherwise old chat topics leak into retrieval and, indirectly, web.
-        return question
+        # Web-only gets one narrow exception for an exact short acronym repeated
+        # from the immediately preceding user query in the active segment.
+        if not (
+            allow_short_acronym_context
+            and _short_acronym_continues_prior_user(request_messages, question)
+        ):
+            return question
 
     correction_note = ""
     if _probable_correction(question):
@@ -3475,6 +3504,16 @@ async def _graph_enqueue_evidence(
 
     documents: list[dict[str, Any]] = []
     seen: set[str] = set()
+    allowed_special_origins = {
+        "mailarchive": "mail_archive",
+        "webarchive": "web_archive",
+        "chatarchive": "chat_archive",
+    }
+    selected_special_origins = {
+        origin
+        for scope, origin in allowed_special_origins.items()
+        if source_scopes and scope in source_scopes
+    }
     for result in results:
         raw = result.raw or {}
         document_id = str(raw.get("document_id") or "").strip()
@@ -3545,6 +3584,12 @@ async def _store_positive_research_findings(
     query_id: str,
     query_frame: dict[str, Any],
     results: list[SearchResult],
+    canonical_user_id: str = "",
+    nextcloud_login: str = "",
+    nextcloud_server: str = "",
+    user_query: str = "",
+    retrieval_query: str = "",
+    source_scopes: set[str] | None = None,
 ) -> None:
     """Fail-open persistence of already-paid planner/verifier work.
 
@@ -3557,11 +3602,32 @@ async def _store_positive_research_findings(
 
     documents: list[dict[str, Any]] = []
     seen: set[str] = set()
+    allowed_special_origins = {
+        "mailarchive": "mail_archive",
+        "webarchive": "web_archive",
+        "chatarchive": "chat_archive",
+    }
+    selected_special_origins = {
+        origin
+        for scope, origin in allowed_special_origins.items()
+        if source_scopes and scope in source_scopes
+    }
     for result in results:
         raw = result.raw or {}
         document_id = str(raw.get("document_id") or "").strip()
         status = str(raw.get("verification_status") or "").strip().lower()
         binding = str(raw.get("verification_relation_binding") or "").strip().lower()
+        source_origin = str(raw.get("source_origin") or "").strip()
+        if (
+            source_scopes
+            and source_origin in set(allowed_special_origins.values())
+            and source_origin not in selected_special_origins
+        ):
+            log.warning(
+                "Research Finding skipped outside explicit source scope: document_id=%s origin=%s scopes=%s",
+                document_id, source_origin, sorted(source_scopes),
+            )
+            continue
         if not document_id or document_id in seen or status != "match" or binding != "direct":
             continue
         seen.add(document_id)
@@ -3571,6 +3637,7 @@ async def _store_positive_research_findings(
             "path": raw.get("path") or raw.get("file_path"),
             "source_url": raw.get("source_url"),
             "document_date": raw.get("document_date"),
+            "source_origin": raw.get("source_origin"),
             "verification_status": status,
             "relation_binding": binding,
             "evidence_frame": raw.get("verification_evidence_frame") or {},
@@ -3583,6 +3650,12 @@ async def _store_positive_research_findings(
 
     payload = {
         "query_id": query_id,
+        "canonical_user_id": canonical_user_id,
+        "nextcloud_login": nextcloud_login,
+        "nextcloud_server": nextcloud_server,
+        "user_query": user_query,
+        "retrieval_query": retrieval_query,
+        "source_scopes": sorted(source_scopes) if source_scopes else None,
         "provenance_code": "aki_research",
         "provenance_label": "AKI Recherche",
         "query_frame": normalize_query_frame(query_frame),
@@ -5711,7 +5784,9 @@ async def chat_completions(
             and not elastic_mode
             and not explicit_filename
         ):
-            retrieval_query = await _rewrite_query_if_needed(body.messages, question)
+            retrieval_query = await _rewrite_query_if_needed(
+                body.messages, question, allow_short_acronym_context=bool(web_only)
+            )
         else:
             retrieval_query = question
     elif (
@@ -5721,7 +5796,9 @@ async def chat_completions(
         and not elastic_mode
         and not explicit_filename
     ):
-        retrieval_query = await _rewrite_query_if_needed(body.messages, question)
+        retrieval_query = await _rewrite_query_if_needed(
+                body.messages, question, allow_short_acronym_context=bool(web_only)
+            )
 
     policy_default_arms = RETRIEVAL_POLICY.fallback_arms(CONFIGURED_INTERNAL_ARMS)
     files_arm_available = (
@@ -6469,6 +6546,7 @@ async def chat_completions(
                         "exhaustive": planner_exhaustive,
                         "bounded_document_set": planner_bounded_document_set,
                         "arms": sorted(retrieval_arms or {"files", "vector"}),
+                        "source_scopes": sorted(source_scopes) if source_scopes else None,
                     },
                     "verification": {
                         key: value for key, value in verification.items()
@@ -6481,11 +6559,6 @@ async def chat_completions(
                         "answer_model": generation_model,
                     },
                 })
-                await _store_positive_research_findings(
-                    query_id=completion_id,
-                    query_frame=planner_query_frame,
-                    results=verified_results,
-                )
                 if planner_exhaustive and len(verified_results) > RETRIEVAL_PLANNER.max_complete_documents:
                     content = (
                         "Die Suche ergibt mehr passende Dokumente, als vollständig und zuverlässig "
@@ -6862,6 +6935,21 @@ async def chat_completions(
                 round_id=round_id,
                 stage="answer_context",
                 documents=_raw_documents(results),
+            )
+            # A ResearchRun should describe evidence that actually reached the
+            # answer model, not the wider verifier candidate pool. This keeps
+            # curation aligned with the user-visible research and avoids
+            # persisting verified-but-unused candidates as run Findings.
+            await _store_positive_research_findings(
+                query_id=completion_id,
+                query_frame=planner_query_frame,
+                results=results,
+                canonical_user_id=str(auth_state.get("canonical_user_id") or ""),
+                nextcloud_login=str(auth_state.get("nextcloud_login") or ""),
+                nextcloud_server=str(auth_state.get("server") or ""),
+                user_query=question,
+                retrieval_query=retrieval_query,
+                source_scopes=source_scopes,
             )
             messages = _rag_answer_messages(question, retrieval_query, context)
             break

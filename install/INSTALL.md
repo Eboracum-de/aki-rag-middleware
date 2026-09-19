@@ -1,10 +1,10 @@
-# Installation – 0.8.5-rc3
+# Installation – 0.8.5-rc4
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
 Functional profile and deployment mechanism are conceptually separate. In 0.8.4 the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
 
-`0.8.5-rc3` is the first public release candidate. It consolidates the field-tested RC2 baseline plus Graph-Lite Findings curation and public-release hardening. Graph-Lite curation remains manual and does not alter retrieval automatically. It changes the security
+`0.8.5-rc4` is the first public release candidate. It consolidates the field-tested RC2 baseline plus Graph-Lite Findings curation and public-release hardening. Graph-Lite curation remains manual and does not alter retrieval automatically. It changes the security
 and user-configuration model before the first real beta test:
 
 - multi-user + live Nextcloud ACL is the safe installation default;
@@ -564,7 +564,7 @@ Qdrant, embedding backend and Nextcloud Live-ACL.
 
 Fresh installs create `runtime/credential-master.key` as `root:rag 0640`, add
 `RAG_CREDENTIAL_MASTER_KEY_FILE` and `RAG_CREDENTIAL_ENCRYPTION=required` to
-`runtime.env`, and verify the encrypted credential store. `0.8.5-rc3` is the first public release candidate; no upgrade path from unpublished internal snapshots is documented or supported.
+`runtime.env`, and verify the encrypted credential store. `0.8.5-rc4` is the first public release candidate; no upgrade path from unpublished internal snapshots is documented or supported.
 
 The master key must be backed up separately. The Admin UI can report encryption
 status and replace IMAP credentials, but does not reveal stored secrets or create
@@ -589,6 +589,35 @@ sudo ./install/install.sh --profile super-light --deployment dockerized --plan .
 Other combinations are rejected rather than silently approximated. This keeps
 one middleware codebase while leaving room for a later `standard + dockerized`
 deployment without creating a fork.
+
+### Reproducible installer reruns
+
+The installer also refuses a non-empty `--prefix` that is not recognized as an AKI RAG installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh installs should use a dedicated empty path; current installations carry `.aki-rag-installation` plus installer state for future reruns.
+
+
+Keep the exact installation command used for a host. The Super-Light installer now
+records the wrapper invocation in:
+
+```text
+/opt/nextcloud-rag/install/last-install-command.sh
+```
+
+The file is mode `0600` because the command may contain internal URLs and certificate
+paths. It contains no generated passwords or API keys. Review it before executing it
+again, especially after moving certificates or changing external service addresses.
+
+On a rerun the installer performs an early preflight before modifying the installation:
+it checks the installer source tree, the existing prefix, supplied CA file paths/PEM
+shape and an available Docker daemon when Docker is already installed. For an existing
+Super-Light installation, any running AKI RAG service is a hard preflight error: stop
+the stack before rerunning the installer so no refresh is attempted against live
+containers. A recognized but fully stopped stack is informational and remains the
+normal repair/rerun path. An unreachable Docker daemon or missing required input file
+is also a hard error.
+
+Use `--plan` first when changing profile options, URLs, CA paths or optional services.
+Site-owned `config.yaml`, `provider.env`, `runtime.env`, runtime databases, credential
+master key and generated TLS material remain preserved on normal reruns.
 
 ### Dockerized super-light with private CA
 

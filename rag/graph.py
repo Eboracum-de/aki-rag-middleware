@@ -37,6 +37,9 @@ from rag.research_findings import (
     PROVENANCE_CODE,
     PROVENANCE_LABEL,
     canonical_query_frame,
+    curation_frame_hash,
+    evidence_entity_candidates,
+    merge_entity_candidates,
     finding_id as research_finding_id,
     frame_relation_texts,
     query_frame_hash,
@@ -51,7 +54,13 @@ except ImportError:  # optional when Neo4j is disabled in a lite deployment
     GraphDatabase = None
 from rapidfuzz import fuzz
 
-from rag.ontology import load_relation_ontology, relation_names_with_role
+from rag.ontology import (
+    compatible_document_predicates,
+    entity_type_from_labels,
+    load_relation_ontology,
+    predicate_label as ontology_predicate_label,
+    relation_names_with_role,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -436,6 +445,7 @@ class GraphStore:
             "CREATE CONSTRAINT contact_import_run_id IF NOT EXISTS FOR (n:ContactImportRun) REQUIRE n.run_id IS UNIQUE",
             "CREATE CONSTRAINT entity_name_normalized IF NOT EXISTS FOR (n:EntityName) REQUIRE n.normalized IS UNIQUE",
             "CREATE CONSTRAINT search_alias_normalized IF NOT EXISTS FOR (n:SearchAlias) REQUIRE n.normalized IS UNIQUE",
+            "CREATE CONSTRAINT entity_form_decision_normalized IF NOT EXISTS FOR (n:EntityFormDecision) REQUIRE n.normalized IS UNIQUE",
             "CREATE CONSTRAINT email_normalized IF NOT EXISTS FOR (n:EmailAddress) REQUIRE n.normalized IS UNIQUE",
             "CREATE CONSTRAINT phone_normalized IF NOT EXISTS FOR (n:PhoneNumber) REQUIRE n.normalized IS UNIQUE",
             "CREATE CONSTRAINT address_normalized IF NOT EXISTS FOR (n:PostalAddress) REQUIRE n.normalized IS UNIQUE",
@@ -461,6 +471,7 @@ class GraphStore:
             "CREATE INDEX relation_observation_predicate IF NOT EXISTS FOR (n:RelationObservation) ON (n.predicate)",
             "CREATE INDEX relation_observation_stance IF NOT EXISTS FOR (n:RelationObservation) ON (n.stance)",
             "CREATE INDEX research_finding_frame_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.frame_hash)",
+            "CREATE INDEX research_finding_curation_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.curation_hash)",
             "CREATE INDEX research_finding_provenance IF NOT EXISTS FOR (n:ResearchFinding) ON (n.provenance_code)",
         ]
         for statement in statements:
@@ -507,6 +518,43 @@ class GraphStore:
             """
         )
 
+        # RelationObservation is also used by the lightweight Findings curator.
+        # A Super-Light store may not contain a relation yet, while read queries
+        # still reference the complete observation contract. Register every
+        # property token once to prevent UnknownPropertyKeyWarning log noise.
+        self._run(
+            """
+            MERGE (m:RAGSchemaMarker {key:'relation_observation_fields_v1'})
+            SET m.relation_id='',
+                m.document_id='',
+                m.predicate='',
+                m.predicate_text='',
+                m.relation_text='',
+                m.evidence_text='',
+                m.confidence=0.0,
+                m.stance='',
+                m.chunk_index=0,
+                m.extractor='',
+                m.valid_from='',
+                m.valid_to='',
+                m.evidence_date='',
+                m.evidence_date_precision='',
+                m.evidence_date_confidence=0.0,
+                m.evidence_date_basis='',
+                m.curator_note='',
+                m.curator_status='',
+                m.curator_reason='',
+                m.curator_actor='',
+                m.review_reason='',
+                m.review_required_at=datetime(),
+                m.source_finding_id='',
+                m.ontology_name='',
+                m.ontology_version=0,
+                m.ontology_hash='',
+                m.updated_at=datetime()
+            """
+        )
+
         # Merge candidates may not yet have been carried across a manual merge.
         # Register the optional property key once so Neo4j does not emit an
         # UnknownPropertyKeyWarning when the admin UI lists ordinary candidates.
@@ -514,6 +562,31 @@ class GraphStore:
             """
             MERGE (m:RAGSchemaMarker {key:'possible_same_as_fields_v1'})
             SET m.carried_from_merge_entity_id='', m.updated_at=datetime()
+            """
+        )
+
+        # Preserve the latest historic manual decision for a normalized form.
+        # ON CREATE keeps subsequent explicit global decisions authoritative.
+        self._run(
+            """
+            MATCH (o:EntityObservation)
+            WHERE coalesce(o.curator_status,'') IN
+                  ['manual_not_entity','corrected_observation','research_finding_entity']
+              AND coalesce(o.normalized,'') <> ''
+            WITH o.normalized AS normalized, o
+            ORDER BY o.curator_decided_at DESC, o.updated_at DESC
+            WITH normalized, collect(o)[0] AS latest
+            MERGE (d:EntityFormDecision {normalized:normalized})
+            ON CREATE SET
+                d.value=coalesce(latest.observed_text,latest.canonical_name,normalized),
+                d.status=CASE WHEN latest.curator_status='manual_not_entity'
+                              THEN 'not_entity' ELSE 'entity' END,
+                d.target_entity_id=coalesce(latest.curator_target_entity_id,''),
+                d.decision_kind='historic_observation',
+                d.reason='historic_observation_backfill',
+                d.decided_at=coalesce(latest.curator_decided_at,latest.updated_at,datetime()),
+                d.created_at=datetime(),
+                d.updated_at=datetime()
             """
         )
 
@@ -562,10 +635,28 @@ class GraphStore:
         """
         for statement in (
             "CREATE CONSTRAINT research_finding_id IF NOT EXISTS FOR (n:ResearchFinding) REQUIRE n.finding_id IS UNIQUE",
+            "CREATE CONSTRAINT research_run_id IF NOT EXISTS FOR (n:ResearchRun) REQUIRE n.run_id IS UNIQUE",
+            "CREATE CONSTRAINT canonical_user_id IF NOT EXISTS FOR (n:CanonicalUser) REQUIRE n.canonical_user_id IS UNIQUE",
             "CREATE INDEX research_finding_frame_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.frame_hash)",
+            "CREATE INDEX research_run_user IF NOT EXISTS FOR (n:ResearchRun) ON (n.canonical_user_id)",
+            "CREATE INDEX research_run_status IF NOT EXISTS FOR (n:ResearchRun) ON (n.curation_status)",
             "CREATE INDEX research_finding_provenance IF NOT EXISTS FOR (n:ResearchFinding) ON (n.provenance_code)",
         ):
             self._run(statement)
+        self._run(
+            """
+            MERGE (m:RAGSchemaMarker {key:'research_run_fields_v1'})
+            SET m.user_query='',
+                m.retrieval_query='',
+                m.canonical_user_id='',
+                m.nextcloud_login='',
+                m.nextcloud_server='',
+                m.curation_status='open',
+                m.dismissed_at=datetime(),
+                m.dismissed_by='',
+                m.updated_at=datetime()
+            """
+        )
         self._run(
             """
             MERGE (m:RAGSchemaMarker {key:'research_finding_fields_v1'})
@@ -586,6 +677,7 @@ class GraphStore:
                 m.graph_disposition='',
                 m.suppressed_entity_texts=[],
                 m.frame_hash='',
+                m.curation_hash='',
                 m.provenance_code='',
                 m.query_frame_json='',
                 m.evidence_frame_json='',
@@ -598,6 +690,34 @@ class GraphStore:
                 m.updated_at=datetime()
             """
         )
+
+        # Backfill the structured curation fingerprint without changing existing
+        # Finding IDs. This preserves upgrade compatibility while allowing later
+        # provider runs with different free-form intent wording to reuse the
+        # same shared curation object.
+        legacy_rows = self._run(
+            """
+            MATCH (f:ResearchFinding)
+            WHERE coalesce(properties(f)['curation_hash'],'')=''
+              AND coalesce(f.query_frame_json,'') <> ''
+            RETURN f.finding_id AS finding_id, f.query_frame_json AS query_frame_json
+            """
+        )
+        for row in legacy_rows:
+            try:
+                parsed = json.loads(str(row.get("query_frame_json") or "{}"))
+                chash = curation_frame_hash(parsed)
+            except Exception:
+                continue
+            self._run(
+                """
+                MATCH (f:ResearchFinding {finding_id:$finding_id})
+                SET f.curation_hash=$curation_hash, f.updated_at=datetime()
+                """,
+                finding_id=str(row.get("finding_id") or ""),
+                curation_hash=chash,
+            )
+
 
     def backfill_identity_keys(self) -> int:
         """Backfill strict organization identity keys without merging anything."""
@@ -4183,6 +4303,7 @@ class GraphStore:
                 WHERE s.entity_id IN $entity_ids
                   AND o.entity_id IN $entity_ids
                   AND s.entity_id <> o.entity_id
+                  AND coalesce(c.extractor,'') <> 'research_finding_curator'
                 WITH d,
                      collect({
                        relation_id:c.relation_id,
@@ -4489,16 +4610,170 @@ class GraphStore:
             "direct_relations": [],
         }
 
+    def _entity_form_decision(self, text: str) -> dict[str, Any] | None:
+        normalized = normalize_name(text)
+        if not normalized:
+            return None
+        rows = self._run(
+            """
+            MATCH (d:EntityFormDecision {normalized:$normalized})
+            RETURN d.normalized AS normalized,
+                   coalesce(d.value,'') AS value,
+                   coalesce(d.status,'') AS status,
+                   coalesce(d.target_entity_id,'') AS target_entity_id,
+                   coalesce(d.decision_kind,'') AS decision_kind,
+                   coalesce(d.reason,'') AS reason,
+                   toString(d.decided_at) AS decided_at
+            LIMIT 1
+            """,
+            normalized=normalized,
+        )
+        if rows:
+            return dict(rows[0])
+
+        # Deployments that have not restarted since the global decision model
+        # was introduced may not have run ensure_schema's bulk backfill yet.
+        # Promote the latest historic manual decision lazily so it applies to
+        # every Finding immediately, not only to its originating Finding.
+        historic_rows = self._run(
+            """
+            MATCH (o:EntityObservation {normalized:$normalized})
+            WHERE coalesce(properties(o)['curator_status'],'') IN
+                  ['manual_not_entity','corrected_observation','research_finding_entity']
+            WITH o
+            ORDER BY coalesce(
+                properties(o)['curator_decided_at'],
+                properties(o)['updated_at'],
+                properties(o)['created_at']
+            ) DESC
+            RETURN coalesce(properties(o)['observed_text'],
+                            properties(o)['canonical_name'],
+                            $value) AS value,
+                   coalesce(properties(o)['curator_status'],'') AS curator_status,
+                   coalesce(properties(o)['curator_target_entity_id'],'') AS target_entity_id,
+                   coalesce(properties(o)['curator_reason'],'') AS reason,
+                   toString(coalesce(
+                       properties(o)['curator_decided_at'],
+                       properties(o)['updated_at'],
+                       properties(o)['created_at']
+                   )) AS decided_at
+            LIMIT 1
+            """,
+            normalized=normalized,
+            value=str(text or "").strip(),
+        )
+        if not historic_rows:
+            return None
+
+        historic = dict(historic_rows[0])
+        curator_status = str(historic.get("curator_status") or "")
+        status = "not_entity" if curator_status == "manual_not_entity" else "entity"
+        target_entity_id = str(historic.get("target_entity_id") or "")
+        self._set_entity_form_decision(
+            str(historic.get("value") or text),
+            status=status,
+            target_entity_id=target_entity_id,
+            reason=str(historic.get("reason") or "historic_observation_backfill"),
+            curator_actor="historic_observation_backfill",
+            decision_kind="historic_observation",
+        )
+        return {
+            "normalized": normalized,
+            "value": str(historic.get("value") or text),
+            "status": status,
+            "target_entity_id": target_entity_id,
+            "decision_kind": "historic_observation",
+            "reason": str(historic.get("reason") or "historic_observation_backfill"),
+            "decided_at": str(historic.get("decided_at") or ""),
+        }
+
+    def _set_entity_form_decision(
+        self,
+        text: str,
+        *,
+        status: str,
+        target_entity_id: str = "",
+        reason: str = "",
+        curator_actor: str = "manual_admin",
+        decision_kind: str = "",
+    ) -> None:
+        normalized = normalize_name(text)
+        if not normalized:
+            return
+        if status not in {"entity", "not_entity"}:
+            raise ValueError("Ungültiger globaler Entity-Formstatus")
+        self._run(
+            """
+            MERGE (d:EntityFormDecision {normalized:$normalized})
+            ON CREATE SET d.created_at=datetime()
+            SET d.value=$value,
+                d.status=$status,
+                d.target_entity_id=$target_entity_id,
+                d.decision_kind=$decision_kind,
+                d.reason=$reason,
+                d.curator_actor=$curator_actor,
+                d.decided_at=datetime(),
+                d.updated_at=datetime()
+            """,
+            normalized=normalized,
+            value=str(text or "").strip(),
+            status=status,
+            target_entity_id=str(target_entity_id or ""),
+            reason=str(reason or "")[:1000],
+            curator_actor=str(curator_actor or "manual_admin")[:300],
+            decision_kind=str(decision_kind or "")[:100],
+        )
+
+    def _remove_manual_alias_form(self, entity_id: str, text: str) -> None:
+        normalized = normalize_name(text)
+        if not entity_id or not normalized:
+            return
+        self._run(
+            """
+            MATCH (e:Entity {entity_id:$entity_id})-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias {normalized:$normalized})
+            WHERE coalesce(r.source_curator,'')='manual'
+            DELETE r
+            WITH a
+            OPTIONAL MATCH (:Entity)-[remaining:HAS_SEARCH_ALIAS]->(a)
+            WITH a, count(remaining) AS refs
+            WHERE refs=0
+            DELETE a
+            """,
+            entity_id=entity_id,
+            normalized=normalized,
+        )
+        self.refresh_possible_same_as(entity_id)
+
     def _resolve_existing_query_entity(self, text: str) -> dict[str, Any] | None:
         """Resolve one query-frame entity only when an exact global form is unique.
 
-        Research findings must never manufacture identities. Contextual/search
-        aliases are allowed for query-side resolution, but ambiguity results in
-        no entity link rather than a merge or provisional Entity.
+        Exclusive names and unique contextual/search aliases are valid defaults
+        for Finding curation. A global not-entity decision always wins until a
+        curator explicitly assigns or creates an Entity for that form.
         """
         normalized = normalize_name(text)
         if not normalized:
             return None
+        decision = self._entity_form_decision(text)
+        if decision and str(decision.get("status") or "") == "not_entity":
+            return None
+        if decision and str(decision.get("status") or "") == "entity":
+            target_id = str(decision.get("target_entity_id") or "")
+            target_rows = self._run(
+                """
+                MATCH (e:Entity {entity_id:$entity_id})
+                WHERE coalesce(e.identity_status,'') <> 'merged'
+                  AND coalesce(e.identity_status,'') <> 'orphaned'
+                RETURN e.entity_id AS entity_id,
+                       e.display_name AS display_name,
+                       labels(e) AS labels,
+                       'curated' AS match_kind
+                LIMIT 1
+                """,
+                entity_id=target_id,
+            ) if target_id else []
+            if target_rows:
+                return target_rows[0]
         rows = self._run(
             """
             MATCH (e:Entity)
@@ -4513,20 +4788,28 @@ class GraphStore:
                OR (a IS NOT NULL
                    AND coalesce(ra.active,true)=true
                    AND coalesce(ra.resolution_policy,'contextual') <> 'document_only')
-            RETURN DISTINCT e.entity_id AS entity_id,
-                   e.display_name AS display_name, labels(e) AS labels
+            WITH e, max(CASE WHEN n IS NOT NULL THEN 2 ELSE 1 END) AS match_rank
+            RETURN e.entity_id AS entity_id,
+                   e.display_name AS display_name,
+                   labels(e) AS labels,
+                   CASE WHEN match_rank=2 THEN 'name' ELSE 'alias' END AS match_kind
             ORDER BY e.display_name, e.entity_id
             """,
             normalized=normalized,
         )
         return rows[0] if len(rows) == 1 else None
-
     def store_research_findings(
         self,
         *,
         query_id: str,
         query_frame: dict[str, Any],
         documents: list[dict[str, Any]],
+        canonical_user_id: str = "",
+        nextcloud_login: str = "",
+        nextcloud_server: str = "",
+        user_query: str = "",
+        retrieval_query: str = "",
+        source_scopes: list[str] | None = None,
         provenance_code: str = PROVENANCE_CODE,
         provenance_label: str = PROVENANCE_LABEL,
         software_version: str = "",
@@ -4547,9 +4830,12 @@ class GraphStore:
             return {"stored": 0, "skipped": len(documents), "reason": "empty_query_frame"}
 
         frame_hash = query_frame_hash(frame)
+        shared_curation_hash = curation_frame_hash(frame)
         frame_json = json.dumps(frame, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        entity_texts = [str(item.get("text") or "") for item in frame.get("entities") or []]
-        entity_roles = [str(item.get("role") or "") for item in frame.get("entities") or []]
+        query_entity_candidates = [
+            {"text": str(item.get("text") or ""), "role": str(item.get("role") or "")}
+            for item in frame.get("entities") or []
+        ]
         relation_texts = frame_relation_texts(frame)
         constraints_json = json.dumps(frame.get("constraints") or [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         concepts = [str(item) for item in frame.get("concepts") or []]
@@ -4575,15 +4861,40 @@ class GraphStore:
 
             evidence_frame = item.get("evidence_frame") if isinstance(item.get("evidence_frame"), dict) else {}
             evidence_json = json.dumps(evidence_frame, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            finding_candidates = merge_entity_candidates(
+                query_entity_candidates,
+                evidence_entity_candidates(evidence_frame),
+            )
+            candidate_finding_id = research_finding_id(
+                document_id, frame, provenance_code=provenance_code
+            )
+            existing = self._run(
+                """
+                MATCH (f:ResearchFinding)-[:SUPPORTED_BY]->(d:Document {document_id:$document_id})
+                WHERE coalesce(properties(f)['curation_hash'],'')=$curation_hash
+                   OR (coalesce(properties(f)['curation_hash'],'')='' AND f.frame_hash=$frame_hash)
+                RETURN f.finding_id AS finding_id
+                ORDER BY f.created_at ASC
+                LIMIT 1
+                """,
+                document_id=document_id,
+                curation_hash=shared_curation_hash,
+                frame_hash=frame_hash,
+            )
+            if existing and str(existing[0].get("finding_id") or ""):
+                candidate_finding_id = str(existing[0]["finding_id"])
             rows.append({
                 "document_id": document_id,
                 "title": str(item.get("title") or "")[:1000],
                 "path": str(item.get("path") or "")[:4000],
                 "source_url": str(item.get("source_url") or "")[:4000],
                 "document_date": str(item.get("document_date") or "")[:100],
-                "finding_id": research_finding_id(document_id, frame, provenance_code=provenance_code),
+                "source_origin": str(item.get("source_origin") or "")[:120],
+                "finding_id": candidate_finding_id,
                 "evidence_frame_json": evidence_json,
                 "evidence_frame_hash": hashlib.sha256(evidence_json.encode("utf-8")).hexdigest(),
+                "entity_texts": [candidate["text"] for candidate in finding_candidates],
+                "entity_roles": [candidate["role"] for candidate in finding_candidates],
             })
 
         if not rows:
@@ -4596,6 +4907,48 @@ class GraphStore:
                 "provenance": str(provenance_label or PROVENANCE_LABEL),
             }
 
+        run_id = str(query_id or "").strip()
+        if run_id:
+            self._run(
+                """
+                MERGE (run:ResearchRun {run_id:$run_id})
+                ON CREATE SET run.created_at=datetime(), run.curation_status='open'
+                SET run.canonical_user_id=$canonical_user_id,
+                    run.nextcloud_login=$nextcloud_login,
+                    run.nextcloud_server=$nextcloud_server,
+                    run.user_query=$user_query,
+                    run.retrieval_query=$retrieval_query,
+                    run.source_scopes=$source_scopes,
+                    run.frame_hash=$frame_hash,
+                    run.software_version=$software_version,
+                    run.planner_model=$planner_model,
+                    run.verifier_model=$verifier_model,
+                    run.last_seen_at=datetime(),
+                    run.updated_at=datetime()
+                FOREACH (_ IN CASE WHEN $canonical_user_id <> '' THEN [1] ELSE [] END |
+                    MERGE (u:CanonicalUser {canonical_user_id:$canonical_user_id})
+                    ON CREATE SET u.created_at=datetime()
+                    SET u.nextcloud_login=$nextcloud_login,
+                        u.nextcloud_server=$nextcloud_server,
+                        u.updated_at=datetime()
+                    MERGE (u)-[p:PERFORMED]->(run)
+                    ON CREATE SET p.created_at=datetime()
+                    SET p.last_seen_at=datetime()
+                )
+                """,
+                run_id=run_id,
+                canonical_user_id=str(canonical_user_id or "")[:200],
+                nextcloud_login=str(nextcloud_login or "")[:300],
+                nextcloud_server=str(nextcloud_server or "")[:2000],
+                user_query=str(user_query or "")[:4000],
+                retrieval_query=str(retrieval_query or "")[:4000],
+                source_scopes=sorted({str(x).strip() for x in (source_scopes or []) if str(x).strip()}),
+                frame_hash=frame_hash,
+                software_version=str(software_version or "")[:120],
+                planner_model=str(planner_model or "")[:300],
+                verifier_model=str(verifier_model or "")[:300],
+            )
+
         self._run(
             """
             UNWIND $rows AS row
@@ -4605,6 +4958,7 @@ class GraphStore:
                 d.path=row.path,
                 d.source_url=row.source_url,
                 d.document_date=row.document_date,
+                d.source_origin=row.source_origin,
                 d.last_seen_at=datetime(),
                 d.updated_at=datetime()
             MERGE (f:ResearchFinding:AKIResearchFinding {finding_id:row.finding_id})
@@ -4614,10 +4968,11 @@ class GraphStore:
             SET f.provenance_code=$provenance_code,
                 f.provenance_label=$provenance_label,
                 f.frame_hash=$frame_hash,
+                f.curation_hash=$curation_hash,
                 f.query_frame_json=$query_frame_json,
                 f.intent=$intent,
-                f.entity_texts=$entity_texts,
-                f.entity_roles=$entity_roles,
+                f.entity_texts=row.entity_texts,
+                f.entity_roles=row.entity_roles,
                 f.relation_texts=$relation_texts,
                 f.constraints_json=$constraints_json,
                 f.concepts=$concepts,
@@ -4638,15 +4993,21 @@ class GraphStore:
                 r.relation_binding='direct',
                 r.last_query_id=$query_id,
                 r.last_seen_at=datetime()
+            WITH f
+            OPTIONAL MATCH (run:ResearchRun {run_id:$query_id})
+            FOREACH (_ IN CASE WHEN run IS NULL THEN [] ELSE [1] END |
+                MERGE (run)-[p:PRODUCED]->(f)
+                ON CREATE SET p.created_at=datetime(), p.disposition='pending'
+                SET p.last_seen_at=datetime()
+            )
             """,
             rows=rows,
             provenance_code=str(provenance_code or PROVENANCE_CODE)[:120],
             provenance_label=str(provenance_label or PROVENANCE_LABEL)[:240],
             frame_hash=frame_hash,
+            curation_hash=shared_curation_hash,
             query_frame_json=frame_json,
             intent=str(frame.get("intent") or "")[:240],
-            entity_texts=entity_texts,
-            entity_roles=entity_roles,
             relation_texts=relation_texts,
             constraints_json=constraints_json,
             concepts=concepts,
@@ -4696,6 +5057,163 @@ class GraphStore:
             "provenance": str(provenance_label or PROVENANCE_LABEL),
         }
 
+    def list_research_runs(
+        self,
+        *,
+        canonical_user_id: str = "",
+        query: str = "",
+        state: str = "open",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List research runs as the primary curation work queue.
+
+        Finding curation remains global. Run/edge disposition only controls
+        whether one concrete research run remains in a user's working queue.
+        """
+        rows = self._run(
+            """
+            MATCH (run:ResearchRun)
+            WHERE ($canonical_user_id='' OR run.canonical_user_id=$canonical_user_id)
+              AND ($needle='' OR toLower(coalesce(run.user_query,'')) CONTAINS $needle
+                               OR toLower(coalesce(run.retrieval_query,'')) CONTAINS $needle)
+            OPTIONAL MATCH (run)-[p:PRODUCED]->(f:ResearchFinding)
+            RETURN properties(run) AS run,
+                   collect({finding_id:f.finding_id, disposition:coalesce(p.disposition,'pending')}) AS produced
+            ORDER BY run.created_at DESC
+            LIMIT $limit
+            """,
+            canonical_user_id=str(canonical_user_id or ""),
+            needle=str(query or "").strip().casefold(),
+            limit=max(1, min(int(limit), 2000)),
+        )
+        findings = {str(item.get("finding_id") or ""): item for item in self.list_research_findings(limit=2000)}
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            run = dict(row.get("run") or {})
+            produced = [dict(x or {}) for x in (row.get("produced") or []) if (x or {}).get("finding_id")]
+            visible = []
+            open_count = 0
+            resolved_count = 0
+            dismissed_count = 0
+            review_count = 0
+            for edge in produced:
+                finding = findings.get(str(edge.get("finding_id") or ""))
+                if finding is None:
+                    continue
+                item = {**finding, "run_disposition": str(edge.get("disposition") or "pending")}
+                visible.append(item)
+                if item["run_disposition"] == "dismissed":
+                    dismissed_count += 1
+                    continue
+                graph_state = str(item.get("graph_state") or "open")
+                if graph_state in {"open", "no_entity"}:
+                    open_count += 1
+                elif graph_state == "review_required":
+                    review_count += 1
+                else:
+                    resolved_count += 1
+            effective = "dismissed" if str(run.get("curation_status") or "") == "dismissed" else (
+                "open" if (open_count or review_count) else "completed"
+            )
+            run.update({
+                "effective_status": effective,
+                "finding_count": len(visible),
+                "open_count": open_count,
+                "resolved_count": resolved_count,
+                "review_count": review_count,
+                "dismissed_count": dismissed_count,
+                "findings": visible,
+            })
+            if state in {"", "all"} or effective == state:
+                out.append(run)
+        return out
+
+    def research_finding_observed_by_user(self, canonical_user_id: str, finding_id: str) -> bool:
+        rows = self._run(
+            """
+            MATCH (run:ResearchRun {canonical_user_id:$canonical_user_id})-[:PRODUCED]->(f:ResearchFinding {finding_id:$finding_id})
+            RETURN count(f) AS count
+            """,
+            canonical_user_id=str(canonical_user_id or ""),
+            finding_id=str(finding_id or ""),
+        )
+        return bool(int(rows[0].get("count") or 0)) if rows else False
+
+    def research_run_detail(self, run_id: str) -> dict[str, Any] | None:
+        runs = self._run(
+            """
+            MATCH (run:ResearchRun {run_id:$run_id})
+            OPTIONAL MATCH (run)-[p:PRODUCED]->(f:ResearchFinding)
+            RETURN properties(run) AS run,
+                   collect({finding_id:f.finding_id, disposition:coalesce(p.disposition,'pending')}) AS produced
+            """,
+            run_id=str(run_id or ""),
+        )
+        if not runs:
+            return None
+        run = dict(runs[0].get("run") or {})
+        finding_map = {str(item.get("finding_id") or ""): item for item in self.list_research_findings(limit=2000)}
+        findings = []
+        for edge in runs[0].get("produced") or []:
+            fid = str((edge or {}).get("finding_id") or "")
+            item = finding_map.get(fid)
+            if item:
+                findings.append({**item, "run_disposition": str((edge or {}).get("disposition") or "pending")})
+        run["findings"] = findings
+        return run
+
+    def dismiss_research_run(self, run_id: str, *, actor: str = "admin", reason: str = "") -> dict[str, Any]:
+        rows = self._run(
+            """
+            MATCH (run:ResearchRun {run_id:$run_id})
+            SET run.curation_status='dismissed',
+                run.dismissed_at=datetime(),
+                run.dismissed_by=$actor,
+                run.dismiss_reason=$reason,
+                run.updated_at=datetime()
+            WITH run
+            OPTIONAL MATCH (run)-[p:PRODUCED]->(:ResearchFinding)
+            WHERE coalesce(p.disposition,'pending')='pending'
+            SET p.disposition='dismissed', p.dismissed_at=datetime(), p.dismissed_by=$actor
+            RETURN run.run_id AS run_id, count(p) AS findings_dismissed
+            """,
+            run_id=str(run_id or ""),
+            actor=str(actor or "admin")[:300],
+            reason=str(reason or "")[:1000],
+        )
+        if not rows:
+            raise ValueError("Research run not found")
+        return dict(rows[0])
+
+    def set_research_run_finding_disposition(
+        self,
+        run_id: str,
+        finding_ids: list[str],
+        *,
+        disposition: str,
+        actor: str = "admin",
+    ) -> dict[str, Any]:
+        clean = str(disposition or "").strip().casefold()
+        if clean not in {"pending", "dismissed"}:
+            raise ValueError("invalid research-run finding disposition")
+        ids = list(dict.fromkeys(str(x or "").strip() for x in finding_ids if str(x or "").strip()))
+        rows = self._run(
+            """
+            MATCH (run:ResearchRun {run_id:$run_id})-[p:PRODUCED]->(f:ResearchFinding)
+            WHERE f.finding_id IN $finding_ids
+            SET p.disposition=$disposition,
+                p.updated_at=datetime(),
+                p.dismissed_at=CASE WHEN $disposition='dismissed' THEN datetime() ELSE null END,
+                p.dismissed_by=CASE WHEN $disposition='dismissed' THEN $actor ELSE '' END
+            RETURN count(p) AS updated
+            """,
+            run_id=str(run_id or ""),
+            finding_ids=ids,
+            disposition=clean,
+            actor=str(actor or "admin")[:300],
+        )
+        return {"updated": int(rows[0].get("updated") or 0) if rows else 0, "requested": len(ids)}
+
     def list_research_findings(self, *, query: str = "", limit: int = 200) -> list[dict[str, Any]]:
         """List persisted positive verifier findings for the admin UI.
 
@@ -4718,7 +5236,8 @@ class GraphStore:
             }) AS curated_entities
             OPTIONAL MATCH (claim:RelationObservation)-[:DERIVED_FROM_FINDING]->(f)
             WITH f, s, d, resolved_entities, curated_entities,
-                 count(CASE WHEN coalesce(claim.curator_status,'') = 'manual_claim' THEN claim END) AS claim_count
+                 count(CASE WHEN coalesce(claim.curator_status,'') = 'manual_claim' THEN claim END) AS claim_count,
+                 count(CASE WHEN coalesce(claim.curator_status,'') = 'review_required' THEN claim END) AS review_count
             WHERE $needle=''
                OR toLower(coalesce(d.title,'')) CONTAINS $needle
                OR toLower(coalesce(d.path,'')) CONTAINS $needle
@@ -4749,28 +5268,67 @@ class GraphStore:
                    coalesce(properties(f)['suppressed_entity_texts'],[]) AS suppressed_entity_texts,
                    f.observation_count AS observation_count,
                    f.last_seen_at AS last_seen_at,
-                   resolved_entities, curated_entities, claim_count
+                   resolved_entities, curated_entities, claim_count, review_count
             ORDER BY f.last_seen_at DESC
             LIMIT $limit
             """,
             needle=needle,
             limit=max(1, min(int(limit), 2000)),
         )
+        global_rejections = {
+            str(row.get("normalized") or "")
+            for row in self._run(
+                """
+                MATCH (d:EntityFormDecision)
+                WHERE coalesce(d.status,'')='not_entity'
+                RETURN d.normalized AS normalized
+                """
+            )
+            if str(row.get("normalized") or "")
+        }
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            entity_texts = [str(x) for x in (item.get("entity_texts") or []) if str(x or "").strip()]
+            visible_candidates = merge_entity_candidates([
+                {"text": str(text or "").strip(), "role": str(role or "")}
+                for text, role in zip(
+                    item.get("entity_texts") or [],
+                    list(item.get("entity_roles") or [])
+                    + [""] * len(item.get("entity_texts") or []),
+                )
+                if str(text or "").strip()
+            ])
+            entity_texts = [candidate["text"] for candidate in visible_candidates]
+            item["entity_texts"] = entity_texts
+            item["entity_roles"] = [candidate["role"] for candidate in visible_candidates]
             curated = [x for x in (item.get("curated_entities") or []) if x and x.get("entity_id")]
-            suppressed = {str(x).casefold() for x in (item.get("suppressed_entity_texts") or [])}
-            decided = {str(x.get("text") or "").casefold() for x in curated} | suppressed
+            suppressed = {
+                normalize_name(str(x))
+                for x in (item.get("suppressed_entity_texts") or [])
+                if normalize_name(str(x))
+            }
+            suppressed.update(
+                normalize_name(text) for text in entity_texts
+                if normalize_name(text) in global_rejections
+            )
+            decided = {
+                normalize_name(str(x.get("text") or "")) for x in curated
+                if normalize_name(str(x.get("text") or ""))
+            } | suppressed
             claim_count = int(item.get("claim_count") or 0)
-            if str(item.get("curator_status") or "") == "suppressed":
+            review_count = int(item.get("review_count") or 0)
+            curator_status = str(item.get("curator_status") or "")
+            if curator_status == "suppressed":
                 graph_state = "suppressed"
+            elif review_count:
+                graph_state = "review_required"
             elif not entity_texts:
                 graph_state = "no_entity"
             elif claim_count:
                 graph_state = "claimed"
-            elif all(text.casefold() in decided for text in entity_texts):
+            elif curator_status == "mentions_only":
+                graph_state = "mentions_only"
+            elif all(normalize_name(text) in decided for text in entity_texts):
                 graph_state = "entities_resolved"
             else:
                 graph_state = "open"
@@ -4793,18 +5351,21 @@ class GraphStore:
             WITH f, s, d, resolved_entities, collect({
                 text: ce.frame_text, role: ce.role, entity_id: curated.entity_id,
                 display_name: curated.display_name, labels: labels(curated),
+                entity_kind: coalesce(curated.entity_kind,''),
                 curated_at: ce.curated_at
             }) AS curated_entities
             OPTIONAL MATCH (claim:RelationObservation)-[:DERIVED_FROM_FINDING]->(f)
             OPTIONAL MATCH (claim)-[:SUBJECT]->(subject:Entity)
             OPTIONAL MATCH (claim)-[:OBJECT]->(object:Entity)
             WITH f, s, d, resolved_entities, curated_entities, collect(CASE WHEN claim IS NULL THEN null ELSE {
-                relation_id: claim.relation_id,
-                predicate: claim.predicate,
-                predicate_text: claim.predicate_text,
-                relation_text: claim.relation_text,
-                evidence_text: claim.evidence_text,
+                relation_id: properties(claim)['relation_id'],
+                predicate: properties(claim)['predicate'],
+                predicate_text: properties(claim)['predicate_text'],
+                relation_text: properties(claim)['relation_text'],
+                evidence_text: properties(claim)['evidence_text'],
+                curator_note: properties(claim)['curator_note'],
                 curator_status: properties(claim)['curator_status'],
+                review_reason: properties(claim)['review_reason'],
                 subject_entity_id: subject.entity_id,
                 subject_name: subject.display_name,
                 object_entity_id: object.entity_id,
@@ -4817,18 +5378,70 @@ class GraphStore:
             """,
             finding_id=str(finding_id or "").strip(),
         )
-        return dict(rows[0]) if rows else None
+        if not rows:
+            return None
+        detail = dict(rows[0])
+        finding = dict(detail.get("finding") or {})
+        visible_candidates = merge_entity_candidates([
+            {"text": str(text or "").strip(), "role": str(role or "")}
+            for text, role in zip(
+                finding.get("entity_texts") or [],
+                list(finding.get("entity_roles") or [])
+                + [""] * len(finding.get("entity_texts") or []),
+            )
+            if str(text or "").strip()
+        ])
+        finding["entity_texts"] = [candidate["text"] for candidate in visible_candidates]
+        finding["entity_roles"] = [candidate["role"] for candidate in visible_candidates]
+        detail["finding"] = finding
+        return detail
 
-    def curate_research_finding(self, finding_id: str, *, status: str, reason: str = "") -> dict[str, Any]:
-        """Suppress or restore a persisted finding without deleting provenance."""
+    def curate_research_finding(
+        self, finding_id: str, *, status: str, reason: str = "", curator_actor: str = "manual_admin"
+    ) -> dict[str, Any]:
+        """Set curator workflow state without deleting finding provenance."""
         clean_status = str(status or "").strip().casefold()
-        if clean_status not in {"", "suppressed"}:
+        if clean_status not in {"", "suppressed", "mentions_only"}:
             raise ValueError(f"Ungültiger Finding-Status: {status}")
+
+        if clean_status == "mentions_only":
+            detail = self.research_finding_detail(finding_id)
+            if detail is None:
+                raise ValueError(f"Finding nicht gefunden: {finding_id}")
+            finding = dict(detail.get("finding") or {})
+            entity_texts = [
+                str(x).strip()
+                for x in (finding.get("entity_texts") or [])
+                if str(x or "").strip()
+            ]
+            if not entity_texts:
+                raise ValueError("Finding ohne Entity kann nicht als 'Nur Mentions' abgeschlossen werden")
+            curated = {
+                str(x.get("text") or "").casefold()
+                for x in (detail.get("curated_entities") or [])
+                if x and x.get("entity_id")
+            }
+            suppressed = {
+                str(x).casefold()
+                for x in (finding.get("suppressed_entity_texts") or [])
+                if str(x or "").strip()
+            }
+            if any(text.casefold() not in curated | suppressed for text in entity_texts):
+                raise ValueError("Vor 'Nur Mentions' müssen alle Entity-Entscheidungen abgeschlossen sein")
+            active_claims = [
+                x
+                for x in (detail.get("claims") or [])
+                if str((x or {}).get("curator_status") or "") in {"manual_claim", "review_required"}
+            ]
+            if active_claims:
+                raise ValueError("Finding mit aktivem oder prüfpflichtigem Claim kann nicht als 'Nur Mentions' abgeschlossen werden")
+
         rows = self._run(
             """
             MATCH (f:ResearchFinding {finding_id:$finding_id})
             SET f.curator_status=$status,
                 f.curator_reason=$reason,
+                f.curator_actor=$curator_actor,
                 f.curator_decided_at=datetime(),
                 f.updated_at=datetime()
             RETURN f.finding_id AS finding_id,
@@ -4838,6 +5451,7 @@ class GraphStore:
             finding_id=str(finding_id or "").strip(),
             status=clean_status,
             reason=str(reason or "").strip()[:1000],
+            curator_actor=str(curator_actor or "manual_admin")[:300],
         )
         if not rows:
             raise ValueError(f"Finding nicht gefunden: {finding_id}")
@@ -4869,8 +5483,20 @@ class GraphStore:
         if detail is None:
             raise ValueError(f"Finding nicht gefunden: {finding_id}")
         finding = dict(detail.get("finding") or {})
-        texts = [str(x).strip() for x in (finding.get("entity_texts") or []) if str(x or "").strip()]
-        roles = [str(x or "") for x in (finding.get("entity_roles") or [])]
+        stored_candidates = [
+            {"text": str(text or "").strip(), "role": str(role or "")}
+            for text, role in zip(
+                finding.get("entity_texts") or [],
+                list(finding.get("entity_roles") or []) + [""] * len(finding.get("entity_texts") or []),
+            )
+            if str(text or "").strip()
+        ]
+        candidates = merge_entity_candidates(
+            stored_candidates,
+            evidence_entity_candidates(finding.get("evidence_frame_json") or ""),
+        )
+        texts = [item["text"] for item in candidates]
+        roles = [item["role"] for item in candidates]
         suppressed = {str(x).casefold() for x in (finding.get("suppressed_entity_texts") or [])}
         curated_by_text = {
             str(x.get("text") or "").casefold(): x
@@ -4885,15 +5511,89 @@ class GraphStore:
         out: list[dict[str, Any]] = []
         for index, text in enumerate(texts):
             key = text.casefold()
-            suggestions = self.find_entities(text, limit=max(1, min(int(limit), 20)))
+            decision = self._entity_form_decision(text)
+            globally_suppressed = bool(
+                decision and str(decision.get("status") or "") == "not_entity"
+            )
+            if key not in auto_by_text and not globally_suppressed:
+                exact = self._resolve_existing_query_entity(text)
+                if exact:
+                    auto_by_text[key] = {
+                        **dict(exact),
+                        "text": text,
+                        "role": roles[index] if index < len(roles) else "",
+                    }
+            suggestions = (
+                [] if globally_suppressed
+                else self.find_entities(text, limit=max(1, min(int(limit), 20)))
+            )
             out.append({
                 "text": text,
                 "role": roles[index] if index < len(roles) else "",
-                "suppressed": key in suppressed,
+                "suppressed": key in suppressed or globally_suppressed,
+                "suppression_scope": (
+                    "global" if globally_suppressed
+                    else ("finding" if key in suppressed else "")
+                ),
+                "global_decision": decision,
                 "curated": curated_by_text.get(key),
                 "auto_resolved": auto_by_text.get(key),
                 "suggestions": suggestions,
             })
+        return out
+
+    def research_finding_claim_options(self, finding_id: str) -> list[dict[str, Any]]:
+        """Return ontology-admitted predicates for each ordered curated Entity pair."""
+        detail = self.research_finding_detail(finding_id)
+        if detail is None:
+            raise ValueError(f"Finding nicht gefunden: {finding_id}")
+        curated = [
+            dict(item)
+            for item in (detail.get("curated_entities") or [])
+            if item and item.get("entity_id")
+        ]
+        out: list[dict[str, Any]] = []
+        for subject in curated:
+            subject_id = str(subject.get("entity_id") or "")
+            subject_type = entity_type_from_labels(subject.get("labels"))
+            subject_kind = str(subject.get("entity_kind") or subject_type)
+            for obj in curated:
+                object_id = str(obj.get("entity_id") or "")
+                if not subject_id or not object_id or subject_id == object_id:
+                    continue
+                object_type = entity_type_from_labels(obj.get("labels"))
+                object_kind = str(obj.get("entity_kind") or object_type)
+                predicates = compatible_document_predicates(
+                    _RELATION_ONTOLOGY,
+                    subject_type=subject_type,
+                    subject_kind=subject_kind,
+                    object_type=object_type,
+                    object_kind=object_kind,
+                )
+                if not predicates:
+                    continue
+                out.append({
+                    "subject": {
+                        "entity_id": subject_id,
+                        "display_name": str(subject.get("display_name") or ""),
+                        "entity_type": subject_type,
+                        "entity_kind": subject_kind,
+                    },
+                    "object": {
+                        "entity_id": object_id,
+                        "display_name": str(obj.get("display_name") or ""),
+                        "entity_type": object_type,
+                        "entity_kind": object_kind,
+                    },
+                    "predicates": [
+                        {
+                            "id": name,
+                            "label": ontology_predicate_label(name, spec, language="de"),
+                            "description": str(spec.get("description") or ""),
+                        }
+                        for name, spec in predicates.items()
+                    ],
+                })
         return out
 
     def _create_manual_research_entity(self, *, display_name: str, entity_type: str, finding_id: str) -> dict[str, Any]:
@@ -4952,17 +5652,29 @@ class GraphStore:
         new_name: str = "",
         entity_type: str = "",
         reason: str = "",
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         detail = self.research_finding_detail(finding_id)
         if detail is None:
             raise ValueError(f"Finding nicht gefunden: {finding_id}")
         finding = dict(detail.get("finding") or {})
-        texts = [str(x).strip() for x in (finding.get("entity_texts") or []) if str(x or "").strip()]
+        candidates = merge_entity_candidates(
+            [
+                {"text": str(text or "").strip(), "role": str(role or "")}
+                for text, role in zip(
+                    finding.get("entity_texts") or [],
+                    list(finding.get("entity_roles") or []) + [""] * len(finding.get("entity_texts") or []),
+                )
+                if str(text or "").strip()
+            ],
+            evidence_entity_candidates(finding.get("evidence_frame_json") or ""),
+        )
+        texts = [item["text"] for item in candidates]
         text = str(entity_text or "").strip()
         if text not in texts:
             raise ValueError("Entity-Text gehört nicht zu diesem Finding")
         clean_action = str(action or "").strip().casefold()
-        if clean_action not in {"assign", "create", "suppress"}:
+        if clean_action not in {"assign", "assign_alias", "create", "suppress"}:
             raise ValueError(f"Ungültige Entity-Aktion: {action}")
         preview: dict[str, Any] = {
             "action": clean_action,
@@ -4972,13 +5684,20 @@ class GraphStore:
             "reason": str(reason or "").strip(),
             "effect": "Entity-Resolution + dokumentgebundene MENTION-Provenienz; keine globale Faktenkante.",
         }
-        if clean_action == "assign":
+        if clean_action in {"assign", "assign_alias"}:
             target = self._entity_curation_summary(str(target_entity_id or "").strip())
             if target is None:
                 raise ValueError("Ziel-Entity nicht gefunden")
             if str(target.get("identity_status") or "") in {"merged", "orphaned"}:
                 raise ValueError("Ziel-Entity ist nicht aktiv")
             preview["target"] = target
+            if clean_action == "assign_alias":
+                preview["alias"] = text
+                preview["alias_policy"] = "contextual"
+                preview["effect"] = (
+                    "Globale kontextuelle Aliasform anlegen und dieses Finding "
+                    "dokumentgebunden der Entity zuordnen."
+                )
         elif clean_action == "create":
             name = re.sub(r"\s+", " ", str(new_name or text)).strip()
             if not normalize_name(name):
@@ -4987,7 +5706,10 @@ class GraphStore:
                 raise ValueError("Bitte Entity-Typ Person oder Organization wählen")
             preview["new_entity"] = {"display_name": name, "entity_type": entity_type}
         else:
-            preview["effect"] = "Entity-Kandidat wird für dieses Finding als 'keine Entity' markiert; Provenienz bleibt erhalten."
+            preview["effect"] = (
+                "Die normalisierte Form wird global als 'keine Entity' markiert; "
+                "künftige Findings übernehmen diese Entscheidung. Provenienz bleibt erhalten."
+            )
         preview["note"] = "Preview; keine Änderung."
         return preview
 
@@ -5042,6 +5764,7 @@ class GraphStore:
         new_name: str = "",
         entity_type: str = "",
         reason: str = "",
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         preview = self.curate_research_finding_entity_preview(
             finding_id,
@@ -5057,6 +5780,34 @@ class GraphStore:
         finding = dict(detail.get("finding") or {})
         text = str(entity_text or "").strip()
         clean_action = str(action or "").strip().casefold()
+        prior_form_decision = self._entity_form_decision(text)
+        prior_alias_target = (
+            str((prior_form_decision or {}).get("target_entity_id") or "")
+            if str((prior_form_decision or {}).get("decision_kind") or "") == "alias"
+            else ""
+        )
+        finding_candidates = merge_entity_candidates(
+            [
+                {"text": str(text or "").strip(), "role": str(role or "")}
+                for text, role in zip(
+                    finding.get("entity_texts") or [],
+                    list(finding.get("entity_roles") or []) + [""] * len(finding.get("entity_texts") or []),
+                )
+                if str(text or "").strip()
+            ],
+            evidence_entity_candidates(finding.get("evidence_frame_json") or ""),
+        )
+        self._run(
+            """
+            MATCH (f:ResearchFinding {finding_id:$finding_id})
+            SET f.entity_texts=$entity_texts, f.entity_roles=$entity_roles, f.updated_at=datetime()
+            """,
+            finding_id=finding_id,
+            entity_texts=[item["text"] for item in finding_candidates],
+            entity_roles=[item["role"] for item in finding_candidates],
+        )
+        finding["entity_texts"] = [item["text"] for item in finding_candidates]
+        finding["entity_roles"] = [item["role"] for item in finding_candidates]
         observation_id = hashlib.sha256(
             f"research_finding\0{finding_id}\0{text.casefold()}".encode("utf-8", errors="replace")
         ).hexdigest()[:40]
@@ -5080,6 +5831,8 @@ class GraphStore:
                 DELETE ce
                 SET f.suppressed_entity_texts =
                     [x IN coalesce(f.suppressed_entity_texts,[]) WHERE toLower(x) <> toLower($entity_text)] + [$entity_text],
+                    f.curator_status='',
+                    f.curator_reason='',
                     f.updated_at=datetime()
                 MERGE (o:EntityObservation {observation_id:$observation_id})
                 ON CREATE SET o.created_at=datetime(), o.first_seen_at=datetime()
@@ -5108,19 +5861,47 @@ class GraphStore:
                 context_text=str(finding.get("intent") or "")[:1000],
                 normalized=normalize_name(text),
                 reason=str(reason or "research_finding_not_entity")[:1000],
+                curator_actor=str(curator_actor or "manual_admin")[:300],
+            )
+            if prior_alias_target:
+                self._remove_manual_alias_form(prior_alias_target, text)
+            self._set_entity_form_decision(
+                text,
+                status="not_entity",
+                reason=str(reason or "research_finding_not_entity"),
+                curator_actor=curator_actor,
+                decision_kind="not_entity",
             )
             if old_entity_id:
                 self._mark_research_finding_claims_for_review(finding_id, reason="finding_entity_suppressed")
             self._cleanup_document_mention_if_unsupported(document_id, old_entity_id, observation_id)
-            return {**preview, "status": "suppressed_entity", "observation_id": observation_id}
+            return {
+                **preview,
+                "status": "suppressed_entity",
+                "observation_id": observation_id,
+                "suppression_scope": "global_form",
+            }
 
         if clean_action == "create":
+            if prior_alias_target:
+                self._remove_manual_alias_form(prior_alias_target, text)
             created = self._create_manual_research_entity(
                 display_name=str(new_name or text),
                 entity_type=entity_type,
                 finding_id=finding_id,
             )
             target_entity_id = str(created["entity_id"])
+        elif clean_action == "assign_alias":
+            if prior_alias_target and prior_alias_target != str(target_entity_id or "").strip():
+                self._remove_manual_alias_form(prior_alias_target, text)
+            self.add_alias(
+                str(target_entity_id or "").strip(),
+                text,
+                policy="contextual",
+                weight=0.95,
+            )
+        if clean_action == "assign" and prior_alias_target:
+            self._remove_manual_alias_form(prior_alias_target, text)
         target = self._entity_curation_summary(str(target_entity_id or "").strip())
         if target is None:
             raise ValueError("Ziel-Entity nicht gefunden")
@@ -5142,10 +5923,12 @@ class GraphStore:
             DELETE old
             MERGE (f)-[ce:CURATED_ENTITY {frame_text:$entity_text}]->(target)
             SET ce.role=$role,
-                ce.curated_by='manual_admin',
+                ce.curated_by=$curator_actor,
                 ce.curated_at=datetime(),
                 ce.updated_at=datetime(),
                 f.suppressed_entity_texts = [x IN coalesce(f.suppressed_entity_texts,[]) WHERE toLower(x) <> toLower($entity_text)],
+                f.curator_status='',
+                f.curator_reason='',
                 f.updated_at=datetime()
             MERGE (o:EntityObservation {observation_id:$observation_id})
             ON CREATE SET o.created_at=datetime(), o.first_seen_at=datetime()
@@ -5168,6 +5951,7 @@ class GraphStore:
                 o.curator_status='research_finding_entity',
                 o.curator_target_entity_id=target.entity_id,
                 o.curator_reason=$reason,
+                o.curator_actor=$curator_actor,
                 o.curator_decided_at=datetime(),
                 o.candidate_entity_ids=[target.entity_id],
                 o.updated_at=datetime()
@@ -5191,16 +5975,75 @@ class GraphStore:
             normalized=normalize_name(text),
             suggested_type=suggested_type,
             reason=str(reason or "manual_research_finding_resolution")[:1000],
+            curator_actor=str(curator_actor or "manual_admin")[:300],
+        )
+        self._set_entity_form_decision(
+            text,
+            status="entity",
+            target_entity_id=str(target_entity_id),
+            reason=str(reason or (
+                "manual_alias_assignment" if clean_action == "assign_alias"
+                else "manual_research_finding_resolution"
+            )),
+            curator_actor=curator_actor,
+            decision_kind=(
+                "alias" if clean_action == "assign_alias"
+                else ("created" if clean_action == "create" else "assignment")
+            ),
         )
         if old_entity_id and old_entity_id != str(target_entity_id):
             self._mark_research_finding_claims_for_review(finding_id, reason="finding_entity_reassigned")
             self._cleanup_document_mention_if_unsupported(document_id, old_entity_id, observation_id)
         return {
             **preview,
-            "status": "resolved_entity",
+            "status": (
+                "resolved_entity_with_alias" if clean_action == "assign_alias"
+                else "resolved_entity"
+            ),
             "observation_id": observation_id,
             "target_entity_id": str(target_entity_id),
             "target_display_name": str(target.get("display_name") or ""),
+        }
+
+    def accept_research_finding_entity_defaults(
+        self,
+        finding_id: str,
+        *,
+        curator_actor: str = "manual_admin",
+    ) -> dict[str, Any]:
+        """Apply every pending unique exact-name or alias default in one action."""
+        applied: list[dict[str, str]] = []
+        for option in self.research_finding_entity_options(finding_id, limit=1):
+            target = option.get("auto_resolved")
+            if option.get("curated") or option.get("suppressed") or not target:
+                continue
+            result = self.curate_research_finding_entity(
+                finding_id,
+                entity_text=str(option.get("text") or ""),
+                action=(
+                    "assign_alias"
+                    if str(target.get("match_kind") or "") == "alias"
+                    else "assign"
+                ),
+                target_entity_id=str(target.get("entity_id") or ""),
+                reason=(
+                    "unique_alias_default"
+                    if str(target.get("match_kind") or "") == "alias"
+                    else "unique_exact_name_default"
+                ),
+                curator_actor=curator_actor,
+            )
+            applied.append({
+                "text": str(option.get("text") or ""),
+                "entity_id": str(result.get("target_entity_id") or ""),
+                "display_name": str(result.get("target_display_name") or ""),
+                "match_kind": str(target.get("match_kind") or "name"),
+            })
+        return {
+            "status": "entity_defaults_applied",
+            "finding_id": finding_id,
+            "applied_count": len(applied),
+            "applied": applied,
         }
 
     def research_finding_claim_preview(
@@ -5213,9 +6056,10 @@ class GraphStore:
         predicate_label: str = "",
         claim_text: str = "",
     ) -> dict[str, Any]:
-        predicate = str(predicate_id or "").strip().casefold().replace("-", "_")
-        if not re.fullmatch(r"[a-z][a-z0-9_]{1,79}", predicate):
-            raise ValueError("Predicate-ID muss sprachneutral sein, z.B. shareholder_of oder invoiced")
+        """Validate one manual claim against the versioned relation ontology."""
+        predicate = str(predicate_id or "").strip().replace("-", "_").upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", predicate):
+            raise ValueError("Predicate-ID ist ungültig")
         if subject_entity_id == object_entity_id:
             raise ValueError("Subject und Object müssen verschieden sein")
         rows = self._run(
@@ -5225,7 +6069,11 @@ class GraphStore:
             MATCH (f)-[:CURATED_ENTITY]->(object:Entity {entity_id:$object_entity_id})
             RETURN d.document_id AS document_id,
                    subject.display_name AS subject_name,
+                   labels(subject) AS subject_labels,
+                   coalesce(subject.entity_kind,'') AS subject_kind,
                    object.display_name AS object_name,
+                   labels(object) AS object_labels,
+                   coalesce(object.entity_kind,'') AS object_kind,
                    f.intent AS intent
             LIMIT 1
             """,
@@ -5236,6 +6084,27 @@ class GraphStore:
         if not rows:
             raise ValueError("Subject/Object müssen für dieses Finding kuratierte Entities sein")
         row = dict(rows[0])
+        subject_type = entity_type_from_labels(row.get("subject_labels"))
+        object_type = entity_type_from_labels(row.get("object_labels"))
+        subject_kind = str(row.get("subject_kind") or subject_type)
+        object_kind = str(row.get("object_kind") or object_type)
+        compatible = compatible_document_predicates(
+            _RELATION_ONTOLOGY,
+            subject_type=subject_type,
+            subject_kind=subject_kind,
+            object_type=object_type,
+            object_kind=object_kind,
+        )
+        spec = compatible.get(predicate)
+        if spec is None:
+            known = (_RELATION_ONTOLOGY.get("predicates") or {}).get(predicate)
+            if known is None:
+                raise ValueError(f"Predicate {predicate} ist nicht Teil der Relation-Ontologie")
+            raise ValueError(
+                f"Predicate {predicate} ist für {subject_type}/{subject_kind} -> "
+                f"{object_type}/{object_kind} nicht zugelassen"
+            )
+        canonical_label = ontology_predicate_label(predicate, spec, language="de")
         relation_id = hashlib.sha256(
             f"research_finding_claim\0{finding_id}\0{subject_entity_id}\0{predicate}\0{object_entity_id}".encode("utf-8")
         ).hexdigest()[:40]
@@ -5244,11 +6113,26 @@ class GraphStore:
             "finding_id": finding_id,
             "document_id": row.get("document_id"),
             "relation_id": relation_id,
-            "subject": {"entity_id": subject_entity_id, "display_name": row.get("subject_name")},
+            "subject": {
+                "entity_id": subject_entity_id,
+                "display_name": row.get("subject_name"),
+                "entity_type": subject_type,
+                "entity_kind": subject_kind,
+            },
             "predicate_id": predicate,
-            "predicate_label": str(predicate_label or predicate).strip(),
-            "object": {"entity_id": object_entity_id, "display_name": row.get("object_name")},
+            "predicate_label": canonical_label,
+            "object": {
+                "entity_id": object_entity_id,
+                "display_name": row.get("object_name"),
+                "entity_type": object_type,
+                "entity_kind": object_kind,
+            },
             "claim_text": str(claim_text or "").strip(),
+            "ontology": {
+                "name": str(_RELATION_ONTOLOGY.get("name") or ""),
+                "version": _RELATION_ONTOLOGY.get("version"),
+                "hash": str(_RELATION_ONTOLOGY.get("hash") or ""),
+            },
             "effect": "Erzeugt eine dokumentgebundene RelationObservation/Claim mit DERIVED_FROM_FINDING; noch keine globale Faktenkante.",
             "note": "Preview; keine Änderung.",
         }
@@ -5262,6 +6146,7 @@ class GraphStore:
         object_entity_id: str,
         predicate_label: str = "",
         claim_text: str = "",
+        curator_actor: str = "manual_admin",
     ) -> dict[str, Any]:
         preview = self.research_finding_claim_preview(
             finding_id,
@@ -5275,11 +6160,15 @@ class GraphStore:
         finding = dict(detail.get("finding") or {})
         relation_id = str(preview["relation_id"])
         predicate = str(preview["predicate_id"])
-        relation_text = str(claim_text or "").strip()
-        if not relation_text:
-            relation_text = f"{preview['subject']['display_name']} — {preview['predicate_label']} → {preview['object']['display_name']}"
+        canonical_label = str(preview["predicate_label"])
+        relation_text = (
+            f"{preview['subject']['display_name']} — {canonical_label} → "
+            f"{preview['object']['display_name']}"
+        )
+        curator_note = str(claim_text or "").strip()[:1000]
         evidence_frame = str(finding.get("evidence_frame_json") or "").strip()
-        evidence_summary = evidence_frame[:2000] if evidence_frame else str(relation_text).strip()[:2000]
+        evidence_summary = evidence_frame[:2000] if evidence_frame else relation_text[:2000]
+        ontology = dict(preview.get("ontology") or {})
         self._run(
             """
             MATCH (f:ResearchFinding {finding_id:$finding_id})-[support:SUPPORTED_BY]->(d:Document)
@@ -5292,12 +6181,20 @@ class GraphStore:
                 c.predicate_text=$predicate_label,
                 c.relation_text=$relation_text,
                 c.evidence_text=$evidence_text,
+                c.curator_note=$curator_note,
                 c.confidence=1.0,
                 c.stance='asserted',
                 c.chunk_index=0,
                 c.extractor='research_finding_curator',
                 c.curator_status='manual_claim',
+                c.curator_reason='ontology_curated',
+                c.curator_actor=$curator_actor,
+                c.review_reason=null,
+                c.review_required_at=null,
                 c.source_finding_id=$finding_id,
+                c.ontology_name=$ontology_name,
+                c.ontology_version=$ontology_version,
+                c.ontology_hash=$ontology_hash,
                 c.evidence_date=coalesce(properties(d)['source_date'],''),
                 c.evidence_date_precision=coalesce(properties(d)['source_date_precision'],''),
                 c.updated_at=datetime()
@@ -5306,18 +6203,102 @@ class GraphStore:
             MERGE (c)-[:SUBJECT]->(subject)
             MERGE (c)-[:OBJECT]->(object)
             MERGE (c)-[:DERIVED_FROM_FINDING]->(f)
-            SET f.updated_at=datetime()
+            SET f.curator_status='',
+                f.curator_reason='',
+                f.updated_at=datetime()
             """,
             finding_id=finding_id,
             subject_entity_id=subject_entity_id,
             object_entity_id=object_entity_id,
             relation_id=relation_id,
             predicate=predicate,
-            predicate_label=str(predicate_label or predicate).strip()[:300],
+            predicate_label=canonical_label[:300],
             relation_text=relation_text[:1000],
             evidence_text=evidence_summary,
+            curator_note=curator_note,
+            curator_actor=str(curator_actor or "manual_admin")[:300],
+            ontology_name=str(ontology.get("name") or "")[:200],
+            ontology_version=ontology.get("version"),
+            ontology_hash=str(ontology.get("hash") or "")[:100],
         )
         return {**preview, "status": "claim_created", "relation_id": relation_id}
+
+    def review_research_finding_claim(
+        self,
+        finding_id: str,
+        *,
+        relation_id: str,
+        action: str,
+        reason: str = "",
+        curator_actor: str = "manual_admin",
+    ) -> dict[str, Any]:
+        """Review or withdraw a manual finding claim without deleting provenance."""
+        detail = self.research_finding_detail(finding_id)
+        if detail is None:
+            raise ValueError(f"Finding nicht gefunden: {finding_id}")
+        claim = next(
+            (
+                dict(item)
+                for item in (detail.get("claims") or [])
+                if str((item or {}).get("relation_id") or "") == str(relation_id or "")
+            ),
+            None,
+        )
+        if claim is None:
+            raise ValueError("Claim nicht gefunden")
+
+        current_status = str(claim.get("curator_status") or "")
+        clean_action = str(action or "").strip().casefold()
+        if clean_action == "confirm":
+            if current_status != "review_required":
+                raise ValueError("Nur ein prüfpflichtiger Claim kann erneut bestätigt werden")
+            self.research_finding_claim_preview(
+                finding_id,
+                subject_entity_id=str(claim.get("subject_entity_id") or ""),
+                predicate_id=str(claim.get("predicate") or ""),
+                object_entity_id=str(claim.get("object_entity_id") or ""),
+            )
+            new_status = "manual_claim"
+            curator_reason = str(reason or "review_confirmed")[:1000]
+        elif clean_action == "dismiss":
+            if current_status != "review_required":
+                raise ValueError("Nur ein prüfpflichtiger Claim kann als überholt markiert werden")
+            new_status = "superseded"
+            curator_reason = str(reason or "review_superseded")[:1000]
+        elif clean_action == "withdraw":
+            if current_status not in {"manual_claim", "review_required"}:
+                raise ValueError("Nur ein aktiver oder prüfpflichtiger Claim kann zurückgenommen werden")
+            new_status = "withdrawn"
+            curator_reason = str(reason or "manually_withdrawn")[:1000]
+        else:
+            raise ValueError("Ungültige Claim-Aktion")
+
+        rows = self._run(
+            """
+            MATCH (c:RelationObservation {relation_id:$relation_id})-[:DERIVED_FROM_FINDING]->(f:ResearchFinding {finding_id:$finding_id})
+            SET c.curator_status=$status,
+                c.curator_reason=$reason,
+                c.curator_actor=$curator_actor,
+                c.review_reason=null,
+                c.review_required_at=null,
+                c.updated_at=datetime(),
+                f.updated_at=datetime()
+            RETURN c.relation_id AS relation_id, c.curator_status AS curator_status
+            """,
+            finding_id=finding_id,
+            relation_id=str(relation_id or ""),
+            status=new_status,
+            reason=curator_reason,
+            curator_actor=str(curator_actor or "manual_admin")[:300],
+        )
+        if not rows:
+            raise ValueError("Claim nicht gefunden")
+        return {
+            "action": clean_action,
+            "finding_id": finding_id,
+            "relation_id": str(relation_id or ""),
+            "curator_status": new_status,
+        }
 
     def document_research_findings(self, document_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._run(
@@ -5447,22 +6428,38 @@ class GraphStore:
         self,
         *,
         query: str = "",
-        status: str = "",
+        status: str = "needs_review",
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Curator-oriented global observation list for the browser UI.
+        """Curator-oriented observation list for the browser UI.
 
-        ``status`` may match either the extractor status or curator_status.
-        This is deliberately read-only and does not alter resolution.
+        needs_review is a derived work-queue state: only unresolved,
+        ambiguous, or provisional automatic observations without a human
+        decision are included. Other values match extractor status or
+        curator_status exactly. This is read-only and does not alter resolution.
         """
         needle = str(query or "").strip().casefold()
-        status = str(status or "").strip()
+        status = str(status or "needs_review").strip()
         rows = self._run(
             """
             MATCH (o:EntityObservation)
             OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
             OPTIONAL MATCH (o)-[:RESOLVED_TO]->(e:Entity)
-            WHERE ($status='' OR coalesce(properties(o)['status'],'')=$status OR coalesce(o.curator_status,'')=$status)
+            WHERE (
+                    $status='all'
+                    OR (
+                        $status='needs_review'
+                        AND coalesce(properties(o)['curator_status'],'')=''
+                        AND coalesce(properties(o)['status'],'') IN ['created_provisional','ambiguous','unresolved']
+                    )
+                    OR (
+                        $status <> 'all' AND $status <> 'needs_review'
+                        AND (
+                            coalesce(properties(o)['status'],'')=$status
+                            OR coalesce(properties(o)['curator_status'],'')=$status
+                        )
+                    )
+                  )
               AND ($needle=''
                    OR toLower(coalesce(properties(o)['observed_text'],'')) CONTAINS $needle
                    OR toLower(coalesce(properties(o)['canonical_name'],'')) CONTAINS $needle
@@ -5495,11 +6492,65 @@ class GraphStore:
             status=status,
             limit=max(1, min(int(limit), 2000)),
         )
-        return [dict(row) for row in rows]
+        status_labels = {
+            "resolved_existing": "automatisch eindeutig",
+            "created_provisional": "provisional erzeugt",
+            "ambiguous": "mehrdeutig",
+            "unresolved": "nicht aufgelöst",
+            "rejected": "verworfen",
+            "corrected": "manuell aufgelöst",
+        }
+        curator_labels = {
+            "research_finding_entity": "im Finding bestätigt",
+            "corrected_observation": "manuell korrigiert",
+            "manual_not_entity": "manuell Non-Entity",
+        }
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            extractor_status = str(item.get("status") or "")
+            curator_status = str(item.get("curator_status") or "")
+            item["needs_review"] = (
+                not curator_status
+                and extractor_status in {"created_provisional", "ambiguous", "unresolved"}
+            )
+            if status == "needs_review" and not item["needs_review"]:
+                continue
+            if (
+                status not in {"all", "needs_review"}
+                and status not in {extractor_status, curator_status}
+            ):
+                continue
+            item["status_label"] = status_labels.get(extractor_status, extractor_status or "—")
+            item["curator_status_label"] = curator_labels.get(curator_status, curator_status or "—")
+            out.append(item)
+        return out
 
     def observation_detail(self, observation_id: str) -> dict[str, Any] | None:
         """Public read-only wrapper used by GraphCurator/admin UI."""
-        return self._observation_curation_summary(observation_id)
+        row = self._observation_curation_summary(observation_id)
+        if row is None:
+            return None
+        extractor_status = str(row.get("status") or "")
+        curator_status = str(row.get("curator_status") or "")
+        row["needs_review"] = (
+            not curator_status
+            and extractor_status in {"created_provisional", "ambiguous", "unresolved"}
+        )
+        row["status_label"] = {
+            "resolved_existing": "automatisch eindeutig",
+            "created_provisional": "provisional erzeugt",
+            "ambiguous": "mehrdeutig",
+            "unresolved": "nicht aufgelöst",
+            "rejected": "verworfen",
+            "corrected": "manuell aufgelöst",
+        }.get(extractor_status, extractor_status or "—")
+        row["curator_status_label"] = {
+            "research_finding_entity": "im Finding bestätigt",
+            "corrected_observation": "manuell korrigiert",
+            "manual_not_entity": "manuell Non-Entity",
+        }.get(curator_status, curator_status or "—")
+        return row
 
     def _observation_curation_summary(self, observation_id: str) -> dict[str, Any] | None:
         rows = self._run(

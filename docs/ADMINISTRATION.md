@@ -11,6 +11,7 @@ The reverse proxy reserves paths by role:
 ```text
 /             selected user UI (OpenWebUI is optional)
 /rag-admin/   protected RAG administration
+/curation/    optional Nextcloud-authenticated end-user Findings curation
 /rag-api/     protected middleware API/diagnostics
 /v1/          OpenAI-compatible provider (Bearer-authenticated)
 /auth/        Nextcloud Login Flow endpoints
@@ -75,13 +76,51 @@ sudo -u rag ./.venv/bin/python -m rag.user_admin set-mail-password demo-user
 
 Use `--server https://cloud.example/nextcloud` if the same login exists on more
 than one Nextcloud instance. `reauth` removes only the user's frontend-scoped
-Nextcloud app passwords/pending flows; the internal canonical user, bindings and Mail/Web/Kontakt-DB
+Nextcloud app passwords/pending flows; the internal canonical user, bindings and Mail/Web/Contact-DB
 settings remain. The next frontend request starts Login Flow v2 again.
+
+### Do not impersonate a user during first authorization
+
+A Nextcloud administrator should **not** enter or imitate another user's identity in a frontend and then complete that user's first AKI/Nextcloud authorization from the administrator's browser/session. The frontend identity is part of the binding key:
+
+```text
+client_id::external_user_id -> canonical Nextcloud user
+```
+
+If the administrator initiates that first authorization under the administrator's frontend identity while authenticating to Nextcloud as another user, the other user's Nextcloud login becomes bound to the administrator's frontend ID.
+
+The current release does not provide a supported Admin-UI/CLI operation that safely reassigns such an incorrect frontend identity binding. Repair currently requires direct manipulation of `runtime/users.sqlite`, which should be treated as an emergency procedure only.
+
+For normal onboarding, the actual user should open the configured frontend/app under their own frontend identity and complete Nextcloud Login Flow themselves. Administrators may configure clients and user-independent settings beforehand, but should not perform the user's first identity authorization on their behalf.
 
 The Mail password command prompts through the terminal and does not print the
 secret. In the Admin UI, Mail account configuration and the IMAP credential are
 separate forms. The stored credential is never returned or pre-filled; replacing
 it requires an explicit credential POST.
+
+## 3.1 Research Findings curation access
+
+Research Findings can be curated centrally by RAG administrators and, optionally, by selected Nextcloud users.
+
+```yaml
+research_findings:
+  curation:
+    admin_user_context: true
+    user_self_service: false
+    session_max_seconds: 7200
+```
+
+`admin_user_context` controls whether the protected RAG Admin may select a canonical user and curate that user's ResearchRuns. The Admin view uses that user's existing stored Nextcloud credential for the live ACL check; selecting a user does not create a new identity binding.
+
+`user_self_service` exposes `/curation/` without the RAG-Admin Basic-Auth layer. It is disabled by default. Each canonical user also has a separate **Findings curation** permission in RAG Admin → Users; normal research access does not imply permission to modify shared Graph-Lite knowledge.
+
+Self-service authentication uses Nextcloud Login Flow v2 once per curation session. No RAG user password exists. A successful flow creates a temporary Nextcloud app password which is stored only in the encrypted `curation_sessions` table.
+
+The default absolute session lifetime is two hours. `session_max_seconds` is configurable; request activity does not extend it. Every request re-checks expiry, canonical-user enablement and the per-user curation permission.
+
+At logout/expiry the session is invalidated locally before Nextcloud app-password revocation is attempted. Failed revocations stay `revocation_pending` and cannot authorize requests. On every API start all surviving temporary curation sessions are invalidated and their app passwords are submitted for revocation again.
+
+The self-service cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and scoped to `/curation/`. State-changing operations additionally carry a server-side session-bound CSRF token.
 
 ## 4. Credential encryption administration
 
@@ -123,6 +162,7 @@ canonical_user_id (PK)
 nextcloud_server
 nextcloud_login
 enabled
+findings_curation_enabled
 created_at / updated_at / last_seen_at
 UNIQUE(nextcloud_server, nextcloud_login)
 ```
@@ -173,6 +213,25 @@ additional data to their user/service/account identity.
 
 Pending Nextcloud Login Flow v2 state, keyed by `flow_id` and scoped
 `rag_user_id`.
+
+### `curation_sessions`
+
+Ephemeral self-service Findings sessions. These are deliberately separate from normal provider credentials:
+
+```text
+session_id_hash (PK)
+canonical_user_id (FK)
+nextcloud_server
+nextcloud_login
+app_password          # AES-256-GCM encrypted
+csrf_token
+state                 # active | revocation_pending
+created_at
+expires_at
+last_seen_at
+```
+
+The browser receives only the random session token; SQLite stores its SHA-256 hash. The temporary Nextcloud app password is never inserted into `credentials(service='nextcloud')` and does not create an `identity_bindings` entry.
 
 ### `mail_accounts`
 
@@ -336,7 +395,7 @@ Canonical round/budget settings live in `config.yaml` under the legacy-named
 `retrieval_planner` section; `MAX_RETRIEVAL_ROUNDS` in `provider.env` remains
 only a compatibility fallback if the YAML key is absent. The section name is
 retained to avoid configuration churn, but the normal path no longer uses the
-old RC8 multi-probe planner.
+historical multi-probe planner.
 
 Current reference policy:
 
@@ -375,7 +434,10 @@ analysis fields -> verifier + Graph-Light provenance
 
 The resulting candidate lists are fused, deduplicated and optionally reranked.
 Live Nextcloud ACL then removes unauthorized candidates. No lower-ranked
-candidates are backfilled after an ACL denial. The optional Candidate Verifier
+candidates are adaptively fetched/backfilled after an ACL denial. This means a
+narrowly authorized user may receive fewer results even when an authorized
+candidate existed just below the final ranking window. A fixed pre-rerank ACL
+pool is a possible future optimization; it is not the current path. The optional Candidate Verifier
 checks only the administrator-controlled authorized-candidate window. For a
 requested document type the document itself must be of that type; a bank
 statement that merely mentions an invoice is not an invoice match.
@@ -576,6 +638,18 @@ navigation rather than requiring a manual URL.
 
 `ResearchFinding:AKIResearchFinding` nodes are visible in **Graph → Findings** with their query/evidence frame, verification/provenance and supporting document. The default view shows open findings grouped by unresolved entity text. Administrators can curate individual rows or use checkbox-based bulk assignment / bulk not-an-entity decisions; findings without any entity text can be suppressed as a batch without deleting provenance.
 
-A confirmed entity decision creates document-grounded observation/mention provenance. With at least two curated entities an administrator may create a manual document-grounded `RelationObservation` claim. RC3 still does **not** convert a Finding or Claim into a global Entity relation or query-expansion edge automatically. See `GRAPHLIGHT-FINDINGS.md`.
+A confirmed entity decision creates document-grounded observation/mention provenance. With at least two curated entities an administrator may create a manual document-grounded `RelationObservation` claim. The current release does **not** convert a Finding or Claim into a global Entity relation or query-expansion edge automatically. See `GRAPHLIGHT-FINDINGS.md`.
 
-Personal `Mailarchiv/`, `Webarchiv/` and `AKI-Chats/` content is initially private because it is stored in the owning user's Nextcloud file tree. Sharing folders through normal Nextcloud shares is the supported collaboration mechanism; retrieval still performs the live ACL check for the querying user.
+Finding curation is shared work. Equivalent Findings coalesce so later authorized users can reuse existing curator decisions. Per-user provenance is represented by `CanonicalUser -> ResearchRun -> ResearchFinding`, and the Admin Findings/Observations/Relations views require a selected canonical-user context. Supporting documents are checked live with that selected user's Nextcloud credential before EvidenceFrame/document details are rendered.
+
+RAG Admin remains a **trusted operator surface** rather than a personal Nextcloud-user surface: the administrator may deliberately switch canonical-user context and inspect evidence visible to that selected user. This is not a missing live-ACL check, but it also is not tenant isolation against the RAG administrator. Do not expose `/rag-admin/` to ordinary users. End-user `/curation/` is separately authenticated through Nextcloud Login Flow and currently limits users to their own ResearchRuns.
+
+Personal `Mailarchiv/`, `Webarchiv/` and `AKI-Chats/` content is initially private because it is stored in the owning user's Nextcloud file tree. Sharing folders through normal Nextcloud shares is the supported collaboration mechanism; retrieval still performs the live ACL check for the querying user. `/chatarchive` is optional: it is useful as retained working memory, but a saved chat can contain copied/derived text whose lifecycle is independent from the original source document. See `THREAT-MODEL.md` and `DATA-LIFECYCLE.md`.
+
+
+## Security/lifecycle operator notes
+
+- `/health` exposes `live_acl.enabled` and the configured identity mode. `acl.enabled=false` is a lab/diagnostic state, not a safe shared-corpus mode.
+- Mail, Web and Chat content may be untrusted/instruction-like text; do not treat successful extraction as a security trust signal.
+- There is no unified cross-store document/person purge command in 0.8.5. See `DATA-LIFECYCLE.md` before defining retention/deletion procedures.
+- For the engineering threat model and the shared-alias/evidence distinction, see `THREAT-MODEL.md`.
