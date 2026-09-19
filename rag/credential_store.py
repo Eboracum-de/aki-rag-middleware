@@ -110,6 +110,7 @@ class CanonicalUser:
     created_at: float
     updated_at: float
     last_seen_at: float
+    findings_curation_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,20 @@ class IdentityBinding:
     canonical_user_id: str
     created_at: float
     updated_at: float
+
+
+@dataclass(frozen=True)
+class CurationSession:
+    session_id_hash: str
+    canonical_user_id: str
+    nextcloud_server: str
+    nextcloud_login: str
+    app_password: str
+    csrf_token: str
+    state: str
+    created_at: float
+    expires_at: float
+    last_seen_at: float
 
 
 @dataclass(frozen=True)
@@ -186,6 +201,10 @@ class CredentialStore:
     def _flow_aad(flow_id: str, rag_user_id: str) -> str:
         return f"nextcloud-flow|{flow_id}|{rag_user_id}"
 
+    @staticmethod
+    def _curation_session_aad(session_id_hash: str, canonical_user_id: str) -> str:
+        return f"curation-session|{session_id_hash}|{canonical_user_id}"
+
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15)
         con.row_factory = sqlite3.Row
@@ -249,6 +268,22 @@ class CredentialStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_identity_bindings_canonical
                     ON identity_bindings(canonical_user_id);
+                CREATE TABLE IF NOT EXISTS curation_sessions (
+                    session_id_hash TEXT PRIMARY KEY,
+                    canonical_user_id TEXT NOT NULL,
+                    nextcloud_server TEXT NOT NULL,
+                    nextcloud_login TEXT NOT NULL,
+                    app_password TEXT NOT NULL,
+                    csrf_token TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    last_seen_at REAL NOT NULL,
+                    FOREIGN KEY(canonical_user_id) REFERENCES canonical_users(canonical_user_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_curation_sessions_user
+                    ON curation_sessions(canonical_user_id,state,expires_at);
                 CREATE TABLE IF NOT EXISTS mail_accounts (
                     account_id TEXT PRIMARY KEY,
                     canonical_user_id TEXT NOT NULL,
@@ -322,6 +357,14 @@ class CredentialStore:
             if "eml_target_path" not in mail_columns:
                 con.execute("ALTER TABLE mail_accounts ADD COLUMN eml_target_path TEXT NOT NULL DEFAULT ''")
 
+            curation_columns = {str(row[1]) for row in con.execute("PRAGMA table_info(curation_sessions)").fetchall()}
+            if "csrf_token" not in curation_columns:
+                con.execute("ALTER TABLE curation_sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''")
+
+            user_columns = {str(row[1]) for row in con.execute("PRAGMA table_info(canonical_users)").fetchall()}
+            if "findings_curation_enabled" not in user_columns:
+                con.execute("ALTER TABLE canonical_users ADD COLUMN findings_curation_enabled INTEGER NOT NULL DEFAULT 0")
+
             # Preserve every mail archive root ever used. Existing installations
             # are backfilled here; deleting/reconfiguring an IMAP account must not
             # make already archived mail indistinguishable from ordinary files.
@@ -369,8 +412,12 @@ class CredentialStore:
             flow_rows = con.execute(
                 "SELECT flow_id,rag_user_id,poll_token FROM nextcloud_login_flows"
             ).fetchall()
+            curation_rows = con.execute(
+                "SELECT session_id_hash,canonical_user_id,app_password FROM curation_sessions"
+            ).fetchall()
         encrypted_credentials = sum(1 for row in credential_rows if is_encrypted(str(row["secret"])))
         encrypted_flows = sum(1 for row in flow_rows if is_encrypted(str(row["poll_token"])))
+        encrypted_curation = sum(1 for row in curation_rows if is_encrypted(str(row["app_password"])))
         return {
             "encryption_mode": self._crypto.mode,
             "master_key": key_file_status(self._crypto.key_path),
@@ -380,6 +427,9 @@ class CredentialStore:
             "flows_total": len(flow_rows),
             "flows_encrypted": encrypted_flows,
             "flows_plaintext": len(flow_rows) - encrypted_flows,
+            "curation_sessions_total": len(curation_rows),
+            "curation_sessions_encrypted": encrypted_curation,
+            "curation_sessions_plaintext": len(curation_rows) - encrypted_curation,
         }
 
     def migrate_plaintext_secrets(self) -> dict[str, int]:
@@ -387,6 +437,7 @@ class CredentialStore:
             raise RuntimeError("master key is required before plaintext secrets can be migrated")
         credentials_changed = 0
         flows_changed = 0
+        curation_changed = 0
         with self._connect() as con:
             rows = con.execute("SELECT rag_user_id,service,account_id,secret FROM credentials").fetchall()
             for row in rows:
@@ -409,7 +460,23 @@ class CredentialStore:
                 encrypted = self._crypto.encrypt(value, aad=self._flow_aad(flow_id, user))
                 con.execute("UPDATE nextcloud_login_flows SET poll_token=? WHERE flow_id=?", (encrypted, flow_id))
                 flows_changed += 1
-        return {"credentials": credentials_changed, "flows": flows_changed}
+            rows = con.execute(
+                "SELECT session_id_hash,canonical_user_id,app_password FROM curation_sessions"
+            ).fetchall()
+            for row in rows:
+                value = str(row["app_password"] or "")
+                if is_encrypted(value):
+                    continue
+                digest = str(row["session_id_hash"]); user_id = str(row["canonical_user_id"])
+                encrypted = self._crypto.encrypt(
+                    value, aad=self._curation_session_aad(digest, user_id)
+                )
+                con.execute(
+                    "UPDATE curation_sessions SET app_password=? WHERE session_id_hash=?",
+                    (encrypted, digest),
+                )
+                curation_changed += 1
+        return {"credentials": credentials_changed, "flows": flows_changed, "curation_sessions": curation_changed}
 
     def verify_secret_encryption(self) -> dict[str, object]:
         status = self.secret_security_status()
@@ -425,8 +492,18 @@ class CredentialStore:
                     self._flow_from_row(row)
                 except Exception as exc:
                     errors.append(f"login flow {row['flow_id']}: {exc}")
+            for row in con.execute("SELECT * FROM curation_sessions").fetchall():
+                try:
+                    self._curation_session_from_row(row)
+                except Exception as exc:
+                    errors.append(f"curation session {row['session_id_hash']}: {exc}")
         status["errors"] = errors
-        status["ok"] = not errors and int(status["credentials_plaintext"]) == 0 and int(status["flows_plaintext"]) == 0
+        status["ok"] = (
+            not errors
+            and int(status["credentials_plaintext"]) == 0
+            and int(status["flows_plaintext"]) == 0
+            and int(status["curation_sessions_plaintext"]) == 0
+        )
         return status
 
     # ------------------------------------------------------------------
@@ -678,6 +755,7 @@ class CredentialStore:
             created_at=float(row["created_at"]),
             updated_at=float(row["updated_at"]),
             last_seen_at=float(row["last_seen_at"]),
+            findings_curation_enabled=bool(row["findings_curation_enabled"]) if "findings_curation_enabled" in row.keys() else False,
         )
 
     def ensure_canonical_user(self, server: str, login: str) -> CanonicalUser:
@@ -790,6 +868,138 @@ class CredentialStore:
                 (int(bool(enabled)), time.time(), str(canonical_user_id or "").strip()),
             )
             return cur.rowcount > 0
+
+    def set_findings_curation_enabled(self, canonical_user_id: str, enabled: bool) -> bool:
+        with self._connect() as con:
+            cur = con.execute(
+                "UPDATE canonical_users SET findings_curation_enabled=?,updated_at=? WHERE canonical_user_id=?",
+                (int(bool(enabled)), time.time(), str(canonical_user_id or "").strip()),
+            )
+            return cur.rowcount > 0
+
+    @staticmethod
+    def curation_session_hash(session_token: str) -> str:
+        return hashlib.sha256(str(session_token or "").encode("utf-8")).hexdigest()
+
+    def create_curation_session(
+        self,
+        *,
+        canonical_user_id: str,
+        nextcloud_server: str,
+        nextcloud_login: str,
+        app_password: str,
+        lifetime_seconds: float,
+    ) -> tuple[str, CurationSession]:
+        if not self._crypto.enabled:
+            raise RuntimeError("encrypted credential master key is required for curation sessions")
+        user = self.get_canonical_user(canonical_user_id)
+        if user is None:
+            raise ValueError("unknown canonical user")
+        if not user.enabled:
+            raise ValueError("canonical user is disabled")
+        if not user.findings_curation_enabled:
+            raise PermissionError("findings curation is not enabled for this user")
+        token = secrets.token_urlsafe(32)
+        digest = self.curation_session_hash(token)
+        now = time.time()
+        expires = now + max(60.0, float(lifetime_seconds))
+        encrypted = self._crypto.encrypt(
+            str(app_password),
+            aad=self._curation_session_aad(digest, canonical_user_id),
+        )
+        csrf_token = secrets.token_urlsafe(24)
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO curation_sessions(
+                    session_id_hash,canonical_user_id,nextcloud_server,nextcloud_login,
+                    app_password,csrf_token,state,created_at,expires_at,last_seen_at
+                ) VALUES(?,?,?,?,?,?,'active',?,?,?)
+                """,
+                (
+                    digest, canonical_user_id, normalize_nextcloud_server(nextcloud_server),
+                    str(nextcloud_login or "").strip(), encrypted, csrf_token, now, expires, now,
+                ),
+            )
+        session = self.get_curation_session(token, touch=False)
+        assert session is not None
+        return token, session
+
+    def _curation_session_from_row(self, row: sqlite3.Row | None) -> CurationSession | None:
+        if row is None:
+            return None
+        digest = str(row["session_id_hash"])
+        user_id = str(row["canonical_user_id"])
+        secret = self._crypto.decrypt(
+            str(row["app_password"]),
+            aad=self._curation_session_aad(digest, user_id),
+        )
+        return CurationSession(
+            session_id_hash=digest,
+            canonical_user_id=user_id,
+            nextcloud_server=str(row["nextcloud_server"]),
+            nextcloud_login=str(row["nextcloud_login"]),
+            app_password=secret,
+            csrf_token=str(row["csrf_token"] or ""),
+            state=str(row["state"]),
+            created_at=float(row["created_at"]),
+            expires_at=float(row["expires_at"]),
+            last_seen_at=float(row["last_seen_at"]),
+        )
+
+    def get_curation_session_any(self, session_token: str) -> CurationSession | None:
+        digest = self.curation_session_hash(session_token)
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM curation_sessions WHERE session_id_hash=?",
+                (digest,),
+            ).fetchone()
+        return self._curation_session_from_row(row)
+
+    def get_curation_session(self, session_token: str, *, touch: bool = True) -> CurationSession | None:
+        digest = self.curation_session_hash(session_token)
+        now = time.time()
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM curation_sessions WHERE session_id_hash=?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                return None
+            if str(row["state"]) != "active" or float(row["expires_at"]) <= now:
+                return None
+            if touch:
+                con.execute(
+                    "UPDATE curation_sessions SET last_seen_at=? WHERE session_id_hash=?",
+                    (now, digest),
+                )
+                row = con.execute(
+                    "SELECT * FROM curation_sessions WHERE session_id_hash=?",
+                    (digest,),
+                ).fetchone()
+        return self._curation_session_from_row(row)
+
+    def mark_curation_session_revocation_pending(self, session_id_hash: str) -> None:
+        with self._connect() as con:
+            con.execute(
+                "UPDATE curation_sessions SET state='revocation_pending' WHERE session_id_hash=?",
+                (str(session_id_hash or "").strip(),),
+            )
+
+    def delete_curation_session_by_hash(self, session_id_hash: str) -> bool:
+        with self._connect() as con:
+            cur = con.execute(
+                "DELETE FROM curation_sessions WHERE session_id_hash=?",
+                (str(session_id_hash or "").strip(),),
+            )
+            return cur.rowcount > 0
+
+    def list_curation_sessions(self) -> list[CurationSession]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT * FROM curation_sessions ORDER BY created_at"
+            ).fetchall()
+        return [x for x in (self._curation_session_from_row(row) for row in rows) if x is not None]
 
     def list_bindings(self, canonical_user_id: str) -> list[IdentityBinding]:
         with self._connect() as con:

@@ -14,7 +14,7 @@ fetch:
   max_redirects: 5
   max_bytes: 15000000
   max_text_chars: 300000
-  user_agent: AKI-RAG-WebEvidence/0.8.5-rc3
+  user_agent: AKI-RAG-WebEvidence/0.8.5-rc4
   allow_private: false
 relevance:
   api_key_env: WEB_LLM_API_KEY

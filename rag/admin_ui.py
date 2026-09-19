@@ -26,10 +26,12 @@ from starlette.templating import Jinja2Templates
 
 from rag.curator import GraphCurator
 from rag.graph import cfg_get
+from rag.research_findings import evidence_frame_view
 from rag.graph_queue import GraphQueue
 from rag.credential_store import CredentialStore, canonical_credential_owner
 from rag.carddav_sync import CardDAVClient, CardDAVSettings, sync_for_canonical_user
 from rag.mail_sync import probe_mailboxes
+from rag.acl import NextcloudLiveAcl
 
 
 POLICIES = ("exclusive", "contextual", "search_only", "document_only")
@@ -68,6 +70,41 @@ def _label_type(labels: Any) -> str:
     return "Entity"
 
 
+def _filter_suppressed_evidence(
+    view: dict[str, Any], suppressed_entity_texts: list[str] | None
+) -> dict[str, Any]:
+    """Hide rejected entity candidates from the curated evidence view.
+
+    The immutable verifier JSON remains available as raw provenance.
+    """
+    suppressed = {
+        str(value or "").strip().casefold()
+        for value in (suppressed_entity_texts or [])
+        if str(value or "").strip()
+    }
+    if not suppressed:
+        return view
+
+    def item_text(item: dict[str, Any]) -> str:
+        return str(item.get("text") or item.get("name") or item.get("value") or "").strip()
+
+    clean = dict(view)
+    for key in ("entities", "mentioned_entities"):
+        clean[key] = [
+            dict(item) for item in (view.get(key) or [])
+            if item_text(item).casefold() not in suppressed
+        ]
+    clean["relations"] = [
+        dict(item) for item in (view.get("relations") or [])
+        if str(item.get("source") or item.get("subject") or "").strip().casefold() not in suppressed
+        and str(item.get("target") or item.get("object") or "").strip().casefold() not in suppressed
+    ]
+    clean["has_content"] = any(
+        clean.get(key) for key in ("concepts", "constraints", "entities", "mentioned_entities", "relations")
+    )
+    return clean
+
+
 def _queue_contact_relink(queue: GraphQueue, document_ids: list[str], *, reason: str, priority: str = "high") -> dict[str, Any]:
     ids = [str(x).strip() for x in document_ids if str(x or "").strip()]
     if not ids:
@@ -101,6 +138,12 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     ).strip().rstrip("/")
     user_store = CredentialStore(
         str(cfg_get(cfg, "auth.credential_store", default=cfg_get(cfg, "acl.credential_store", default="runtime/users.sqlite")) or "runtime/users.sqlite")
+    )
+    curation_acl = NextcloudLiveAcl(cfg)
+    admin_user_context_enabled = bool(cfg_get(cfg, "research_findings.curation.admin_user_context", default=True))
+    user_self_service_enabled = bool(cfg_get(cfg, "research_findings.curation.user_self_service", default=False))
+    curation_session_max_seconds = max(
+        300, int(cfg_get(cfg, "research_findings.curation.session_max_seconds", default=7200) or 7200)
     )
 
     contact_sync_lock = threading.Lock()
@@ -492,6 +535,8 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             has_nextcloud_credential=user_store.get_nextcloud_credential_for_canonical_user(canonical_user_id) is not None,
             mail_engine_enabled=bool(cfg_get(cfg, "mail.enabled", default=False)),
             web_engine_enabled=bool((web_cfg or {}).get("enabled", False)),
+            user_self_service_enabled=user_self_service_enabled,
+            curation_session_max_seconds=curation_session_max_seconds,
         )
 
     @router.post("/users/{canonical_user_id}/reauth", name="admin_user_reauth", dependencies=auth)
@@ -514,6 +559,17 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         return redirect(
             str(request.app.url_path_for("admin_user_detail", canonical_user_id=canonical_user_id)),
             "Benutzer aktiviert" if enabled_value else "Benutzer deaktiviert",
+        )
+
+    @router.post("/users/{canonical_user_id}/findings-curation", name="admin_user_findings_curation", dependencies=auth)
+    async def admin_user_findings_curation(request: Request, canonical_user_id: str):
+        data = await form_data(request)
+        enabled_value = data.get("enabled") == "on"
+        if not user_store.set_findings_curation_enabled(canonical_user_id, enabled_value):
+            raise HTTPException(status_code=404, detail="Unbekannter kanonischer Benutzer")
+        return redirect(
+            str(request.app.url_path_for("admin_user_detail", canonical_user_id=canonical_user_id)),
+            "Findings-Kuration für Benutzer aktiviert" if enabled_value else "Findings-Kuration für Benutzer deaktiviert",
         )
 
     @router.post("/users/{canonical_user_id}/web", name="admin_user_web", dependencies=auth)
@@ -726,6 +782,96 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         except Exception as exc:
             return error_page(request, exc)
 
+    def _acl_filter_findings_for_canonical_user(
+        canonical_user_id: str,
+        findings: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], str]:
+        if not curation_acl.enabled:
+            return [], "Live ACL ist deaktiviert; nutzerbezogene Findings werden nicht angezeigt."
+        user = user_store.get_canonical_user(canonical_user_id)
+        if user is None or not user.enabled:
+            return [], "Nextcloud-Benutzer ist unbekannt oder deaktiviert."
+        credential = user_store.get_nextcloud_credential_for_canonical_user(canonical_user_id)
+        if credential is None:
+            return [], "Kein aktuelles Nextcloud-Credential für Live-ACL vorhanden."
+        candidates = [
+            {"document_id": str(item.get("document_id") or ""), "_finding_id": str(item.get("finding_id") or "")}
+            for item in findings
+            if str(item.get("document_id") or "").strip()
+        ]
+        if not candidates:
+            return [], ""
+        decision = curation_acl.authorize_with_credential(
+            candidates, username=credential.username, password=credential.secret
+        )
+        allowed = {str(item.get("_finding_id") or "") for item in decision.results}
+        return [item for item in findings if str(item.get("finding_id") or "") in allowed], ""
+
+    def _acl_filter_document_rows_for_canonical_user(
+        canonical_user_id: str,
+        rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Apply the selected user's current Nextcloud ACL to document-bound rows."""
+        if not admin_user_context_enabled:
+            return [], "Admin user-context curation is disabled by configuration."
+        if not curation_acl.enabled:
+            return [], "Live ACL ist deaktiviert; dokumentgebundene Graph-Daten werden nicht angezeigt."
+        user = user_store.get_canonical_user(canonical_user_id)
+        if user is None or not user.enabled:
+            return [], "Nextcloud-Benutzer ist unbekannt oder deaktiviert."
+        credential = user_store.get_nextcloud_credential_for_canonical_user(canonical_user_id)
+        if credential is None:
+            return [], "Kein aktuelles Nextcloud-Credential für Live-ACL vorhanden."
+        indexed = [
+            {
+                "document_id": str(item.get("document_id") or ""),
+                "_scope_row_id": str(index),
+            }
+            for index, item in enumerate(rows)
+            if str(item.get("document_id") or "").strip()
+        ]
+        if not indexed:
+            return [], ""
+        decision = curation_acl.authorize_with_credential(
+            indexed, username=credential.username, password=credential.secret
+        )
+        allowed = {str(item.get("_scope_row_id") or "") for item in decision.results}
+        return [item for index, item in enumerate(rows) if str(index) in allowed], ""
+
+    def _require_admin_finding_context(canonical_user_id: str, finding_id: str) -> None:
+        if not admin_user_context_enabled:
+            raise HTTPException(status_code=403, detail="Admin user-context curation is disabled")
+        with GraphCurator.from_config(cfg) as curator:
+            if not curator.research_finding_observed_by_user(canonical_user_id, finding_id):
+                raise HTTPException(status_code=404, detail="Finding was not observed by the selected user")
+            rows = [row for row in curator.list_research_findings(limit=2000) if str(row.get("finding_id") or "") == finding_id]
+        visible, error = _acl_filter_findings_for_canonical_user(canonical_user_id, rows)
+        if error:
+            raise HTTPException(status_code=403, detail=error)
+        if not visible:
+            raise HTTPException(status_code=404, detail="Finding is not visible in the selected Nextcloud user context")
+
+    def _require_admin_research_run_context(canonical_user_id: str, run_id: str) -> dict[str, Any]:
+        if not admin_user_context_enabled:
+            raise HTTPException(status_code=403, detail="Admin user-context curation is disabled")
+        user = user_store.get_canonical_user(canonical_user_id)
+        if user is None or not user.enabled:
+            raise HTTPException(status_code=404, detail="Unknown or disabled Nextcloud user")
+        with GraphCurator.from_config(cfg) as curator:
+            run = curator.get_research_run(run_id)
+        if run is None or str(run.get("canonical_user_id") or "") != canonical_user_id:
+            raise HTTPException(status_code=404, detail="Research run not found in selected user context")
+        visible, acl_error = _acl_filter_findings_for_canonical_user(
+            canonical_user_id, list(run.get("findings") or [])
+        )
+        if acl_error:
+            raise HTTPException(status_code=403, detail=acl_error)
+        if not visible:
+            raise HTTPException(status_code=404, detail="Research run has no findings visible in the selected user context")
+        result = dict(run)
+        result["findings"] = visible
+        return result
+
     @router.get("/entities", response_class=HTMLResponse, name="admin_entities", dependencies=auth)
     async def admin_entities(request: Request, q: str = "", limit: int = 50):
         try:
@@ -740,69 +886,201 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             return error_page(request, exc)
 
     @router.get("/relations", response_class=HTMLResponse, name="admin_relations", dependencies=auth)
-    async def admin_relations(request: Request, q: str = "", limit: int = 100):
+    async def admin_relations(
+        request: Request, canonical_user_id: str = "", q: str = "", limit: int = 100
+    ):
         try:
-            with GraphCurator.from_config(cfg) as curator:
-                rows = curator.list_relations(q, limit=max(1, min(limit, 500)))
-            rows = add_doc_links(rows)
-            return render(request, "relations.html", q=q, relations=rows)
+            users = [user for user in user_store.list_canonical_users() if user.enabled]
+            selected_user = user_store.get_canonical_user(canonical_user_id) if canonical_user_id else None
+            rows: list[dict[str, Any]] = []
+            acl_error = ""
+            if selected_user is not None:
+                with GraphCurator.from_config(cfg) as curator:
+                    rows = curator.list_relations(q, limit=1000)
+                rows, acl_error = _acl_filter_document_rows_for_canonical_user(
+                    selected_user.canonical_user_id, rows
+                )
+                rows = add_doc_links(rows[:max(1, min(limit, 500))])
+                for row in rows:
+                    evidence = str(row.get("evidence_text") or "").strip()
+                    row["evidence_is_json"] = False
+                    row["evidence_display"] = evidence
+                    if evidence:
+                        try:
+                            row["evidence_display"] = json.dumps(
+                                json.loads(evidence), ensure_ascii=False, indent=2
+                            )
+                            row["evidence_is_json"] = True
+                        except Exception:
+                            pass
+            return render(
+                request, "relations.html", q=q, relations=rows, users=users,
+                selected_user=selected_user, canonical_user_id=canonical_user_id,
+                acl_error=acl_error,
+            )
         except Exception as exc:
             return error_page(request, exc)
 
     @router.get("/findings", response_class=HTMLResponse, name="admin_findings", dependencies=auth)
-    async def admin_findings(request: Request, q: str = "", state: str = "open", limit: int = 200):
+    async def admin_findings(
+        request: Request,
+        canonical_user_id: str = "",
+        q: str = "",
+        state: str = "open",
+        limit: int = 200,
+    ):
         try:
-            state = str(state or "open").strip().casefold()
-            allowed_states = {"inbox", "all", "open", "entities_resolved", "claimed", "no_entity", "suppressed"}
-            if state not in allowed_states:
+            if not admin_user_context_enabled:
+                return render(
+                    request, "findings.html", users=[], selected_user=None, research_runs=[],
+                    q=q, state=state, acl_error="Admin user-context curation is disabled by configuration.",
+                )
+            users = [user for user in user_store.list_canonical_users() if user.enabled]
+            selected_user = user_store.get_canonical_user(canonical_user_id) if canonical_user_id else None
+            if selected_user is None:
+                return render(
+                    request, "findings.html", users=users, selected_user=None,
+                    research_runs=[], q=q, state=state, acl_error="",
+                )
+            if state not in {"open", "completed", "dismissed", "all"}:
                 state = "open"
             with GraphCurator.from_config(cfg) as curator:
-                all_rows = curator.list_research_findings(q, limit=max(1, min(limit, 1000)))
-                counts = {key: 0 for key in ("open", "entities_resolved", "claimed", "no_entity", "suppressed")}
-                for row in all_rows:
-                    key = str(row.get("graph_state") or "open")
-                    if key in counts:
-                        counts[key] += 1
-                if state == "inbox":
-                    rows = [row for row in all_rows if row.get("graph_state") in {"open", "entities_resolved"}]
-                elif state == "all":
-                    rows = all_rows
-                else:
-                    rows = [row for row in all_rows if row.get("graph_state") == state]
-                rows = add_doc_links(rows)
-
-                # Entity-centric work queue. One finding may occur in multiple groups
-                # when more than one entity text still needs a curator decision.
-                grouped: dict[str, dict[str, Any]] = {}
-                for row in rows:
-                    entity_texts = [str(x).strip() for x in (row.get("entity_texts") or []) if str(x or "").strip()]
-                    curated = {str(x.get("text") or "").casefold() for x in (row.get("curated_entities") or []) if x}
-                    suppressed = {str(x).casefold() for x in (row.get("suppressed_entity_texts") or [])}
-                    unresolved = [text for text in entity_texts if text.casefold() not in curated | suppressed]
-                    group_texts = unresolved if unresolved else (["__no_entity__"] if not entity_texts else ["__resolved__"])
-                    for entity_text in group_texts:
-                        key = entity_text.casefold()
-                        group = grouped.setdefault(key, {
-                            "key": key,
-                            "entity_text": "" if entity_text.startswith("__") else entity_text,
-                            "kind": "no_entity" if entity_text == "__no_entity__" else "resolved" if entity_text == "__resolved__" else "entity",
-                            "rows": [],
-                            "suggestions": [],
-                        })
-                        group["rows"].append(row)
-                for group in grouped.values():
-                    if group["kind"] == "entity":
-                        group["suggestions"] = curator.find_entities(group["entity_text"], limit=6)
-                groups = sorted(grouped.values(), key=lambda g: (g["kind"] != "entity", -len(g["rows"]), g["entity_text"].casefold()))
-            return render(request, "findings.html", q=q, state=state, counts=counts, findings=rows, finding_groups=groups)
+                runs = curator.list_research_runs(
+                    canonical_user_id=selected_user.canonical_user_id,
+                    query=q,
+                    state="all",
+                    limit=max(1, min(limit, 1000)),
+                )
+            acl_error = ""
+            visible_runs: list[dict[str, Any]] = []
+            for run in runs:
+                visible, error = _acl_filter_findings_for_canonical_user(
+                    selected_user.canonical_user_id, list(run.get("findings") or [])
+                )
+                if error:
+                    acl_error = error
+                    break
+                if not visible:
+                    continue
+                run = dict(run)
+                run["findings"] = add_doc_links(visible)
+                pending = [
+                    item for item in visible
+                    if str(item.get("run_disposition") or "pending") != "dismissed"
+                    and str(item.get("graph_state") or "open") in {"open", "no_entity", "review_required"}
+                ]
+                run["visible_finding_count"] = len(visible)
+                run["visible_open_count"] = len(pending)
+                run["effective_status"] = (
+                    "dismissed" if str(run.get("curation_status") or "") == "dismissed"
+                    else ("open" if pending else "completed")
+                )
+                if state == "all" or run["effective_status"] == state:
+                    visible_runs.append(run)
+            return render(
+                request, "findings.html", users=users, selected_user=selected_user,
+                research_runs=visible_runs, q=q, state=state, acl_error=acl_error,
+            )
         except Exception as exc:
             return error_page(request, exc)
+
+    @router.get("/findings/run/{run_id}", response_class=HTMLResponse, name="admin_research_run", dependencies=auth)
+    async def admin_research_run(request: Request, run_id: str, canonical_user_id: str):
+        try:
+            if not admin_user_context_enabled:
+                raise HTTPException(status_code=403, detail="Admin user-context curation is disabled")
+            user = user_store.get_canonical_user(canonical_user_id)
+            if user is None or not user.enabled:
+                raise HTTPException(status_code=404, detail="Unknown or disabled Nextcloud user")
+            with GraphCurator.from_config(cfg) as curator:
+                run = curator.get_research_run(run_id)
+            if run is None or str(run.get("canonical_user_id") or "") != canonical_user_id:
+                raise HTTPException(status_code=404, detail="Research run not found in selected user context")
+            visible, acl_error = _acl_filter_findings_for_canonical_user(
+                canonical_user_id, list(run.get("findings") or [])
+            )
+            if acl_error:
+                raise HTTPException(status_code=403, detail=acl_error)
+            run["findings"] = add_doc_links(visible)
+            return render(request, "research_run.html", run=run, user=user)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return error_page(request, exc)
+
+    @router.post("/findings/run/{run_id}/dismiss", name="admin_research_run_dismiss", dependencies=auth)
+    async def admin_research_run_dismiss(request: Request, run_id: str):
+        data = await form_data(request)
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        try:
+            _require_admin_research_run_context(canonical_user_id, run_id)
+            with GraphCurator.from_config(cfg) as curator:
+                curator.dismiss_research_run(
+                    run_id, actor=f"rag-admin:{username or 'admin'}", reason=data.get("reason", "")
+                )
+            return redirect(
+                str(request.app.url_path_for("admin_findings")) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
+                "Recherche aus der Kurations-Queue entfernt; globale Findings bleiben erhalten.",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return error_page(request, exc, status_code=400)
+
+    @router.post("/findings/runs/dismiss", name="admin_research_runs_dismiss", dependencies=auth)
+    async def admin_research_runs_dismiss(request: Request):
+        values = await form_values(request)
+        canonical_user_id = (values.get("canonical_user_id", [""])[-1] or "").strip()
+        run_ids = list(dict.fromkeys(x.strip() for x in values.get("run_id", []) if x.strip()))
+        try:
+            if not run_ids:
+                raise ValueError("Bitte mindestens eine Recherche auswählen")
+            for run_id in run_ids:
+                _require_admin_research_run_context(canonical_user_id, run_id)
+            with GraphCurator.from_config(cfg) as curator:
+                for run_id in run_ids:
+                    curator.dismiss_research_run(
+                        run_id, actor=f"rag-admin:{username or 'admin'}", reason="bulk dismiss from research list"
+                    )
+            return redirect(
+                str(request.app.url_path_for("admin_findings")) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
+                f"{len(run_ids)} Recherche(n) aus der Kurations-Queue entfernt; globale Findings bleiben erhalten.",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return error_page(request, exc, status_code=400)
+
+    @router.post("/findings/run/{run_id}/dismiss-findings", name="admin_research_run_dismiss_findings", dependencies=auth)
+    async def admin_research_run_dismiss_findings(request: Request, run_id: str):
+        values = await form_values(request)
+        canonical_user_id = (values.get("canonical_user_id", [""])[-1] or "").strip()
+        finding_ids = [x.strip() for x in values.get("finding_id", []) if x.strip()]
+        try:
+            for finding_id in finding_ids:
+                _require_admin_finding_context(canonical_user_id, finding_id)
+            with GraphCurator.from_config(cfg) as curator:
+                result = curator.set_research_run_finding_disposition(
+                    run_id, finding_ids, disposition="dismissed",
+                    actor=f"rag-admin:{username or 'admin'}",
+                )
+            return redirect(
+                str(request.app.url_path_for("admin_research_run", run_id=run_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
+                f"{result['updated']} Finding(s) nur für diese Recherche ausgeblendet.",
+            )
+        except Exception as exc:
+            return error_page(request, exc, status_code=400)
 
     @router.post("/findings/bulk-entity", name="admin_findings_bulk_entity", dependencies=auth)
     async def admin_findings_bulk_entity(request: Request):
         try:
             values = await form_values(request)
             finding_ids = [x.strip() for x in values.get("finding_id", []) if x.strip()]
+            canonical_user_id = (values.get("canonical_user_id", [""])[-1] or "").strip()
+            if not canonical_user_id:
+                raise ValueError("Nextcloud-Benutzerkontext fehlt")
+            for finding_id in finding_ids:
+                _require_admin_finding_context(canonical_user_id, finding_id)
             entity_text = (values.get("entity_text", [""])[-1] or "").strip()
             action = (values.get("action", [""])[-1] or "").strip().casefold()
             target_entity_id = (values.get("target_entity_id", [""])[-1] or "").strip()
@@ -823,6 +1101,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
                     target_entity_id=target_entity_id,
                     reason=reason,
                     apply=True,
+                    curator_actor=f"rag-admin:{username or 'admin'}",
                 )
             failures = list(result.get("failures") or [])
             updated = int(result.get("updated") or 0)
@@ -833,26 +1112,44 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             message = f"{updated}/{requested} Entity-Entscheidungen übernommen"
             if failures:
                 message += f"; {len(failures)} Fehler – betroffene Findings bleiben offen"
-            return redirect(str(request.app.url_path_for("admin_findings")) + "?state=open", message)
+            return redirect(
+                str(request.app.url_path_for("admin_findings")) + "?" + urlencode({
+                    "canonical_user_id": canonical_user_id,
+                    "state": "open",
+                }),
+                message,
+            )
         except Exception as exc:
             return error_page(request, exc, status_code=400)
 
     @router.post("/findings/suppress-no-entity", name="admin_findings_suppress_no_entity", dependencies=auth)
     async def admin_findings_suppress_no_entity(request: Request):
-        try:
-            await form_data(request)  # origin/CSRF-equivalent host check
-            with GraphCurator.from_config(cfg) as curator:
-                result = curator.suppress_research_findings_without_entities(apply=True)
-            return redirect(str(request.app.url_path_for("admin_findings")) + "?state=open", f"{result['updated']} Findings ohne Entity unterdrückt")
-        except Exception as exc:
-            return error_page(request, exc, status_code=400)
+        await form_data(request)  # origin guard
+        raise HTTPException(
+            status_code=409,
+            detail="Global suppression without a user/research context is disabled; dismiss Findings in the ResearchRun instead.",
+        )
 
     @router.get("/finding/{finding_id}", response_class=HTMLResponse, name="admin_finding_detail", dependencies=auth)
-    async def admin_finding_detail(request: Request, finding_id: str):
+    async def admin_finding_detail(
+        request: Request,
+        finding_id: str,
+        canonical_user_id: str = "",
+        entity_q: str = "",
+    ):
         try:
+            if not canonical_user_id:
+                raise ValueError("Für Finding-Details muss ein Nextcloud-Benutzerkontext gewählt werden")
+            _require_admin_finding_context(canonical_user_id, finding_id)
             with GraphCurator.from_config(cfg) as curator:
                 detail = curator.get_research_finding(finding_id)
                 entity_options = curator.research_finding_entity_options(finding_id) if detail else []
+                claim_options = curator.research_finding_claim_options(finding_id) if detail else []
+                entity_search_results = (
+                    curator.find_entities(entity_q.strip(), limit=20)
+                    if detail and entity_q.strip()
+                    else []
+                )
             if detail is None:
                 raise ValueError(f"Finding nicht gefunden: {finding_id}")
             document = dict(detail.get("document") or {})
@@ -861,7 +1158,50 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
                 document.setdefault("document_path", document.get("path"))
                 detail["document"] = add_doc_links([document])[0]
             detail["entity_options"] = entity_options
-            return render(request, "finding.html", detail=detail)
+            detail["default_entity_count"] = sum(
+                1 for item in entity_options
+                if not item.get("curated")
+                and not item.get("suppressed")
+                and item.get("auto_resolved")
+            )
+            detail["claim_options"] = claim_options
+            detail["all_entities_decided"] = bool(entity_options) and all(
+                bool(item.get("curated")) or bool(item.get("suppressed"))
+                for item in entity_options
+            )
+            active_claim_statuses = {"manual_claim", "review_required"}
+            detail["has_active_claims"] = any(
+                str((item or {}).get("curator_status") or "") in active_claim_statuses
+                for item in (detail.get("claims") or [])
+            )
+            allowed_claims = {
+                (
+                    str((pair.get("subject") or {}).get("entity_id") or ""),
+                    str(predicate.get("id") or "").upper(),
+                    str((pair.get("object") or {}).get("entity_id") or ""),
+                )
+                for pair in claim_options
+                for predicate in (pair.get("predicates") or [])
+            }
+            for claim in detail.get("claims") or []:
+                claim["can_confirm"] = (
+                    str(claim.get("subject_entity_id") or ""),
+                    str(claim.get("predicate") or "").upper(),
+                    str(claim.get("object_entity_id") or ""),
+                ) in allowed_claims
+            evidence_raw = str((detail.get("finding") or {}).get("evidence_frame_json") or "").strip()
+            detail["evidence_view"] = _filter_suppressed_evidence(
+                evidence_frame_view(evidence_raw),
+                list((detail.get("finding") or {}).get("suppressed_entity_texts") or []),
+            )
+            detail["entity_search_query"] = entity_q.strip()
+            detail["entity_search_results"] = entity_search_results
+            try:
+                evidence_value = json.loads(evidence_raw) if evidence_raw else {}
+                detail["evidence_pretty"] = json.dumps(evidence_value, ensure_ascii=False, indent=2)
+            except Exception:
+                detail["evidence_pretty"] = evidence_raw
+            return render(request, "finding.html", detail=detail, canonical_user_id=canonical_user_id)
         except ValueError as exc:
             return error_page(request, exc, status_code=404)
         except Exception as exc:
@@ -870,32 +1210,62 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     @router.post("/finding/{finding_id}/entity", name="admin_finding_entity", dependencies=auth)
     async def admin_finding_entity(request: Request, finding_id: str):
         data = await form_data(request)
-        fields = {
-            "entity_text": data.get("entity_text", "").strip(),
-            "action": data.get("action", "").strip(),
-            "target_entity_id": data.get("target_entity_id", "").strip(),
-            "new_name": data.get("new_name", "").strip(),
-            "entity_type": data.get("entity_type", "").strip(),
-            "reason": data.get("reason", "").strip(),
-        }
-        confirm = data.get("confirm", "") == "yes"
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        _require_admin_finding_context(canonical_user_id, finding_id)
+        action = data.get("action", "").strip()
+        detail_requested = data.get("detail", "") == "yes"
+        detail_url = (
+            str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id))
+            + "?"
+            + urlencode({"canonical_user_id": canonical_user_id})
+        )
         try:
             with GraphCurator.from_config(cfg) as curator:
-                result = curator.curate_research_finding_entity(finding_id, apply=confirm, **fields)
-            if not confirm:
+                if action == "accept_defaults":
+                    result = curator.accept_research_finding_entity_defaults(
+                        finding_id,
+                        curator_actor=f"rag-admin:{username or 'admin'}",
+                    )
+                    return redirect(
+                        detail_url,
+                        f"{int(result.get('applied_count') or 0)} eindeutige Entity-Vorschläge gespeichert",
+                    )
+                call_fields = {
+                    "entity_text": data.get("entity_text", "").strip(),
+                    "action": action,
+                    "target_entity_id": data.get("target_entity_id", "").strip(),
+                    "new_name": data.get("new_name", "").strip(),
+                    "entity_type": data.get("entity_type", "").strip(),
+                    "reason": data.get("reason", "").strip(),
+                }
+                result = curator.curate_research_finding_entity(
+                    finding_id,
+                    apply=not detail_requested,
+                    curator_actor=f"rag-admin:{username or 'admin'}",
+                    **call_fields,
+                )
+            if detail_requested:
                 return preview_response(
                     request,
-                    title="Finding-Entity kuratieren",
+                    title="Details der Entity-Entscheidung",
                     preview=result,
-                    action_url=str(request.app.url_path_for("admin_finding_entity", finding_id=finding_id)),
-                    fields=fields,
-                    danger=fields["action"] == "suppress",
-                    confirm_label="Entity-Entscheidung übernehmen",
-                    cancel_url=str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
+                    action_url=str(request.app.url_path_for(
+                        "admin_finding_entity", finding_id=finding_id
+                    )),
+                    fields={"canonical_user_id": canonical_user_id, **call_fields},
+                    danger=action == "suppress",
+                    confirm_label="Entity-Entscheidung speichern",
+                    cancel_url=detail_url,
                 )
+            messages = {
+                "assign_alias": "Alias angelegt und Entity-Zuordnung gespeichert",
+                "suppress": "Form global als Non-Entity gespeichert",
+                "create": "Entity angelegt und Mention gespeichert",
+                "assign": "Entity-Zuordnung und Mention gespeichert",
+            }
             return redirect(
-                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
-                "Entity-Resolution aktualisiert",
+                detail_url,
+                messages.get(action, "Entity-Resolution aktualisiert"),
             )
         except Exception as exc:
             return error_page(request, exc, status_code=400)
@@ -903,30 +1273,67 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     @router.post("/finding/{finding_id}/claim", name="admin_finding_claim", dependencies=auth)
     async def admin_finding_claim(request: Request, finding_id: str):
         data = await form_data(request)
-        fields = {
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        _require_admin_finding_context(canonical_user_id, finding_id)
+        call_fields = {
             "subject_entity_id": data.get("subject_entity_id", "").strip(),
             "predicate_id": data.get("predicate_id", "").strip(),
             "object_entity_id": data.get("object_entity_id", "").strip(),
-            "predicate_label": data.get("predicate_label", "").strip(),
             "claim_text": data.get("claim_text", "").strip(),
         }
+        preview_fields = {"canonical_user_id": canonical_user_id, **call_fields}
         confirm = data.get("confirm", "") == "yes"
         try:
             with GraphCurator.from_config(cfg) as curator:
-                result = curator.curate_research_finding_claim(finding_id, apply=confirm, **fields)
+                result = curator.curate_research_finding_claim(
+                    finding_id,
+                    apply=confirm,
+                    curator_actor=f"rag-admin:{username or 'admin'}",
+                    **call_fields,
+                )
             if not confirm:
                 return preview_response(
                     request,
                     title="Claim-Kandidat anlegen",
                     preview=result,
                     action_url=str(request.app.url_path_for("admin_finding_claim", finding_id=finding_id)),
-                    fields=fields,
+                    fields=preview_fields,
                     confirm_label="Claim anlegen",
-                    cancel_url=str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
+                    cancel_url=str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
                 )
             return redirect(
-                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
+                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
                 "Dokumentgebundener Claim angelegt",
+            )
+        except Exception as exc:
+            return error_page(request, exc, status_code=400)
+
+    @router.post("/finding/{finding_id}/claim/{relation_id}/review", name="admin_finding_claim_review", dependencies=auth)
+    async def admin_finding_claim_review(request: Request, finding_id: str, relation_id: str):
+        data = await form_data(request)
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        _require_admin_finding_context(canonical_user_id, finding_id)
+        action = data.get("action", "").strip().casefold()
+        reason = data.get("reason", "").strip()
+        if action not in {"confirm", "dismiss", "withdraw"}:
+            return error_page(request, ValueError("Ungültige Claim-Aktion"), status_code=400)
+        try:
+            with GraphCurator.from_config(cfg) as curator:
+                curator.review_research_finding_claim(
+                    finding_id,
+                    relation_id=relation_id,
+                    action=action,
+                    reason=reason,
+                    curator_actor=f"rag-admin:{username or 'admin'}",
+                )
+            message = {
+                "confirm": "Claim erneut bestätigt",
+                "dismiss": "Claim als überholt markiert",
+                "withdraw": "Claim zurückgenommen; Provenienz bleibt erhalten",
+            }[action]
+            return redirect(
+                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
+                message,
             )
         except Exception as exc:
             return error_page(request, exc, status_code=400)
@@ -934,15 +1341,21 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     @router.post("/finding/{finding_id}/curate", name="admin_finding_curate", dependencies=auth)
     async def admin_finding_curate(request: Request, finding_id: str):
         data = await form_data(request)
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        _require_admin_finding_context(canonical_user_id, finding_id)
         status = data.get("status", "").strip()
         reason = data.get("reason", "").strip()
         confirm = data.get("confirm", "") == "yes"
-        if status not in {"", "suppressed"}:
+        if status not in {"", "suppressed", "mentions_only"}:
             return error_page(request, ValueError(f"Ungültiger Finding-Status: {status}"), status_code=400)
         try:
             with GraphCurator.from_config(cfg) as curator:
                 result = curator.curate_research_finding(
-                    finding_id, status=status, reason=reason, apply=confirm
+                    finding_id,
+                    status=status,
+                    reason=reason,
+                    apply=confirm,
+                    curator_actor=f"rag-admin:{username or 'admin'}",
                 )
             if not confirm:
                 return preview_response(
@@ -950,12 +1363,12 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
                     title="Research Finding kuratieren",
                     preview=result,
                     action_url=str(request.app.url_path_for("admin_finding_curate", finding_id=finding_id)),
-                    fields={"status": status, "reason": reason},
+                    fields={"canonical_user_id": canonical_user_id, "status": status, "reason": reason},
                     confirm_label="Finding aktualisieren",
-                    cancel_url=str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
+                    cancel_url=str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
                 )
             return redirect(
-                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)),
+                str(request.app.url_path_for("admin_finding_detail", finding_id=finding_id)) + "?" + urlencode({"canonical_user_id": canonical_user_id}),
                 "Finding aktualisiert",
             )
         except Exception as exc:
@@ -1132,26 +1545,77 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             return error_page(request, exc)
 
     @router.get("/observations", response_class=HTMLResponse, name="admin_observations", dependencies=auth)
-    async def admin_observations(request: Request, q: str = "", status: str = "", limit: int = 200):
+    async def admin_observations(
+        request: Request,
+        canonical_user_id: str = "",
+        q: str = "",
+        status: str = "needs_review",
+        limit: int = 200,
+    ):
         try:
-            with GraphCurator.from_config(cfg) as curator:
-                rows = curator.search_observations(query=q, status=status, limit=max(1, min(limit, 1000)))
-            rows = add_doc_links(rows)
-            return render(request, "observations.html", observations=rows, q=q, status=status)
+            status = str(status or "needs_review").strip()
+            allowed_statuses = {
+                "needs_review", "all", "resolved_existing", "created_provisional",
+                "ambiguous", "unresolved", "rejected", "corrected_observation",
+                "manual_not_entity", "research_finding_entity",
+            }
+            if status not in allowed_statuses:
+                status = "needs_review"
+            users = [user for user in user_store.list_canonical_users() if user.enabled]
+            selected_user = user_store.get_canonical_user(canonical_user_id) if canonical_user_id else None
+            rows: list[dict[str, Any]] = []
+            acl_error = ""
+            if selected_user is not None:
+                with GraphCurator.from_config(cfg) as curator:
+                    rows = curator.search_observations(
+                        query=q, status=status, limit=2000
+                    )
+                rows, acl_error = _acl_filter_document_rows_for_canonical_user(
+                    selected_user.canonical_user_id, rows
+                )
+                rows = add_doc_links(rows[:max(1, min(limit, 1000))])
+            return render(
+                request, "observations.html", observations=rows, q=q, status=status,
+                users=users, selected_user=selected_user,
+                canonical_user_id=canonical_user_id, acl_error=acl_error,
+            )
         except Exception as exc:
             return error_page(request, exc)
 
     @router.get("/observation/{observation_id}", response_class=HTMLResponse, name="admin_observation_detail", dependencies=auth)
-    async def admin_observation_detail(request: Request, observation_id: str, q: str = ""):
+    async def admin_observation_detail(
+        request: Request, observation_id: str, canonical_user_id: str, q: str = ""
+    ):
         try:
+            selected_user = user_store.get_canonical_user(canonical_user_id)
+            if selected_user is None or not selected_user.enabled:
+                raise HTTPException(status_code=404, detail="Unknown or disabled Nextcloud user")
             with GraphCurator.from_config(cfg) as curator:
                 obs = curator.get_observation(observation_id)
                 if obs is None:
                     raise ValueError(f"Observation nicht gefunden: {observation_id}")
-                search_q = q.strip() or str(obs.get("canonical_name") or obs.get("observed_text") or "").strip()
+                visible, acl_error = _acl_filter_document_rows_for_canonical_user(
+                    canonical_user_id, [obs]
+                )
+                if acl_error:
+                    raise HTTPException(status_code=403, detail=acl_error)
+                if not visible:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Observation is not visible in the selected Nextcloud user context",
+                    )
+                search_q = q.strip() or str(
+                    obs.get("canonical_name") or obs.get("observed_text") or ""
+                ).strip()
                 candidates = curator.find_entities(search_q, limit=30) if search_q else []
             obs = add_doc_links([obs])[0]
-            return render(request, "observation.html", observation=obs, q=search_q, candidates=candidates)
+            return render(
+                request, "observation.html", observation=obs, q=search_q,
+                candidates=candidates, selected_user=selected_user,
+                canonical_user_id=canonical_user_id,
+            )
+        except HTTPException:
+            raise
         except ValueError as exc:
             return error_page(request, exc, status_code=404)
         except Exception as exc:
@@ -1160,23 +1624,54 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     @router.post("/observation/{observation_id}/correct", name="admin_observation_correct", dependencies=auth)
     async def admin_observation_correct(request: Request, observation_id: str):
         data = await form_data(request)
+        canonical_user_id = data.get("canonical_user_id", "").strip()
         target_id = data.get("target_id", "").strip()
         reason = data.get("reason", "ocr").strip() or "ocr"
         confirm = data.get("confirm", "") == "yes"
         try:
             with GraphCurator.from_config(cfg) as curator:
-                result = curator.correct_observation(observation_id, target_id, reason=reason, apply=confirm)
+                obs = curator.get_observation(observation_id)
+                if obs is None:
+                    raise ValueError(f"Observation nicht gefunden: {observation_id}")
+                visible, acl_error = _acl_filter_document_rows_for_canonical_user(
+                    canonical_user_id, [obs]
+                )
+                if acl_error:
+                    raise HTTPException(status_code=403, detail=acl_error)
+                if not visible:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Observation is not visible in the selected Nextcloud user context",
+                    )
+                result = curator.correct_observation(
+                    observation_id, target_id, reason=reason, apply=confirm
+                )
+            detail_url = (
+                str(request.app.url_path_for(
+                    "admin_observation_detail", observation_id=observation_id
+                ))
+                + "?"
+                + urlencode({"canonical_user_id": canonical_user_id})
+            )
             if not confirm:
                 return preview_response(
                     request,
                     title="Observation neu zuordnen",
                     preview=result,
-                    action_url=str(request.app.url_path_for("admin_observation_correct", observation_id=observation_id)),
-                    fields={"target_id": target_id, "reason": reason},
+                    action_url=str(request.app.url_path_for(
+                        "admin_observation_correct", observation_id=observation_id
+                    )),
+                    fields={
+                        "canonical_user_id": canonical_user_id,
+                        "target_id": target_id,
+                        "reason": reason,
+                    },
                     confirm_label="Zuordnung ändern",
-                    cancel_url=str(request.app.url_path_for("admin_observation_detail", observation_id=observation_id)),
+                    cancel_url=detail_url,
                 )
-            return redirect(str(request.app.url_path_for("admin_observation_detail", observation_id=observation_id)), "Observation neu zugeordnet")
+            return redirect(detail_url, "Observation neu zugeordnet")
+        except HTTPException:
+            raise
         except Exception as exc:
             return error_page(request, exc)
 

@@ -252,11 +252,17 @@ class NextcloudLiveAcl:
         """
         return self._credential(rag_user_id)
 
-    def authorize(self, results: list[dict[str, Any]], *, rag_user_id: str | None = None) -> AclDecision:
-        """Filter *already final* results against current Nextcloud visibility.
+    def authorize_with_credential(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        username: str,
+        password: str,
+    ) -> AclDecision:
+        """Authorize a bounded result set with an explicitly supplied temporary credential.
 
-        No replacement candidates are fetched. Results without a usable
-        Nextcloud fileid are denied when ACL is enabled.
+        Used by ephemeral curation sessions. The credential is never written to
+        the normal provider credential namespace.
         """
         if not self.enabled:
             return AclDecision(False, list(results), len(results), len(results))
@@ -264,8 +270,16 @@ class NextcloudLiveAcl:
             return AclDecision(True, [], 0, 0)
         if not self.webdav_url:
             raise AclConfigurationError("acl.webdav_url/nextcloud.base_url is not configured")
+        credential = NextcloudCredential(str(username or "").strip(), str(password or ""))
+        if not credential.username or not credential.password:
+            raise AclIdentityError("temporary Nextcloud credential is incomplete")
+        return self._authorize_with_credential(results, credential)
 
-        credential = self._credential(rag_user_id)
+    def _authorize_with_credential(
+        self,
+        results: list[dict[str, Any]],
+        credential: NextcloudCredential,
+    ) -> AclDecision:
         ids_by_pos: list[str | None] = [_file_id(item) for item in results]
         file_ids = [x for x in ids_by_pos if x]
         if not file_ids:
@@ -303,3 +317,13 @@ class NextcloudLiveAcl:
             if file_id is not None and file_id in authorized_ids
         ]
         return AclDecision(True, filtered, len(results), len(filtered))
+
+    def authorize(self, results: list[dict[str, Any]], *, rag_user_id: str | None = None) -> AclDecision:
+        """Filter *already final* results against current Nextcloud visibility."""
+        if not self.enabled:
+            return AclDecision(False, list(results), len(results), len(results))
+        if not results:
+            return AclDecision(True, [], 0, 0)
+        if not self.webdav_url:
+            raise AclConfigurationError("acl.webdav_url/nextcloud.base_url is not configured")
+        return self._authorize_with_credential(results, self._credential(rag_user_id))
