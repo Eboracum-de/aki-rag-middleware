@@ -1,98 +1,99 @@
 # AKI RAG Middleware
-## Technische Dokumentation und Befehlsreferenz
+## Technical documentation and command reference
 
-**Version:** `0.8.5-rc3`
-**Stand:** 16. September 2026
+**Version:** `0.8.5-rc4`  
+**Updated:** 19 September 2026
 
-Diese Datei ist die konsolidierte technische Referenz für den aktuellen Snapshot. Nicht veröffentlichte interne Entwicklungs- und Migrationsentwürfe sind nicht Bestandteil des öffentlichen Baseline-Repositories; bei Widersprüchen zum aktuellen Code gilt diese Referenz zusammen mit `config.yaml`, `web.yaml`, `provider.env.example` und `versions.lock.yaml`.
+This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
 
 ---
 
-# 1. Verzeichnis- und Prozessmodell
+# 1. Directory and process model
 
-Standardinstallation:
+Default installation directory:
 
 ```text
 /opt/nextcloud-rag/
 ```
 
-Wichtige Prozesse:
+Main processes:
 
-| Prozess | Standardport | Aufgabe |
+| Process | Default port | Purpose |
 |---|---:|---|
-| `rag-api` | 8765 | Retrieval, ACL, Web, Graph API, Admin UI |
-| `rag-provider` | 8766 | OpenAI-kompatible Chat-Schnittstelle / Orchestrator |
-| `graph-worker` | – | asynchrone GraphQueue-Verarbeitung |
-| `mail-worker` | – | periodische rekursive Mail-Synchronisation |
-| `sync-worker` | – | periodischer Elasticsearch→Qdrant-Abgleich |
-| OpenWebUI | 3000 loopback | optionales Frontend |
-| Qdrant | 6333 loopback | optional lokaler Vektorstore |
-| Neo4j | 7687/7474 | optional lokaler Graph/Browser gemäß Compose |
+| `rag-api` | 8765 | Retrieval, live ACL, Web, Graph API and Admin UI |
+| `rag-provider` | 8766 | OpenAI-compatible chat interface and orchestration |
+| `graph-worker` | – | asynchronous GraphQueue processing |
+| `mail-worker` | – | periodic recursive mail synchronization |
+| `sync-worker` | – | periodic Elasticsearch → Qdrant synchronization |
+| OpenWebUI | 3000 loopback | optional frontend |
+| Qdrant | 6333 loopback | optional local vector store |
+| Neo4j | 7687/7474 | optional local graph/browser according to deployment profile |
 
-Reverse-Proxy-Pfade:
+Reverse-proxy paths:
 
 ```text
-/             Benutzer-UI; OpenWebUI falls installiert
-/rag-admin/   geschützte RAG-Administration
-/rag-api/     Middleware/Diagnostik
+/             user UI; OpenWebUI when installed
+/rag-admin/   protected RAG administration
+/curation/    optional Nextcloud-authenticated Findings self-service
+/rag-api/     middleware/diagnostics
 /auth/        Nextcloud Login Flow
-/v1/          OpenAI-kompatibler Provider
+/v1/          OpenAI-compatible provider
 ```
 
-Ohne Benutzer-UI leitet `/` auf `/rag-admin/` um.
+Without a user UI, `/` redirects to `/rag-admin/`.
 
 ---
 
 # 2. Installation
 
-## 2.1 Plan anzeigen
+## 2.1 Show the installation plan
 
 ```bash
 sudo ./install/install.sh --plan --full
 ```
 
-## 2.2 Installer-Optionen
+## 2.2 Installer options
 
-| Option | Bedeutung |
+| Option | Meaning |
 |---|---|
-| `--prefix PATH` | Installationsverzeichnis, Default `/opt/nextcloud-rag` |
-| `--user USER` | Service-User, Default `rag` |
-| `--skip-system-packages` | OS-Pakete/Docker nicht installieren |
-| `--with-qdrant` | lokalen Qdrant installieren/starten |
-| `--with-neo4j` | lokalen Neo4j installieren/starten |
+| `--prefix PATH` | installation directory, default `/opt/nextcloud-rag` |
+| `--user USER` | service user, default `rag` |
+| `--skip-system-packages` | do not install OS packages/Docker |
+| `--with-qdrant` | install/start local Qdrant |
+| `--with-neo4j` | install/start local Neo4j |
 | `--core` | Qdrant + Neo4j |
-| `--with-openwebui` | gepinntes OpenWebUI installieren/starten |
+| `--with-openwebui` | install/start the pinned OpenWebUI build |
 | `--full` | Qdrant + Neo4j + OpenWebUI |
-| `--no-proxy` | gebündelten nginx nicht starten |
-| `--no-proxy-basic-auth` | nginx-Basic-Auth-Gate abschalten; Rate-Limits bleiben |
-| `--multi-user` | explizit Multiuser/credential_store; Default |
-| `--single-user` | expliziter Einbenutzermodus, Live-ACL bleibt an |
-| `--acl-off` | Diagnosemodus ohne Live-ACL; nicht für gemeinsame Bestände |
-| `--with-systemd` | optionale systemd-Units installieren/aktivieren |
-| `--no-systemd` | Legacy-Alias: keine systemd-Integration |
-| `--no-reranker-download` | lokalen HF-Reranker nicht vorladen |
-| `--plan` | nur Plan anzeigen |
-| `-y`, `--yes` | nicht-interaktiv bestätigen |
+| `--no-proxy` | do not start the bundled nginx proxy |
+| `--no-proxy-basic-auth` | disable nginx Basic Auth gate; rate limits remain |
+| `--multi-user` | explicit multi-user / credential-store mode; default |
+| `--single-user` | explicit single-user mode; live ACL remains enabled |
+| `--acl-off` | diagnostic mode without live ACL; not for shared protected corpora |
+| `--with-systemd` | install/enable optional systemd units |
+| `--no-systemd` | legacy alias: no systemd integration |
+| `--no-reranker-download` | do not preload the local HF reranker |
+| `--plan` | show plan only |
+| `-y`, `--yes` | confirm non-interactively |
 
-Nicht mehr gebündelt:
+No longer bundled:
 
-- Ollama: `--with-ollama` wird mit Fehler abgewiesen,
-- SearXNG: `--with-searxng` wird mit Fehler abgewiesen.
+- Ollama: `--with-ollama` is rejected;
+- SearXNG: `--with-searxng` is rejected.
 
-Beide können extern betrieben und konfiguriert werden.
+Both can be operated externally and configured as backends.
 
-## 2.3 Empfohlene Referenzinstallation
+## 2.3 Reference installation
 
 ```bash
 sudo ./install/install.sh --plan --with-openwebui --with-qdrant --with-neo4j
 sudo ./install/install.sh       --with-openwebui --with-qdrant --with-neo4j
 ```
 
-Danach **vor dem ersten Start** mindestens `config.yaml`, `provider.env` und `runtime.env` prüfen.
+Before first start, review at least `config.yaml`, `provider.env` and `runtime.env`.
 
 ---
 
-# 3. Konfigurationsdateien
+# 3. Configuration files
 
 ## 3.1 `config.yaml`
 
@@ -110,11 +111,11 @@ elasticsearch:
   page_size: 50
 ```
 
-Das Passwort gehört ausschließlich in `runtime.env` oder einen vergleichbar geschützten Environment-Store.
+Store the password only in `runtime.env` or an equivalently protected secret store. For retrieval, a read-only Elasticsearch account is recommended. The middleware does not require write access to the Nextcloud FullTextSearch index for normal search.
 
 ### Embeddings
 
-Referenz lokal:
+Local reference:
 
 ```yaml
 embedding:
@@ -130,11 +131,19 @@ embedding:
   timeout: 300
 ```
 
-Die Embedding-Schicht ist modellagnostisch: `query_prefix` und `document_prefix` werden explizit konfiguriert und niemals aus dem Modellnamen abgeleitet. Das Referenzbeispiel verwendet für Qwen3 eine Query-only Retrieval-Instruktion; für andere Modelle können passende Prefixes gesetzt oder beide leer gelassen werden. `dimensions` ist optional und backend-/modellabhängig; im Referenzbetrieb hält `dimensions: 1024` die Qdrant-Collection trotz des 4B-Modells bei 1024 Dimensionen. Ein Modellwechsel erfordert einen separaten/neuen Vektorbestand, weil verschiedene Embedding-Räume nicht gemischt werden dürfen.
+The embedding layer is model-agnostic. `query_prefix` and `document_prefix` are configured explicitly and are never inferred from the model name. The reference Qwen3 configuration uses a query-only retrieval instruction. Other models may use different prefixes or none.
 
-Der Sync ergänzt standardmäßig nur für den Embedding-Input den Dateibasename (`sync.embedding_include_basename: true`). Der in Qdrant gespeicherte Evidence-Chunk bleibt unverändert. Für einen einmaligen GPU-Erstsync kann `rag.sync --embedding-url http://GPU-HOST:11434` verwendet werden, ohne die dauerhafte CPU-Konfiguration zu ändern.
+`dimensions` is optional and model/backend dependent. In the reference setup, `dimensions: 1024` keeps the Qdrant collection at 1024 dimensions even with the 4B embedding model. Different embedding spaces must not be mixed; changing the embedding model normally requires a separate/rebuilt vector collection.
 
-Ein externer OpenAI-kompatibler Embedding-Endpunkt ist möglich. Achtung: Bei externer Vektorisierung wird der zu indexierende Volltext chunkweise an diesen Provider übertragen.
+By default the sync path adds the file basename only to the embedding input (`sync.embedding_include_basename: true`). The evidence chunk stored in Qdrant remains unchanged.
+
+For a one-off GPU initial sync:
+
+```bash
+rag.sync --embedding-url http://GPU-HOST:11434
+```
+
+An external OpenAI-compatible embedding endpoint is supported. When external embeddings are used, document text is transmitted chunk-by-chunk to that provider.
 
 ### Qdrant
 
@@ -145,39 +154,35 @@ qdrant:
   collection: "nextcloud_rag"
 ```
 
-### Retrieval, Query Rewrite und optionale Runden
+Qdrant is a retrieval store, not an authorization authority. Keep it on loopback or a trusted network unless remote access is required. If the selected deployment/backend offers separate read-only credentials or network policy, use least privilege for query-only consumers.
 
-Der normale Retrievalvertrag ist bewusst klein. Runde 1 schreibt die
-Benutzerfrage genau einmal in einen SearchSpec um:
+### Retrieval, query rewrite and optional rounds
+
+The normal retrieval contract is deliberately small. Round 1 rewrites the user question once into a SearchSpec:
 
 ```json
 {
-  "elastic_query": "+examplehost +2025 +Rechnung",
-  "semantic_query": "Rechnungen von examplehost aus dem Jahr 2025",
+  "elastic_query": "+examplehost +2025 +invoice",
+  "semantic_query": "invoices from examplehost in 2025",
   "entities": ["examplehost"],
-  "concepts": ["Rechnung"],
-  "constraints": [{"kind": "Jahr", "value": "2025"}],
+  "concepts": ["invoice"],
+  "constraints": [{"kind": "year", "value": "2025"}],
   "verification_requirements": [
-    "Das Dokument ist selbst eine Rechnung von examplehost.",
-    "Das relevante Jahr ist 2025."
+    "The document itself is an invoice from examplehost.",
+    "The relevant year is 2025."
   ]
 }
 ```
 
-Vor dem Rewrite wird ein kompakter Neo4j-Seed-/Alias-Kontext bereitgestellt.
-`elastic_query` ist eine menschenlesbare Nextcloud-Volltextanfrage, keine rohe
-Elasticsearch-DSL. Die API parst sie und erzeugt daraus deterministisch die
-Elasticsearch-JSON-Abfrage; `semantic_query` geht ausschließlich an Qdrant, sofern
-aktiviert. `entities`, `concepts`, `constraints` und
-`verification_requirements` beeinflussen Graph-Light/Verifier/Provenienz, aber
-schreiben die `elastic_query` nicht heimlich um.
+A compact Neo4j seed/alias context is supplied before the rewrite. `elastic_query` is a human-style Nextcloud full-text expression, **not raw Elasticsearch JSON DSL**. The API parses it and deterministically constructs the Elasticsearch request body. `semantic_query` is sent only to Qdrant when the vector arm is enabled.
 
-Die Backend-Ergebnisse werden wie bisher fusioniert, dedupliziert und optional
-gerankt. Danach folgen Live-Nextcloud-ACL und Candidate Verifier. Der SearchSpec-
-Pfad loggt die vom LLM erzeugte `elastic_query`, den tatsächlich an Elasticsearch
-gesendeten JSON-Querybody und eine kompakte Trefferliste ohne Dokumentinhalt.
+`entities`, `concepts`, `constraints` and `verification_requirements` are analytical side products for Graph-Lite, verifier and provenance; they do not silently rewrite `elastic_query`.
 
-Aktuelle Referenzwerte:
+Backend results are fused, deduplicated and optionally reranked. The current normal path then applies live Nextcloud ACL and the Candidate Verifier. ACL denials do not trigger adaptive replacement searches, so the visible candidate window may become smaller. A fixed pre-rerank ACL pool is a documented future optimization, not the current implementation.
+
+The SearchSpec path logs the generated `elastic_query`, the actual Elasticsearch JSON request body and a compact hit list without document contents.
+
+Current reference values:
 
 ```yaml
 search:
@@ -188,12 +193,11 @@ search:
   rerank_candidates: 10
   final_limit: 15
 
-# Legacy-Abschnittsname aus Konfigurationskompatibilität.
-# Runde 1 führt immer Query Rewrite + Retrieval aus.
+# Legacy section name retained for configuration compatibility.
 retrieval_planner:
-  enabled: true              # nur zusätzliche Runden
-  max_retrieval_rounds: 1    # 1 = keine automatische zweite Runde
-  model: ""                 # leer = allgemeines LLM_MODEL
+  enabled: true
+  max_retrieval_rounds: 1
+  model: ""
   max_tokens: 700
   context_max_chars: 12000
   max_complete_documents: 15
@@ -206,14 +210,9 @@ retrieval_planner:
   verification_batch_size: 6
 ```
 
-Sind weitere Runden aktiviert, darf der Rewriter anhand des bisherigen sichtbaren
-Trefferbilds einen **neuen SearchSpec** erzeugen. Jede Runde durchläuft dieselbe
-Pipeline; es gibt im normalen Pfad keine `lexical`/`strict_lexical`/`semantic`
-Probe-Sprache mehr. Die alten Multi-Probe-Funktionen und `/multi-search` bleiben
-vorerst als Kompatibilitäts-/Diagnoseoberfläche im Code, werden vom normalen
-Providerpfad jedoch nicht verwendet.
+With additional rounds enabled, the rewriter may produce a new SearchSpec from the already visible result picture. Every round uses the same pipeline. The historical `strict_lexical`/`lexical`/`semantic` multi-probe language is no longer part of the normal provider path; compatibility/diagnostic code remains available separately.
 
-### Qdrant-Sync
+### Qdrant sync
 
 ```yaml
 sync:
@@ -224,7 +223,7 @@ sync:
   state_db: "state.sqlite"
 ```
 
-Die semantische Corpus-Filterung arbeitet auf bereits von Nextcloud/Elasticsearch extrahiertem Text; die Middleware dekodiert keine Binärdateien selbst.
+Semantic corpus filtering operates on text already extracted by Nextcloud/Elasticsearch. The middleware does not decode the source binary files itself.
 
 ### Live ACL
 
@@ -238,7 +237,11 @@ acl:
   batch_size: 100
 ```
 
-`credential_store` ist der sichere Multiuser-Default. `acl-off` ist Diagnosemodus.
+`credential_store` is the safe multi-user default. `acl-off` is diagnostic only. The API health payload reports `live_acl.enabled` and `identity_mode`; `enabled=true` should be part of acceptance for every shared deployment.
+
+The live authorization implementation performs a WebDAV `SEARCH` scoped to the current user's files and checks candidate `oc:fileid` values. Checks are batched: with the default `batch_size: 100`, 50 file IDs require **one authenticated WebDAV request**, not 50 requests. This makes the ordinary bounded-candidate check comparable to a normal Nextcloud/WebDAV round trip rather than a per-document network loop.
+
+Request-dependent `files_accesscontrol` policies can depend on source address, URL, time or user agent. Operators that rely on such rules should include their actual policy shapes in acceptance testing so the middleware request context matches the intended Nextcloud policy.
 
 ### Neo4j / Graph
 
@@ -251,11 +254,13 @@ neo4j:
   database: "neo4j"
 ```
 
-GraphQueue, Entity Discovery und Relation Discovery besitzen separate Budgets/Schwellwerte in `config.yaml`.
+GraphQueue, Entity Discovery and Relation Discovery use separate budgets/thresholds in `config.yaml`.
+
+Neo4j is writable because Graph-Lite stores curation/provenance and optional document observations. It should therefore be treated as sensitive infrastructure and should normally remain loopback/private-network only.
 
 ### Reranker
 
-Lokal:
+Local:
 
 ```yaml
 reranker:
@@ -277,7 +282,7 @@ reranker:
   fallback_backend: none
 ```
 
-Super-Light disables the reranker intentionally:
+Super-Light intentionally disables the reranker:
 
 ```yaml
 reranker:
@@ -285,15 +290,13 @@ reranker:
   fallback_backend: none
 ```
 
-This does **not** disable candidate deduplication. `dedup.enabled:true` remains an
-independent preprocessing step before the optional reranker/RRF fallback and prevents
-PDF/ODT/copy variants or near-identical text from consuming several candidate slots.
-The Super-Light normal verifier window is 10 authorized candidates; the standard
-reference profile remains at 6.
+This does **not** disable candidate deduplication. `dedup.enabled:true` remains an independent preprocessing step and prevents PDF/ODT/copy variants or near-identical text from consuming multiple candidate slots.
+
+The Super-Light normal verifier window is 10 authorized candidates; the standard reference profile remains at 6.
 
 ### RetrievalRecord
 
-Nicht standardmäßig eingeschaltet. Optional ergänzen:
+Disabled by default. Optional configuration:
 
 ```yaml
 retrieval_record:
@@ -301,9 +304,9 @@ retrieval_record:
   directory: "runtime/retrieval-records"
 ```
 
-Die Records enthalten strukturierte Retrieval-/Evidence-Metadaten, nicht den vollständigen Dokumentkörper.
+Records contain structured retrieval/evidence metadata, not complete document bodies.
 
-### Periodischer ES→Qdrant-Sync
+### Periodic ES → Qdrant synchronization
 
 ```yaml
 sync_worker:
@@ -313,7 +316,7 @@ sync_worker:
   enqueue_graph: false
 ```
 
-Der Worker ruft periodisch **denselben** inkrementellen `rag.sync` auf wie die CLI. `max_documents: 0` ist für den Dauerbetrieb wichtig: ein festes Limit könnte Dokumente weiter hinten im Elasticsearch-Index dauerhaft vom Abgleich ausschließen. Vollständiges Graph-Enqueue bleibt separat opt-in.
+The worker periodically invokes the same incremental `rag.sync` implementation used by the CLI. `max_documents: 0` is important for long-running operation; a fixed limit could permanently exclude documents later in the Elasticsearch index. Full graph enqueue remains a separate opt-in.
 
 ### Mail
 
@@ -324,13 +327,13 @@ mail:
   poll_interval_seconds: 300
 ```
 
-Konten, Server, Mailbox-Wurzeln, Zielpfade und Credentials sind benutzerbezogen in `runtime/users.sqlite` und werden über Admin UI/CLI verwaltet. Jede konfigurierte Mailbox ist eine **rekursive Wurzel**: der Worker ermittelt mit IMAP `LIST` alle selektierbaren Unterordner.
+Accounts, servers, mailbox roots, target paths and credentials are user-specific in `runtime/users.sqlite` and are managed through Admin UI/CLI. Each configured mailbox is a **recursive root**; the worker uses IMAP `LIST` to discover selectable descendants.
 
 ---
 
 ## 3.2 `provider.env` / `runtime.env`
 
-Getesteter OpenAI-Referenzpfad:
+Example OpenAI reference path:
 
 ```bash
 LLM_BACKEND=openai
@@ -342,35 +345,37 @@ ANSWER_MODEL=gpt-5.6-luna
 ANSWER_THINKING=false
 ```
 
-Secret ausschließlich in `runtime.env`:
+Secrets belong in `runtime.env`:
 
 ```bash
 LLM_API_KEY='...'
 ELASTICSEARCH_PASSWORD='...'
 NEO4J_PASSWORD='...'
 WEB_SEARCH_API_KEY='...'
-# optional eigener Schlüssel nur für den Web-Relevance-LLM:
+# optional dedicated key for the Web relevance LLM:
 WEB_LLM_API_KEY='...'
 ```
 
-Ist `WEB_LLM_API_KEY` leer, kann der Web-Relevance-Pfad auf den normalen `LLM_API_KEY` zurückfallen.
+If `WEB_LLM_API_KEY` is empty, the Web relevance path may fall back to the normal `LLM_API_KEY`.
 
-Die benutzergebundenen Nextcloud-/IMAP-Secrets liegen **nicht** in `runtime.env`. Für deren verschlüsselten Store gelten zusätzlich:
+User-bound Nextcloud/IMAP secrets do **not** live in `runtime.env`. The encrypted credential store additionally uses:
 
 ```bash
 RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/nextcloud-rag/runtime/credential-master.key
 RAG_CREDENTIAL_ENCRYPTION=required
 ```
 
-Der Master-Key selbst steht niemals in `runtime.env`; dort steht nur sein Pfad. `runtime.env` enthält in Stufe 1 weiterhin globale Provider-/Infrastruktur-Secrets und bleibt deshalb `0600`-geschützt.
+The master key itself is never placed in `runtime.env`; only its path is configured there. Stage-1 encryption still leaves global provider/infrastructure secrets in the protected `0600` environment file.
 
-Für native `api.openai.com` + GPT-5.6 setzt die Provider-Implementierung kompatible Parameter (`reasoning_effort`, `max_completion_tokens`) und entfernt nicht unterstützte Sampling-Parameter.
+The provider supports role-specific model routing. The architecture is intentionally model-agnostic: local Ollama models and hosted OpenAI-compatible providers can be mixed per role. Development testing has included Qwen3:8B via Ollama and GPT-5.6 Sol; these are validation points rather than a closed compatibility or quality list.
+
+For native `api.openai.com` + GPT-5.6, the provider selects compatible request parameters such as `reasoning_effort` and `max_completion_tokens` and removes unsupported sampling parameters.
 
 ---
 
 ## 3.3 `web.yaml`
 
-Aktueller Aufbau:
+Current shape:
 
 ```yaml
 enabled: true
@@ -432,11 +437,11 @@ archive:
 
 ### Brave
 
-`provider: brave` und leerer `url` verwendet automatisch den Brave-Web-Search-Endpunkt. Schlüssel: `WEB_SEARCH_API_KEY`.
+`provider: brave` with an empty `url` selects the Brave Web Search endpoint automatically. Key: `WEB_SEARCH_API_KEY`.
 
 ### SearXNG
 
-Beispiel:
+Example:
 
 ```yaml
 search:
@@ -445,13 +450,13 @@ search:
   api_key_env: ""
 ```
 
-SearXNG muss JSON-Ausgabe unterstützen. Der restliche Fetch-/Relevance-/Archive-Pfad bleibt identisch.
+SearXNG must support JSON output. The fetch/relevance/archive path is otherwise unchanged.
 
-`fetch.allow_private:false` sollte für öffentliche Web-Recherche beibehalten werden; die Regel gilt für Zielseiten, nicht für den lokal betriebenen Search-Provider.
+Keep `fetch.allow_private:false` for public Web research. The restriction applies to fetched target pages, not to a locally operated search provider.
 
 ---
 
-# 4. Start, Stop und Status
+# 4. Start, stop and status
 
 ```bash
 cd /opt/nextcloud-rag
@@ -460,15 +465,15 @@ cd /opt/nextcloud-rag
 ./stop-all.sh
 ```
 
-`start-all.sh` startet:
+`start-all.sh` starts:
 
-- API,
-- Provider,
-- Graph Worker nur wenn Neo4j + GraphQueue aktiviert sind,
-- ES→Qdrant Sync Worker nur wenn `sync_worker.enabled=true` und Qdrant aktiviert ist,
-- Mail Worker nur wenn `mail.enabled=true`.
+- API;
+- Provider;
+- Graph Worker only when Neo4j + GraphQueue are enabled;
+- ES → Qdrant Sync Worker only when `sync_worker.enabled=true` and Qdrant is enabled;
+- Mail Worker only when `mail.enabled=true`.
 
-Einzelstarts:
+Individual starts:
 
 ```bash
 ./start-api.sh
@@ -478,7 +483,7 @@ Einzelstarts:
 ./start-mail-worker.sh
 ```
 
-Logs liegen bei Startskriptbetrieb unter:
+Logs for script-based operation:
 
 ```text
 log/api.log
@@ -490,181 +495,183 @@ log/mail-worker.log
 
 ---
 
-# 5. Benutzerbefehle im Chat
+# 5. User commands in chat
 
-Alle Slash-Directives müssen am **Anfang** der Anfrage stehen. Für normale Benutzer zeigt `/help` bewusst nur die alltagsrelevanten Befehle. `Help`, `Hilfe` und einige geläufige Entsprechungen in anderen Sprachen werden ebenfalls als Hilfeanfrage erkannt.
+Slash directives must appear at the **beginning** of the request. `/help` intentionally exposes only ordinary user-facing commands.
 
-## 5.1 Kurzreferenz
+## 5.1 Quick reference
 
-| Befehl | Wirkung |
+| Command | Effect |
 |---|---|
-| `/new` | neuen Gesprächskontext für RAG-Auflösung beginnen |
-| `/web` | ausschließlich öffentliche Web-Recherche |
-| `/list` | gererankte Trefferliste mit relevanter Passage |
-| `/force` | Unspezifischkeits-Frühabbruch umgehen |
-| `/use:...` | Quellen der unmittelbar vorherigen Antwort oder ein eindeutig benanntes Dokument direkt verwenden |
-| `/help` | eingebaute Kurzreferenz |
+| `/new` | start a fresh RAG conversation context |
+| `/web` | public-Web research only |
+| `/list` | ranked result list with relevant passage |
+| `/force` | bypass the broad/unspecific early stop |
+| `/use:...` | directly reuse prior sources or a uniquely named document |
+| `/help` | built-in quick reference |
 
-## 5.2 Beispiele
+## 5.2 Examples
 
-Normale Hybridsuche:
-
-```text
-Welche Verbindung besteht zwischen Max Mustermann und Musterhof 280?
-```
-
-Trefferliste:
+Normal hybrid search:
 
 ```text
-/list Rechnungen der Beispiel GmbH
+What connection exists between Max Example and Example Holdings?
 ```
 
-Web-Recherche:
+Result list:
 
 ```text
-/web Aktueller Stand zur Beispiel GmbH
+/list invoices from Example Ltd.
 ```
 
-Vorherige interne Quellen weiterverwenden:
+Web research:
 
 ```text
-/use:1,2 Vergleiche diese beiden Dokumente.
+/web Current public information about Example Ltd.
 ```
 
-Archivierte Webquellen weiterverwenden:
+Reuse prior internal sources:
 
 ```text
-/use:W1,W2 Vergleiche diese beiden Quellen.
+/use:1,2 Compare these two documents.
 ```
 
-Direkte Datei:
+Reuse archived Web sources:
 
 ```text
-/use:"RG-EX-2025-001.odt" Fasse die Rechnung zusammen.
+/use:W1,W2 Compare these two sources.
 ```
 
-## 5.3 Kombinationsregeln
+Direct file:
 
-- `/use` darf im Slash-Modus nur mit `/new` kombiniert werden.
-- `/web` ist im Slash-Modus ein eigener öffentlicher Evidence-Arm.
-- `/force` und `/list` können kombiniert werden, soweit semantisch sinnvoll.
-- Interne Diagnose-/Expertendirectives bleiben technisch verfügbar, werden aber nicht in der normalen Benutzerhilfe beworben.
-- Der Systemstatus wird nicht über den Chat offengelegt; Administratoren verwenden Admin-UI, `status.sh` oder die geschützten Health-Endpunkte.
+```text
+/use:"INV-EX-2025-001.odt" Summarize this invoice.
+```
+
+## 5.3 Combination rules
+
+- `/use` may only be combined with `/new` in slash mode.
+- `/web` is a separate public evidence arm.
+- `/force` and `/list` may be combined where meaningful.
+- Internal diagnostic/expert directives remain technically available but are not advertised in ordinary help.
+- System status is not exposed through ordinary chat; administrators use Admin UI, `status.sh` or protected health endpoints.
 
 ---
 
-# 6. Natürliche Steueranweisungen im führenden Klammerblock
+# 6. Natural control instructions in a leading parenthesized block
 
-Komplexere Workflows können in **genau einem führenden Klammerblock** beschrieben werden. Der restliche Text bleibt die eigentliche Aufgabe.
+More complex workflows can be expressed in **one leading parenthesized block**. The remaining text is the task itself.
 
-Beispiel:
+Example:
 
 ```text
-(Nutze Dokument 2 und suche anschließend im Web)
-Gleiche die darin enthaltenen Angaben mit öffentlichen Quellen ab.
+(Use document 2 and then search the Web)
+Compare the statements in it with public sources.
 ```
 
-Der Instruction-Compiler darf nur einen geschlossenen Satz interner Aktionen wählen:
+The instruction compiler may choose only from a closed action set:
 
-- vorherige Quellen verwenden,
-- neue interne Suche `auto`, `files/vector/graph` oder `elastic`,
-- Web an/aus,
-- Web parallel oder anschließend,
-- gerankte/rohe Liste,
-- `/force`-Äquivalent,
-- Kontextreset.
+- reuse previous sources;
+- new internal search: `auto`, `files/vector/graph` or `elastic`;
+- Web on/off;
+- Web in parallel or after internal evidence;
+- ranked/raw list;
+- `/force` equivalent;
+- context reset.
 
-Beispiele:
-
-```text
-(Suche intern und anschließend im Web)
-Vergleiche die internen Angaben zu Firma X mit dem aktuellen öffentlichen Stand.
-```
+Examples:
 
 ```text
-(Nutze diese Dokumente und suche anschließend im Web)
-Prüfe die darin genannten Personen und Firmen anhand öffentlicher Quellen.
+(Search internally and then on the Web)
+Compare internal information about Company X with the current public record.
 ```
 
 ```text
-(Suche nur in Dokumenten und Vektor)
-Wo geht es um eine unberechtigte Geschäftsadresse?
+(Use these documents and then search the Web)
+Check the people and companies mentioned in them against public sources.
 ```
 
 ```text
-(Suche nur im Web)
-Michaela Merz
+(Search documents and vector only)
+Where is an unauthorized business address discussed?
 ```
 
-### Einschränkung
+```text
+(Search only on the Web)
+Michaela Example
+```
 
-Direkte Dokumentauswahl **plus gleichzeitig eine neue interne Suche** ist in diesem Stand noch nicht vorgesehen. Direkte Dokumentauswahl + Web ist dagegen ausdrücklich unterstützt.
+### Limitation
 
-Ein führendes `/` aktiviert immer den Slash-Directive-Modus; ein späterer Klammerausdruck ist normaler Benutzertext.
+Direct document selection **plus a simultaneous new internal search** is not supported in the current snapshot. Direct document selection + Web is supported.
+
+A leading `/` always activates slash-directive mode; a later parenthesized expression is ordinary user text.
 
 ---
 
-# 7. Web-Workflows
+# 7. Web workflows
 
-## 7.1 Explizit Web-only
-
-```text
-/web <Suchauftrag>
-```
-
-Ablauf:
-
-1. Brave/SearXNG sucht.
-2. Zielseiten werden tatsächlich geladen.
-3. Reranker/Passage-Selektion bestimmt eine aussagekräftige Passage pro Seite.
-4. Relevance-LLM bewertet jede geladene Quelle.
-5. Nur Quellen oberhalb `min_score` und mit `relevant=true` werden Evidence.
-6. Antwort zitiert `[W1]`, `[W2]`, ...
-7. Optionales Archiv wird geschrieben.
-
-Search-Snippets werden niemals als Evidence verwendet.
-
-## 7.2 Interne Informationen mit Web vergleichen
-
-Empfohlen:
+## 7.1 Explicit Web-only
 
 ```text
-(Suche intern und anschließend im Web)
-Suche nach XY und vergleiche die internen Informationen mit öffentlichen Quellen.
+/web <research task>
 ```
 
-Bei `web_timing=after` darf der Provider aus der bereits ausgewählten internen Evidence bis zu drei konkrete Webqueries ableiten.
+Flow:
 
-## 7.3 Bestimmtes Dokument gegen Web prüfen
+1. Brave/SearXNG searches.
+2. Target pages are fetched.
+3. Reranker/passage selection identifies a meaningful passage per page.
+4. Relevance LLM evaluates each fetched source.
+5. Only sources above `min_score` with `relevant=true` become evidence.
+6. The answer cites `[W1]`, `[W2]`, ...
+7. Optional archive is written.
+
+Search-engine snippets are never treated as answer evidence.
+
+## 7.2 Compare internal information with the Web
+
+Recommended:
 
 ```text
-(Nutze Dokument 2 und suche anschließend im Web)
-Gleiche die Aussagen mit öffentlichen Quellen ab.
+(Search internally and then on the Web)
+Find XY and compare the internal information with public sources.
 ```
 
-Dabei wird **keine neue interne Suche** durchgeführt; Dokument 2 ist direkte interne Evidence. Der Webquery-Helper darf relevante Eigennamen, Firmen, Orte, Aktenzeichen oder Relationen aus dieser Evidence als Suchanker verwenden.
+For `web_timing=after`, the provider may derive up to three Web queries from already authorized/selected internal evidence.
 
-## 7.4 Automatischer Web-Fallback
+This is an explicit **egress boundary**. The Web-query helper treats internal material as untrusted evidence and is instructed not to copy passwords, API keys, tokens, e-mail addresses, long random strings, internal contract/case identifiers or other unusual verbatim identifiers into public search queries unless the user explicitly asks to search for that exact value.
 
-Für vertrauenswürdige Frontends kann bei unzureichender interner Evidence Web hinzugenommen werden. Voraussetzungen:
+## 7.3 Check a specific document against the Web
 
-1. `web.yaml: enabled: true`,
-2. Web Research im Admin UI für den kanonischen Benutzer aktiviert,
-3. Client sendet:
+```text
+(Use document 2 and then search the Web)
+Compare the statements with public sources.
+```
+
+No new internal search is performed. Document 2 is direct internal evidence. The Web-query helper may use public names, companies, places or relationships from that evidence as search anchors subject to the egress rules above.
+
+## 7.4 Automatic Web fallback
+
+Trusted frontends may allow public Web evidence when internal evidence is insufficient. Requirements:
+
+1. `web.yaml: enabled: true`;
+2. Web Research enabled in Admin UI for the canonical user;
+3. the trusted integration sends:
 
 ```http
 X-RAG-Web-Allowed: true
 ```
 
-4. konservativer Web-Gate entscheidet `use_web=true`.
+4. the conservative Web gate returns `use_web=true`.
 
-Ein interner Nulltreffer löst daher nicht automatisch und blind einen externen Request aus.
+An internal null result therefore does not automatically trigger a public request.
 
 ---
 
-# 8. Webarchiv
+# 8. Web archive
 
-Multiuser-Archivziele werden pro kanonischem Benutzer im Admin UI/`users.sqlite` gespeichert. Nextcloud WebDAV bleibt die Schreibberechtigungsinstanz.
+Multi-user archive targets are stored per canonical user in Admin UI/`users.sqlite`. Nextcloud WebDAV remains the write-authorization authority.
 
 Layout:
 
@@ -680,46 +687,50 @@ Layout:
     02-source.pdf
 ```
 
-Der `.txt`-Snapshot enthält u. a.:
+The `.txt` snapshot includes, among other fields:
 
-- Final-URL,
-- Original-URL,
-- Titel,
-- Publisher,
-- Veröffentlichungsdatum falls erkannt,
-- Abrufzeitpunkt,
-- Content-Type,
-- SHA-Hash,
-- Search-Provider,
-- Search-Rank,
-- Relevance-Score und -Reason,
-- Query,
-- extrahierten Text.
+- final URL;
+- original URL;
+- title;
+- publisher;
+- publication date when detected;
+- retrieval timestamp;
+- content type;
+- SHA hash;
+- search provider;
+- search rank;
+- relevance score/reason;
+- query;
+- extracted text.
 
-`fetch-log.jsonl` schreibt pro tatsächlich angefordertem Suchtreffer genau einen JSON-Datensatz mit Requested/Final URL, HTTP-Status, Redirect-Zahl, Fetch-Fehler, Content-Hash und der vollständigen Relevance-Entscheidung. Damit bleiben auch verworfene Recherchepfade nachvollziehbar.
+`fetch-log.jsonl` writes one JSON record for every search result actually requested, including requested/final URL, HTTP status, redirect count, fetch error, content hash and the full relevance decision. Rejected research paths therefore remain auditable.
 
-`write_metadata_json:true` erzeugt für jede ausgewählte Quelle eine separate, versteckte Metadatendatei (`.NN-source.metadata.json`). Wenn `archive.renderer.enabled:true` gesetzt ist, werden ausgewählte HTML-Quellen nach dem synchronen Text-/Metadaten-Archivschritt in einer begrenzten In-Process-Background-Queue gerendert. Das Sidecar steht zunächst auf `render.status=pending` und wird anschließend auf `complete` oder `failed` aktualisiert. Bereits gelieferte PDFs werden unverändert gespeichert. Renderer-Fehler sind fail-open und beeinflussen die Text-Evidence oder Benutzerantwort nicht.
+`write_metadata_json:true` creates a hidden metadata sidecar (`.NN-source.metadata.json`) for each selected source.
 
-Der gemeinsame Playwright-Renderer nutzt standardmäßig einen Desktop-Viewport von 1440×900 und A4 Landscape. Optionaler best-effort Consent/Overlay-Cleanup bleibt bewusst begrenzt. Bei `persist_state:true` wird Browser-Storage pro angefordertem Host in einem lokalen Renderer-Volume wiederverwendet, damit normale Cookie-Zustimmungen nicht bei jeder Recherche neu erscheinen. Der Archiv-Renderer ist für öffentliche Quellen gedacht: Login-Walls, Paywalls, CAPTCHAs und Zugriffssperren werden nicht umgangen oder automatisch entfernt. Die Sidecar-Metadaten protokollieren Landscape/Viewport, State-Reuse und Cleanup-Aktionen.
+When `archive.renderer.enabled:true`, selected HTML sources are rendered after the synchronous text/metadata archive step through a bounded in-process background queue. The sidecar moves from `render.status=pending` to `complete` or `failed`. Renderer failures are fail-open and do not change text evidence or the already delivered answer.
 
-`write_raw_html:true` speichert zusätzlich den originalen Haupt-HTML-Response. Das ist **kein** vollständiger WARC-/Browser-Snapshot mit Unterressourcen. Auch das Playwright-PDF ist eine visuelle Momentaufnahme und kein forensisches Capture.
+The shared Playwright renderer defaults to a 1440×900 desktop viewport and A4 Landscape. Optional consent/overlay cleanup is deliberately best-effort. With `persist_state:true`, browser storage is reused per requested host so ordinary cookie choices need not be repeated every run.
 
-Archivierte `.txt`-Quellen können unmittelbar über `/use:W1` wiederverwendet werden, ohne auf eine spätere Elasticsearch-Synchronisation zu warten. Der Zugriff erfolgt erneut über den aktuellen Benutzer-WebDAV-Zugang.
+The archive renderer is intended for public sources. Login walls, paywalls, CAPTCHAs and access controls are not bypassed.
+
+`write_raw_html:true` stores the main original HTML response. This is **not** a complete WARC/browser capture with subresources. A Playwright PDF is also only a visual snapshot, not a forensic capture.
+
+Archived `.txt` sources can be reused immediately through `/use:W1` without waiting for later Elasticsearch synchronization. Access again uses the current user's WebDAV credential.
 
 ---
 
-# 9. Trusted Clients und Benutzeridentität
+# 9. Trusted clients and user identity
 
-Provider-Bearer identifizieren Frontend-Clients, nicht Personen.
+Provider Bearer keys identify trusted frontend/integration **clients**, not people.
 
 ```text
 scoped identity = client_id::external_user_id
 canonical user  = (nextcloud_server, nextcloud_login)
 ```
 
-Ein Benutzer kann über mehrere Trusted Clients denselben kanonischen Nextcloud-Account erreichen.
+A user can reach the same canonical Nextcloud account through multiple Trusted Clients.
 
-Externes OpenWebUI:
+External OpenWebUI example:
 
 ```json
 {
@@ -727,7 +738,7 @@ Externes OpenWebUI:
 }
 ```
 
-Automatischer Web-Fallback zusätzlich:
+Automatic Web fallback additionally:
 
 ```json
 {
@@ -736,13 +747,30 @@ Automatischer Web-Fallback zusätzlich:
 }
 ```
 
-Jedes Frontend erhält einen eigenen Provider-Client-Key.
+Every frontend receives its own provider-client key.
+
+### Security boundary
+
+The frontend-supplied external user ID is intentionally trusted **only after** the provider client has authenticated. It is then scoped as `client_id::external_user_id` and used to select the server-side credential binding.
+
+Consequently, a provider-client key must be treated as a credential for a trusted integration server. If an attacker obtains that key and can reach the provider, they may submit an external user ID corresponding to another binding inside the same client scope and thereby cause requests to use that user's stored Nextcloud credential.
+
+Operational rules:
+
+- keep the provider-client key on the integration server; do not expose it to browser JavaScript;
+- issue a separate key per integration;
+- rotate/disable a client immediately after suspected exposure;
+- bind the provider to loopback/private networks where possible;
+- when an external integration must reach it, use reverse-proxy source-IP/network allowlists and, where appropriate, mTLS or an equivalent second network-level control;
+- do not treat an arbitrary public OpenAI-compatible client as trusted merely because it can send an `Authorization` header.
+
+This boundary allows AKI to remain UI-agnostic and to be combined with other local RAG systems, agents or tools, but only when the administrator deliberately grants that integration access.
 
 ---
 
-# 10. Administrations-CLI
+# 10. Administration CLI
 
-Alle Beispiele aus `/opt/nextcloud-rag`:
+All examples assume `/opt/nextcloud-rag`:
 
 ```bash
 cd /opt/nextcloud-rag
@@ -750,13 +778,13 @@ cd /opt/nextcloud-rag
 
 ## 10.1 Trusted Provider Clients
 
-Modul:
+Module:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.provider_clients ...
 ```
 
-Befehle:
+Commands:
 
 ```text
 list
@@ -767,7 +795,7 @@ disable <client_id>
 delete <client_id>
 ```
 
-Beispiele:
+Examples:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.provider_clients list
@@ -776,11 +804,11 @@ sudo -u rag ./.venv/bin/python -m rag.provider_clients rotate openwebui-office
 sudo -u rag ./.venv/bin/python -m rag.provider_clients disable openwebui-office
 ```
 
-Create/Rotate geben den neuen API-Key **einmal** aus; gespeichert wird nur der Hash.
+Create/Rotate prints the new API key **once**; only its hash is stored.
 
-`delete` entfernt den Client und frontendgebundene Identitäts-/Nextcloud-Credential-Daten dieses Clients. Kanonische Benutzer und deren Mail-/Web-Einstellungen bleiben bestehen, sofern sie noch anderweitig genutzt werden können.
+`delete` removes the client and client-bound identity/Nextcloud-credential data. Canonical users and mail/Web settings remain when still referenced independently.
 
-## 10.2 Kanonische Benutzer
+## 10.2 Canonical users
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.user_admin list
@@ -789,9 +817,9 @@ sudo -u rag ./.venv/bin/python -m rag.user_admin reauth <login> [--server URL]
 sudo -u rag ./.venv/bin/python -m rag.user_admin set-mail-password <login> [--server URL] [--account-id ID]
 ```
 
-`reauth` entfernt Nextcloud-App-Passwörter und Pending Login Flows; der kanonische Benutzer sowie Mail-/Web-Einstellungen bleiben.
+`reauth` removes Nextcloud app passwords and pending Login Flows; the canonical user and mail/Web settings remain.
 
-### Legacy/fortgeschrittene Credential-CLI
+### Legacy/advanced credential CLI
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.user_credentials list-users
@@ -799,76 +827,76 @@ sudo -u rag ./.venv/bin/python -m rag.user_credentials set-nextcloud <user_id> <
 sudo -u rag ./.venv/bin/python -m rag.user_credentials delete-nextcloud <user_id> --client <client>
 ```
 
-Diese CLI ist für manuelle/diagnostische Bindings; normal ist Nextcloud Login Flow v2 zu bevorzugen.
+This CLI is intended for manual/diagnostic bindings. Nextcloud Login Flow v2 is preferred for ordinary use.
 
 ---
 
-# 11. Sync- und Retrieval-Diagnostik
+# 11. Sync and retrieval diagnostics
 
-## 11.1 Elasticsearch -> Qdrant Sync
+## 11.1 Elasticsearch → Qdrant sync
 
 ```bash
-sudo -u rag ./.venv/bin/python -m rag.sync [Optionen]
+sudo -u rag ./.venv/bin/python -m rag.sync [options]
 ```
 
-Optionen:
+Options:
 
 ```text
 -c, --config FILE
---include-path PREFIX       wiederholbar; überschreibt sync.include_paths
---exclude-path PREFIX       wiederholbar; überschreibt sync.exclude_paths
---max-documents N           0 = unbegrenzt
---dry-run                   keine Änderungen an Qdrant/State/Queue
+--include-path PREFIX       repeatable; overrides sync.include_paths
+--exclude-path PREFIX       repeatable; overrides sync.exclude_paths
+--max-documents N           0 = unlimited
+--dry-run                   no writes to Qdrant/state/queue
 --log-level LEVEL
---enqueue-graph             neue/geänderte Dokumente zusätzlich einreihen
---no-enqueue-graph          Graph-Enqueue für diesen Lauf deaktivieren
+--enqueue-graph             enqueue new/changed documents for Graph processing
+--no-enqueue-graph          disable Graph enqueue for this run
 ```
 
-Beispiele:
+Examples:
 
 ```bash
-sudo -u rag ./.venv/bin/python -m rag.sync --dry-run --include-path Nordstern
-sudo -u rag ./.venv/bin/python -m rag.sync --include-path Nordstern --max-documents 500
+sudo -u rag ./.venv/bin/python -m rag.sync --dry-run --include-path Example
+sudo -u rag ./.venv/bin/python -m rag.sync --include-path Example --max-documents 500
 ```
 
-Im Normalbetrieb übernimmt `start-sync-worker.sh` diesen Aufruf periodisch. Das ist kein eigener Synchronisationscode: State, Chunking, Embedding und Qdrant-Lifecycle bleiben vollständig in `rag.sync`. Der Mail-spezifische `post_sync.qdrant`-Hook sollte bei aktivem Sync Worker normalerweise deaktiviert bleiben.
+In normal operation `start-sync-worker.sh` runs this periodically. It is not a second synchronization implementation; state, chunking, embeddings and Qdrant lifecycle remain in `rag.sync`.
 
-## 11.2 Qdrant-/Embedding-Smoke
+## 11.2 Qdrant/embedding smoke test
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.qdrant_smoke -c config.yaml
 sudo -u rag ./.venv/bin/python -m rag.qdrant_smoke -c config.yaml --json
 ```
 
-Der Probe erzeugt ein Embedding und prüft Qdrant/Collection. Qdrant und Embedding-Backend sind konzeptionell getrennte Fehlerquellen; bei Diagnose beide separat prüfen.
+The probe creates an embedding and checks Qdrant/collection. Treat the embedding backend and Qdrant as separate failure domains.
 
-## 11.3 Live-ACL-Smoke
+## 11.3 Live-ACL smoke test
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.acl_smoke files:42040 files:66732 --user-id 'client::userid'
 ```
 
-Numerische IDs werden automatisch zu `files:<id>` normalisiert.
+Numeric IDs are normalized automatically to `files:<id>`.
 
-## 11.4 Manuelle Hybridsuche
+## 11.4 Manual hybrid search
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.hybrid_search \
-  "unberechtigter Zugang" \
-  --must Firmenadresse \
-  --should Geschäftsanschrift \
-  --phrase "Nutzungsuntersagung" \
+  "unauthorized access" \
+  --must business-address \
+  --should registered-office \
+  --phrase "prohibition of use" \
   --limit 10
 ```
 
-Optionen:
+Options:
 
 ```text
-semantic                         optionale semantische Query
---must TERM                      wiederholbar
---should TERM                    wiederholbar
---not TERM                       wiederholbar
---phrase PHRASE                  wiederholbar
+semantic                         optional semantic query
+--must TERM                      repeatable
+--should TERM                    repeatable
+--not TERM                       repeatable
+--phrase PHRASE                  repeatable
 --from-date YYYY-MM-DD
 --to-date YYYY-MM-DD
 --limit N
@@ -879,15 +907,15 @@ semantic                         optionale semantische Query
 
 ---
 
-# 12. Graph-Administration
+# 12. Graph administration
 
-Hauptmodul:
+Main module:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph --config config.yaml <command>
 ```
 
-## 12.1 Basis und Inspektion
+## 12.1 Basics and inspection
 
 ```text
 check
@@ -902,7 +930,7 @@ forms --entity <ENTITY_ID>
 blocked-entities
 ```
 
-## 12.2 Kandidaten/Backfills
+## 12.2 Candidates/backfills
 
 ```text
 refresh-candidates [--max-candidates N]
@@ -911,57 +939,57 @@ curation-backfill
 form-policy-backfill
 ```
 
-Diese Backfills sind konservative Wartungsoperationen; `identity-backfill` führt keine automatischen Entity-Merges aus.
+These are conservative maintenance operations. `identity-backfill` does not perform automatic Entity merges.
 
-## 12.3 Merge und Negative Identity
+## 12.3 Merge and negative identity
 
-Preview ist Default:
+Preview is the default:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph merge \
   --keep <ENTITY_A> --merge <ENTITY_B>
 ```
 
-Tatsächlich ausführen:
+Execute:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph merge \
   --keep <ENTITY_A> --merge <ENTITY_B> --alias-policy contextual --yes
 ```
 
-Merge dauerhaft ablehnen:
+Permanently reject a merge:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph reject-merge \
   --left <ENTITY_A> --right <ENTITY_B> --reason manual_rejection --yes
 ```
 
-## 12.4 Namen, Aliase, Policies
+## 12.4 Names, aliases and policies
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph correct-name \
-  --entity <ID> --name "Max Alexander Mustermann" --yes
+  --entity <ID> --name "Max Alexander Example" --yes
 
 sudo -u rag ./.venv/bin/python -m rag.graph add-alias \
-  --entity <ID> --alias "Max Mustermann" --policy contextual --weight 0.95 --yes
+  --entity <ID> --alias "Max Example" --policy contextual --weight 0.95 --yes
 
 sudo -u rag ./.venv/bin/python -m rag.graph remove-alias \
-  --entity <ID> --alias "Mäx Mustermann" --yes
+  --entity <ID> --alias "M. Example" --yes
 
 sudo -u rag ./.venv/bin/python -m rag.graph set-form-policy \
-  --entity <ID> --form "D. Wahl" --policy search_only --yes
+  --entity <ID> --form "M. Example" --policy search_only --yes
 ```
 
 Policies:
 
-| Policy | Wirkung |
+| Policy | Effect |
 |---|---|
-| `exclusive` | Query + harte Ingestion-Identitätsauflösung |
-| `contextual` | Query/Kandidat, keine harte Ingestion-Auflösung |
-| `search_only` | nur Query-Erweiterung |
-| `document_only` | nicht als globaler Resolver/Search-Form exponiert |
+| `exclusive` | query + hard ingestion identity resolution |
+| `contextual` | query/candidate use; no hard ingestion resolution |
+| `search_only` | query expansion only |
+| `document_only` | not exposed as a global resolver/search form |
 
-## 12.5 Observation korrigieren / Nicht-Entity löschen
+## 12.5 Correct an observation / remove a non-entity
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph correct-observation \
@@ -971,57 +999,55 @@ sudo -u rag ./.venv/bin/python -m rag.graph delete-entity \
   --entity <ID> --reason manual_not_an_entity --yes
 ```
 
-`delete-entity` erhält die zugrunde liegenden Observations als verworfene Evidence, statt Provenienz spurlos zu entfernen.
+`delete-entity` preserves the underlying observations as rejected evidence instead of erasing provenance.
 
-## 12.6 CardDAV-Provenienz
+## 12.6 CardDAV provenance
 
 ```text
 contact-sources
 contact-import-runs [--limit N]
 contacts [--cloud ID] [--source-user ID] [--addressbook NAME] [--import-run ID] [--limit N]
 contact-provenance-backfill [--cloud ID] [--source-user ID]
-rollback-contacts [Scope...] [--priority high|normal|background] [--no-relink] [--yes]
+rollback-contacts [scope...] [--priority high|normal|background] [--no-relink] [--yes]
 reassign-contact --contact <CONTACT_ID> --entity <ENTITY_ID> [--priority ...] [--no-relink] [--yes]
 ```
 
-## 12.7 Totaler Graph-Reset
+## 12.7 Full Graph reset
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph reset --yes-really-delete-all
 ```
 
-Dieser Befehl löscht **alle** Graphdaten und erfordert bewusst eine eigene Bestätigungsoption.
+This command deletes **all** Graph data and intentionally requires a dedicated confirmation switch.
 
 ---
 
-# 13. GraphQueue und GraphWorker
+# 13. GraphQueue and GraphWorker
 
-## Queue-Status
+Queue status:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_queue stats
 sudo -u rag ./.venv/bin/python -m rag.graph_queue recent --limit 20
 ```
 
-## Pfad einreihen
-
-Preview:
+Preview a path enqueue:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_queue enqueue-path \
-  Nordstern/Beteiligungen --priority normal
+  Example/Investments --priority normal
 ```
 
-Ausführen:
+Execute:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_queue enqueue-path \
-  Nordstern/Beteiligungen \
-  --exclude-path Nordstern/Beteiligungen/Archiv \
+  Example/Investments \
+  --exclude-path Example/Investments/Archive \
   --priority background --yes
 ```
 
-## Worker
+Worker:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_worker
@@ -1029,78 +1055,80 @@ sudo -u rag ./.venv/bin/python -m rag.graph_worker --once
 sudo -u rag ./.venv/bin/python -m rag.graph_worker --once --ignore-idle
 ```
 
-Der Worker respektiert standardmäßig Idle-Zeit und konfigurierte Quiet Hours.
+The worker honors configured idle-time and quiet-hour rules by default.
 
 ---
 
-# 14. Graph-Indexierung/Rebuild
+# 14. Graph indexing/rebuild
 
-## Ein Dokument manuell indexieren
+Index one document manually:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_indexer \
   --document files:66732 \
-  --query "manuelle Graphanalyse"
+  --query "manual graph analysis"
 ```
 
-Optionen:
+Options:
 
 ```text
---document ID       wiederholbar; erforderlich
+--document ID       repeatable; required
 --query TEXT
 --no-fuzzy
---no-discovery      kein LLM-Entity-Discovery; nur bekannte Entities relinken
---no-relations      keine LLM-Relation-/Claim-Discovery
---force             unveränderte Hashes trotzdem neu verarbeiten
+--no-discovery      no LLM entity discovery; relink known entities only
+--no-relations      no LLM relation/claim discovery
+--force             reprocess unchanged hashes
 ```
 
-## Queue-Evidence durch Graph v3 replayen
+Replay queued evidence through Graph v3:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_rebuild --phase both
 ```
 
-Optionen:
+Options:
 
 ```text
 --phase discover|relink|relations|both
 --limit N
 --offset N
---document ID       wiederholbar
+--document ID       repeatable
 --sleep SECONDS
 --log-level LEVEL
 --force
 --force-oversize
 ```
 
-## Entity-Duplikate nur vorschlagen
+Suggest Entity duplicates without modifying data:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.identity_suggestions \
   --type Person --min-score 0.70 --limit 50
 ```
 
-Die Scores sind Triage-Heuristiken, keine Identitätswahrscheinlichkeiten; es werden keine Daten verändert.
+Scores are triage heuristics, not identity probabilities.
 
-## Query-Entity-Auflösung diagnostizieren
+Diagnose query-entity resolution:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.graph_entities \
-  "Welche Verbindung besteht zwischen Max Mustermann und Musterhof 280?"
+  "What connection exists between Max Example and Example Holdings?"
 ```
 
-Optionen: `--no-fuzzy`, `--fuzzy-threshold`, `--fuzzy-max-candidates`.
+Options: `--no-fuzzy`, `--fuzzy-threshold`, `--fuzzy-max-candidates`.
 
 ---
 
-# 15. CardDAV-Sync / Kontakt-Seeds
+# 15. CardDAV sync / contact seeds
 
-Im Mehrbenutzerbetrieb wird CardDAV über den verifizierten Nextcloud-Account administriert. Die interne `canonical_user_id` ist nur Join-Key; UI und CLI verwenden `nextcloud_login` und bei Mehrdeutigkeit zusätzlich `--server`. Das bereits durch Login Flow gespeicherte Nextcloud-Credential wird wiederverwendet.
+In multi-user mode, CardDAV is administered through the verified Nextcloud account. Internal `canonical_user_id` is only a join key; UI and CLI use `nextcloud_login`, and `--server` disambiguates identical logins on multiple Nextcloud instances.
+
+The Nextcloud credential already created through Login Flow is reused.
 
 Admin UI:
 
 ```text
-RAG Admin -> Users -> <Nextcloud-Login> -> Kontakt-DB
+RAG Admin -> Users -> <Nextcloud login> -> Contact DB
 ```
 
 Native CLI:
@@ -1122,55 +1150,62 @@ cd /opt/nextcloud-rag/install/super-light
 ./contacts.sh sync --user alice
 ```
 
-Optionen für `sync`: `--dry-run`, `--limit`, `--force`; bei identischem Login auf mehreren Nextcloud-Instanzen zusätzlich `--server URL`. Fehlt das Nextcloud-Credential, ist der Benutzer/die Kontaktquelle deaktiviert oder existieren keine Kontakte, endet der Lauf als No-op statt als Stack-Fehler. Der Admin-UI-Aufruf startet einen Hintergrundjob und zeigt einen Fortschrittsbalken. Die UI kann verfügbare Adressbücher mit Anzeigename und technischem Slug ermitteln. Nach einem vollständigen erfolgreichen Lauf werden verschwundene CardDAV-hrefs aus den ContactRecords reconciled; `--limit`, `--dry-run` oder fehlgeschlagene Scans führen keine Quellenlöschung aus.
+Sync options: `--dry-run`, `--limit`, `--force`; use `--server URL` when the same login exists on multiple Nextcloud instances.
 
-Die ContactRecord-Provenienz bleibt extern nachvollziehbar über Nextcloud-Instanz (`cloud_id`), `source_user_id`/Login, Adressbuch und vCard-UID. Die kanonische UUID wird nicht zur fachlichen Quellenidentität. Das alte `python -m rag.carddav_sync` ohne `--user` und `NEXTCLOUD_USERNAME`/`NEXTCLOUD_APP_PASSWORD` bleibt nur als Single-User-Kompatibilitätspfad.
+Missing credentials, disabled user/contact source or an empty address book produce a no-op rather than a stack failure. The Admin action starts a background job and exposes progress. Available address books are discovered with display name and technical slug.
+
+After a complete successful run, vanished CardDAV hrefs are reconciled from ContactRecords. Limited/dry-run/failed scans do not perform source deletion.
+
+ContactRecord provenance remains externally traceable through Nextcloud instance (`cloud_id`), `source_user_id`/login, address book and vCard UID. The canonical UUID is not used as the business source identity.
+
+The historical `python -m rag.carddav_sync` path with environment credentials remains single-user compatibility only.
 
 ---
 
-# 16. Mail-Sync
+# 16. Mail sync
 
-Der langlaufende Scheduler ist deployment-neutral: native/systemd startet `.venv/bin/python -m rag.mail_worker`, Docker startet `python -m rag.mail_worker`. Der Prozess bleibt auch bei deaktiviertem Mail/Worker-Schalter aktiv und liest Konfiguration/Intervall regelmäßig neu.
+The long-running scheduler is deployment-neutral: native/systemd starts `.venv/bin/python -m rag.mail_worker`; Docker starts `python -m rag.mail_worker`.
 
-Global muss `config.yaml: mail.enabled=true` gesetzt sein; zusätzlich muss ein aktives Mailkonto für den kanonischen Benutzer existieren.
+Globally, `config.yaml: mail.enabled=true` is required and the canonical user must also have an enabled mail account.
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.mail_sync
 ```
 
-Filter:
+Filters:
 
 ```text
 --user <login|canonical_user_id>
 --account <account_id|name>
---mailbox <IMAP-folder>       diese Mailbox als rekursive Wurzel
---max-messages N             Limit pro tatsächlich synchronisierter Mailbox
+--mailbox <IMAP-folder>       this mailbox as recursive root
+--max-messages N             limit per actually synchronized mailbox
 --dry-run
 ```
 
-Beispiel:
+Example:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.mail_sync \
   --user demo-user --mailbox INBOX --max-messages 50 --dry-run
 ```
 
-## Rekursive Mailboxen
+## Recursive mailboxes
 
-Die in einem Mailkonto konfigurierten `mailboxes` sind Wurzeln, keine statische Liste. Vor jedem Account-Lauf fragt die Middleware den Server mit IMAP `LIST` ab und synchronisiert die Wurzel sowie alle **selektierbaren Unterordner** rekursiv. `\Noselect`-Container werden übersprungen, ihre selektierbaren Kinder bleiben erhalten. Der vom IMAP-Server gemeldete Hierarchietrenner wird übernommen; die Ordnerhierarchie bleibt damit auch in Nextcloud sichtbar.
+Configured `mailboxes` are roots, not a static list. Before each account run the middleware uses IMAP `LIST` and synchronizes the root plus all selectable descendants. `\Noselect` containers are skipped while selectable children remain included. The hierarchy delimiter reported by the server is honored.
 
-Beispiel für `INBOX/Projekte/2026`:
+Example:
 
 ```text
-<target>/<account>/INBOX/Projekte/2026/<year>/<month>/...
+<target>/<account>/INBOX/Projects/2026/<year>/<month>/...
 ```
 
-Nicht-ASCII-Mailboxnamen werden für klassisches IMAP4rev1 als Modified UTF-7 behandelt.
-Im Admin kann **Verbindung testen & Mailboxen ermitteln** die vom Server sichtbaren Mailboxen, Flags und Hierarchietrenner anzeigen; diese Anzeige verwendet dieselbe Discovery-Funktion wie der Sync.
+For classic IMAP4rev1, non-ASCII mailbox names are handled as Modified UTF-7.
 
-## Ein Ordner pro E-Mail
+The Admin action **Test connection & discover mailboxes** displays visible mailbox names, flags and hierarchy delimiter using the same discovery path as the sync worker.
 
-Neue Importe werden ab dieser Version ausschließlich im Directory-per-Mail-Layout geschrieben:
+## One directory per message
+
+New imports use the directory-per-message layout:
 
 ```text
 <target>/<account>/<mailbox-hierarchy>/<year>/<month>/
@@ -1183,40 +1218,42 @@ Neue Importe werden ab dieser Version ausschließlich im Directory-per-Mail-Layo
     message.eml              # optional
 ```
 
-`mail.txt` ist die indexierbare Normalform. `.mailmeta.json` enthält deterministische Mail-/Thread-Metadaten, IMAP UID/UIDVALIDITY, Importzeitpunkt, ausgewählte technische Header (`Return-Path`, `Received`, Authentication-/DKIM-/SPF-Informationen) sowie SHA-256 und Byte-Länge der vom IMAP-Server geholten Rohmessage. Attachments liegen direkt bei der Nachricht. Neue Konten speichern die redundante `message.eml` standardmäßig **nicht**; `store_eml=true` bleibt als explizite Option für Roh-/Forensik-Aufbewahrung erhalten.
+`mail.txt` is the indexable normalized representation. `.mailmeta.json` contains deterministic mail/thread metadata, IMAP UID/UIDVALIDITY, import time, selected transport/authentication headers and SHA-256/byte length of the raw message retrieved from IMAP.
 
-Alte flache Archive bleiben durch den Sidecar-Reader lesbar, werden aber **nicht automatisch verschoben**. Das vermeidet eine destruktive Datenmigration. Für einen vollständigen Neuaufbau sollte ein neuer/leerer Zielpfad verwendet und der Mail-State kontrolliert neu initialisiert werden.
+Attachments remain original files. New accounts do **not** store redundant `message.eml` by default; `store_eml=true` remains an explicit forensic/raw-message retention option.
 
-## Nachlauf zu Elasticsearch/Qdrant
+Legacy flat archives remain readable through the sidecar reader but are not moved automatically. For a clean rebuild, use a new/empty target path and deliberately reset the relevant mail state.
 
-Optional kann der Mail-Sync weiterhin Nextcloud FullTextSearch für tatsächlich beschriebene Monatsverzeichnisse anstoßen. Der generische ES→Qdrant-Abgleich sollte danach über den dedizierten `sync_worker` erfolgen. So werden nicht nur Mails, sondern auch alle anderen neuen/geänderten Nextcloud-Dokumente nach derselben Logik in Qdrant übernommen.
+## Follow-up synchronization to Elasticsearch/Qdrant
+
+Mail sync may still trigger Nextcloud FullTextSearch for monthly directories that were actually written. The generic ES → Qdrant reconciliation should then be performed by the dedicated `sync_worker`, so mail and all other new/changed Nextcloud documents share one vector lifecycle.
 
 ---
 
-# 17. Reset der semantischen Daten
+# 17. Reset semantic data
 
 ```bash
 ./reset-rag.sh
 ```
 
-zeigt nur Warnung. Tatsächlicher Reset:
+shows a warning only. Execute:
 
 ```bash
 ./reset-rag.sh --yes
 ```
 
-Gelöscht werden:
+Deleted:
 
-- lokaler SQLite-Sync-State,
-- konfigurierte Qdrant-Collection.
+- local SQLite sync state;
+- configured Qdrant collection.
 
-**Nicht** verändert werden Elasticsearch und Nextcloud.
+**Not changed:** Elasticsearch and Nextcloud.
 
 ---
 
-# 18. HTTP-API-Kurzreferenz
+# 18. HTTP API quick reference
 
-Interne API (standardmäßig `127.0.0.1:8765`):
+Internal API, normally bound to `127.0.0.1:8765`:
 
 ```text
 POST   /auth/nextcloud/start
@@ -1239,15 +1276,15 @@ POST   /multi-search
 POST   /search
 ```
 
-Diese Endpunkte sind primär interne Provider-/Admin-Schnittstellen; normale Benutzer sprechen den OpenAI-kompatiblen Provider unter `/v1/` an.
+These endpoints are primarily internal Provider/Admin interfaces. Ordinary users talk to the OpenAI-compatible provider under `/v1/`.
 
 ---
 
-# 19. Sicherheit und Credentials
+# 19. Security and credentials
 
-## 19.1 Verschlüsselter `runtime/users.sqlite`-Store
+## 19.1 Encrypted `runtime/users.sqlite` store
 
-Wichtige Tabellen:
+Important tables:
 
 ```text
 provider_clients
@@ -1262,37 +1299,37 @@ web_archive_roots
 store_meta
 ```
 
-Credential-Primärschlüssel berücksichtigen u. a. `rag_user_id`, `service`, `account_id`. **Nie** Credentials nur nach `username` per SQL aktualisieren.
+Credential primary keys include `rag_user_id`, `service` and `account_id`. Never update credentials by username alone with ad-hoc SQL.
 
-Reversible Werte in `credentials` (`nextcloud`, `mail_imap`) sowie Nextcloud-Login-Flow-Poll-Tokens werden in `0.8.3-rc6` mit **AES-256-GCM** verschlüsselt. Das gespeicherte Format ist versioniert (`enc:v1:`). Additional Authenticated Data bindet den Ciphertext an seine fachliche Identität; das Kopieren eines Ciphertexts auf einen anderen Benutzer/Service/Account führt deshalb zu einem Authentifizierungsfehler.
+Reversible values in `credentials` (`nextcloud`, `mail_imap`), Login Flow poll tokens and temporary curation-session app passwords are encrypted with **AES-256-GCM**. The stored format is versioned (`enc:v1:`). Additional Authenticated Data binds ciphertext to its semantic identity; copying ciphertext to another user/service/account therefore fails authentication.
 
-Trusted-Client-Keys in `provider_clients` bleiben nicht reversibel und werden weiterhin nur als SHA-256-Digest gespeichert.
+Trusted-client keys in `provider_clients` are non-reversible and stored only as SHA-256 digests.
 
-## 19.2 Master-Key und Betriebsmodi
+## 19.2 Master key and operating modes
 
-Fresh Install:
+Fresh install:
 
 ```text
 runtime/credential-master.key   root:rag 0640
 runtime/users.sqlite            rag:rag 0600
 ```
 
-Konfiguration:
+Configuration:
 
 ```bash
 RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/nextcloud-rag/runtime/credential-master.key
 RAG_CREDENTIAL_ENCRYPTION=required
 ```
 
-Modi:
+Modes:
 
-- `required`: Produktionsmodus; Klartext-Credential-Reads und fehlender/unsicherer Master-Key führen fail-closed zum Fehler.
-- `preferred`: Migrations-/Entwicklungsmodus; vorhandener Key wird genutzt, ältere Klartexte können kontrolliert migriert werden.
-- `disabled`: ausschließlich Diagnose/Legacy; neue Secrets bleiben Klartext und dieser Modus ist nicht für Produktion vorgesehen.
+- `required`: production; plaintext credential reads and missing/unsafe master key fail closed;
+- `preferred`: migration/development; use an available key and allow controlled migration of legacy plaintext;
+- `disabled`: diagnostic/legacy only; new secrets remain plaintext and this mode is not for production.
 
-Der Master-Key muss separat gesichert werden. Ein Backup von `users.sqlite` ohne den zugehörigen Master-Key ist für verschlüsselte Credentials nicht wiederherstellbar.
+Back up the master key separately but together with the encrypted database. A `users.sqlite` backup without the corresponding master key cannot restore encrypted credentials.
 
-## 19.3 Secret-Administration
+## 19.3 Secret administration
 
 ```bash
 cd /opt/nextcloud-rag
@@ -1302,55 +1339,67 @@ sudo -u rag ./.venv/bin/python -m rag.secret_admin migrate
 sudo -u rag ./.venv/bin/python -m rag.secret_admin verify
 ```
 
-`status`, `migrate` und `verify` geben niemals Secret-Werte aus. `verify` liefert Exit-Code 2, wenn Klartextreste oder Entschlüsselungsfehler vorhanden sind.
+`status`, `migrate` and `verify` never print secret values. `verify` exits with code 2 when plaintext remnants or decryption failures remain.
 
-Das RAG-Admin-Interface zeigt unter `/rag-admin/security` ausschließlich Statusinformationen. IMAP-Credentials werden getrennt von der Mailkonto-Konfiguration gesetzt/ersetzt; gespeicherte Passwörter werden niemals als Formularwert zurückgegeben.
+The Admin UI exposes status only under `/rag-admin/security`. Stored IMAP passwords are never returned as form values.
 
-## 19.4 Grenzen von Stufe 1
+## 19.4 Limits of stage-1 encryption
 
-Der Dienstaccount `rag` benötigt für den laufenden Betrieb Leserechte auf den Master-Key. Stufe 1 schützt damit insbesondere SQLite-/Backup-/Admin-Zugriffe, ist aber kein Schutz gegen `root` oder einen vollständig kompromittierten `rag`-Prozess.
+The `rag` service account must be able to read the master key during operation. Stage 1 protects SQLite/backup/admin handling but does not defend against `root` or a fully compromised `rag` process.
 
-Globale Secrets wie `LLM_API_KEY`, `WEB_SEARCH_API_KEY`, `ELASTICSEARCH_PASSWORD`, `NEO4J_PASSWORD`, `RAG_ADMIN_PASSWORD` und `PROVIDER_API_KEY` liegen weiterhin in `runtime.env`. Eine spätere Stufe 2 kann sie in dieselbe Secret-Abstraktion überführen und auf modernen Hosts optional systemd credentials/TPM oder einen privilegierten Helper verwenden.
+Global secrets such as `LLM_API_KEY`, `WEB_SEARCH_API_KEY`, `ELASTICSEARCH_PASSWORD`, `NEO4J_PASSWORD` and `RAG_ADMIN_PASSWORD` remain in `runtime.env`. A later stage may move them behind the same secret abstraction and optionally use systemd credentials/TPM or a privileged helper on modern hosts.
 
 ## 19.5 TLS
 
-Für Nextcloud ist TLS-Verifikation Default. `security.allow_insecure_nextcloud=true` ist ausschließlich Lab-Escape-Hatch.
+Nextcloud TLS verification is the default. `security.allow_insecure_nextcloud=true` is a lab escape hatch only.
 
-Für Elasticsearch/LLM/Web können private CAs über die jeweiligen CA-/Verify-Einstellungen eingebunden werden. Im dockerisierten Super-Light-Deployment kann `install.sh --profile super-light --ca-certificate <PEM>` wiederholt angegeben werden; die Zertifikate werden in den System-Trust des API/Provider-Images aufgenommen. Für die native Standardinstallation wird die private CA im Host-Truststore gepflegt; falls die Python-Laufzeit nicht automatisch den System-Bundle nutzt, `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` auf den kombinierten Host-CA-Bundle setzen.
+Private CAs for Elasticsearch/LLM/Web can be installed through the corresponding CA/verify settings. In dockerized Super-Light, `install.sh --profile super-light --ca-certificate <PEM>` may be repeated; certificates are added to the API/Provider image trust store.
+
+For native deployments, maintain the private CA in the host trust store. If the Python runtime does not automatically use the system bundle, set `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` to the combined host CA bundle.
+
+## 19.6 Untrusted evidence and prompt injection
+
+Retrieved text is data, not executable control input. The normal LLM path cannot emit arbitrary Elasticsearch DSL, Cypher, SQL or shell commands for execution. SearchSpec normalization, structured verifier output, Graph schemas/ontology, fixed budgets and live ACL substantially narrow indirect prompt-injection impact.
+
+The main residual risks are:
+
+- answer/evidence integrity: a model may misinterpret malicious instructions embedded in a document;
+- persistent Graph/Finding pollution if manipulated text produces a formally valid but misleading observation;
+- external information egress when Web-after derives public search queries from internal evidence.
+
+Evidence-bearing prompts therefore explicitly instruct models never to follow instructions contained inside documents, mail, archived chats or Web pages.
+
+Infrastructure least privilege remains separate from prompt handling: use read-only Elasticsearch credentials for retrieval, restrict Qdrant/Neo4j by network exposure and use backend-specific read-only credentials where supported.
 
 ---
 
-# 20. OpenWebUI
+# 20. OpenWebUI and alternative frontends
 
-Gepinnte Bundle-Version laut `versions.lock.yaml`:
+Pinned bundle version in `versions.lock.yaml`:
 
 ```text
 ghcr.io/open-webui/open-webui:v0.11.0
 ```
 
-Der aktuelle Installer stellt OpenWebUI bereit und bindet es loopback an den Provider. Die geplante restriktive Vorkonfiguration als „reines Frontend“ ist **noch nicht vollständig umgesetzt**. Bis dahin kann ein Administrator OpenWebUI selbst härten und insbesondere eigene RAG-/Knowledge-, Tool-, Plugin-, Websearch-, Update- und Workspace-Funktionen deaktivieren.
+The installer provides OpenWebUI and binds it loopback to the Provider. The planned restrictive "frontend-only" preconfiguration is not yet complete. Administrators should disable unrelated OpenWebUI RAG/Knowledge, tool, plugin, Web search, update and workspace capabilities when those are not intended.
 
-OpenWebUI-Follow-up-Helper wird bereits providerseitig unterdrückt und erzeugt keinen LLM-Aufruf.
+OpenWebUI follow-up helper requests are suppressed provider-side and do not invoke an LLM.
 
-Die Einbindung von OpenWebUI als externe Seite in Nextcloud funktioniert ohne besondere Middleware-Unterstützung und ist eine geeignete Navigationsintegration.
+OpenWebUI can also be embedded/navigated from Nextcloud without special middleware support.
+
+AKI itself is UI-agnostic. Any integration that implements the OpenAI-compatible request contract can use the Provider **if the administrator creates a Trusted Client for it**. This makes composition with other local RAG systems, agents and research tools possible, but the Trusted Client boundary in section 9 applies: provider keys belong on trusted integration servers and should be network-restricted when exposed beyond loopback.
 
 ---
 
-# 21. Health und Troubleshooting
+# 21. Health and troubleshooting
 
-## Gesamtstatus
+Overall status:
 
 ```bash
 ./status.sh
 ```
 
-Im Chat:
-
-```text
-/health
-```
-
-Direkt:
+Direct endpoints:
 
 ```bash
 curl -s http://127.0.0.1:8765/health | jq
@@ -1360,26 +1409,24 @@ curl -s http://127.0.0.1:8766/health | jq    # explicit provider diagnostics; ma
 
 ## Web
 
-Wenn `/web` meldet, dass keine relevante abrufbare Quelle gefunden wurde:
+If `/web` reports that no relevant fetchable source was found:
 
-1. API-Log prüfen, nicht nur Provider-Log.
-2. Search-Anzahl vs. Fetch-Anzahl prüfen.
-3. `web relevance decisions` prüfen.
-4. `WEB_SEARCH_API_KEY` und optional `WEB_LLM_API_KEY` prüfen.
-5. Bei Brave 401/429/5xx Search-Provider diagnostizieren.
-6. Bei Fetch-Ausfällen TLS, Redirects, Content-Type und SSRF/private-target-Regeln prüfen.
+1. inspect API log, not only Provider log;
+2. compare search count vs. fetch count;
+3. inspect Web relevance decisions;
+4. verify `WEB_SEARCH_API_KEY` and optional `WEB_LLM_API_KEY`;
+5. diagnose Brave 401/429/5xx responses;
+6. for fetch failures, inspect TLS, redirects, content type and SSRF/private-target rules.
 
-Die Web-Relevance-Prüfung erwartet vollständige Structured-Output-Entscheidungen für alle geladenen Quellen; unvollständige Antworten werden retried und danach explizit als Fehler ausgegeben.
+The Web relevance step expects complete structured-output decisions for all loaded sources. Incomplete outputs are retried and then surfaced as explicit errors.
 
 ## Vector/Qdrant
-
-Qdrant-Status und Embedding-Backend getrennt prüfen:
 
 ```bash
 sudo -u rag ./.venv/bin/python -m rag.qdrant_smoke --json
 ```
 
-Ein verbleibender bekannter Diagnosepunkt im aktuellen Freeze-Kandidaten ist, dass bestimmte Vector-Fehler in übergeordneten Meldungen noch zu generisch als `vector unavailable` zusammengefasst werden können. Ein echter Nulltreffer sollte konzeptionell nicht dasselbe sein wie ein Backend-Ausfall; bei Unklarheit API-Log und Smoke-Probe verwenden.
+Qdrant and the embedding backend are separate failure domains. A known diagnostic rough edge is that some vector failures may still be summarized as `vector unavailable`; a true zero-hit result should not be interpreted as backend failure.
 
 ## ACL
 
@@ -1387,64 +1434,69 @@ Ein verbleibender bekannter Diagnosepunkt im aktuellen Freeze-Kandidaten ist, da
 sudo -u rag ./.venv/bin/python -m rag.acl_smoke files:<id> --user-id '<client>::<user>'
 ```
 
-Keine ACL-Fehler durch künstlichen Backfill „kompensieren“.
+Do not compensate ACL denials with adaptive backfill. The current normal path filters a bounded ranking window. Acceptance tests with narrow rights should check both "no leak" and the resulting recall/result count.
+
+For latency measurements, record the WebDAV SEARCH time separately from total answer time. With the default batch size, up to 100 unique candidate file IDs are checked in one request; benchmarking 10/50/100 candidates on the actual Nextcloud instance is more meaningful than extrapolating from per-file WebDAV operations.
 
 ---
 
-# 22. Aktueller Feature-/Freeze-Status
+# 22. Current feature/freeze status
 
-**0.8.5-rc3 implementiert und im Tarball enthalten:**
+**Implemented in 0.8.5-rc4 and included in the package:**
 
-- gemeinsamer Middleware-Core mit `standard+native` und `super-light+dockerized`,
-- Query Rewriter/SearchSpec + Elasticsearch + optional Qdrant; Neo4j für Seed-/Alias-Expansion,
-- Super-Light ohne Qdrant/lokalen Reranker, aber mit unabhängiger Dublettenerkennung,
-- abgeleiteter QueryFrame / kompakter Verifier / RetrievalRecord-Code,
-- Live Nextcloud ACL ohne Backfill,
-- rollenabhängige lokale/remote LLM-Konfiguration,
-- Brave und SearXNG Web Search, Fetch + Passage Selection + Relevance-Gate,
-- gemeinsamer Playwright-Renderer mit 1440×900 Desktop-Viewport und A4 Landscape,
-- versteckte Webarchiv-Metadaten-Sidecars und best-effort persistenter Consent-State,
-- Graph CLI/Curation und `AKI Recherche`-Findings mit manueller Graph-Lite-Entity-/Claim-Kuration und Bulk-Entscheidungen,
-- CardDAV-Seeds pro verifiziertem Nextcloud-Benutzer über Admin UI/CLI,
-- Multiuser Nextcloud Login Flow,
-- admin-gesteuerte Mail-/Web-/Kontakt-Einstellungen,
-- AKI Recherche 0.2.3 für Nextcloud 23+ mit Chatpersistenz, Sidebar, sicheren Markdown-Tabellen, Zeitstempeln und Source-Scopes.
+- common middleware core with `standard+native` and `super-light+dockerized`;
+- Query Rewriter/SearchSpec + Elasticsearch + optional Qdrant; Neo4j seed/alias expansion;
+- Super-Light without Qdrant/local reranker but with independent deduplication;
+- derived QueryFrame, compact verifier and RetrievalRecord code;
+- live Nextcloud ACL without adaptive backfill;
+- role-specific local/remote LLM configuration;
+- Brave and SearXNG Web Search, fetch, passage selection and relevance gate;
+- shared Playwright renderer with 1440×900 desktop viewport and A4 Landscape;
+- hidden Web-archive metadata sidecars and best-effort persistent consent state;
+- Graph CLI/curation and AKI Recherche Findings with manual Graph-Lite Entity/Claim curation and bulk decisions;
+- CardDAV seeds per verified Nextcloud user through Admin UI/CLI;
+- multi-user Nextcloud Login Flow;
+- admin-controlled Mail/Web/Contact settings;
+- AKI Recherche 0.2.3 for Nextcloud 23+ with saved chats, sidebar, safe Markdown tables, timestamps and source scopes.
 
-**Bewusst außerhalb des 0.8.5-Beta-Scope:**
+**Intentionally outside the 0.8.5 beta scope:**
 
-- vollständiger Browser-/WARC/WACZ-Snapshot,
-- automatische globale Faktmaterialisierung aus QueryFrames,
-- `standard+dockerized` als freigegebener Deploymentpfad,
-- komplexe site-spezifische Cookie/Paywall/Login-Automation.
+- complete browser/WARC/WACZ capture;
+- automatic global fact materialization from QueryFrames;
+- `standard+dockerized` as a released deployment path;
+- complex site-specific cookie/paywall/login automation.
 
-Weitere operative Grenzen stehen in `docs/KNOWN-LIMITATIONS.md`. Nach dem
-0.8.5-RC1-Architekturfreeze werden vor allem Query-Rewrite, optionale Retrieval-Runden,
-Retrieval-Qualität und UI-Komfort weiterentwickelt.
+See `docs/KNOWN-LIMITATIONS.md` for additional operational limits.
 
 ---
 
-# 23. Releasevalidierung
+# 23. Release validation
 
-Der 0.8.5-rc3 Tarball wird beim Packaging und nach erneuter Extraktion geprüft auf:
+The 0.8.5-rc4 package baseline has been checked for:
 
 ```text
 MANIFEST                 264/264 OK
 pytest                    375 passed
-YAML                      13 Dateien OK
-XML                       2 Dateien OK
+YAML                      13 files OK
+XML                       2 files OK
 Shell syntax              OK
 Python compile            OK
-AKI/PHP                   9 Dateien OK
+AKI/PHP                   9 files OK
 JavaScript syntax         OK
 Package hygiene           OK
 ```
 
-Die zugrunde liegenden Super-Light-Feldpfade wurden auf einem frischen Leap-15.3-Klon in der internen RC2-Linie erfolgreich installiert und betrieben. Die RC3-spezifischen Änderungen betreffen vor allem Findings-Kuration, Admin-JavaScript/CSP, Veröffentlichungshygiene und Dokumentation. In der neutralen Packaging-Umgebung wurde **kein neuer Blank-VM-Lauf** ausgeführt; dieser bleibt Teil der Betreiber-Akzeptanz vor produktivem Rollout. Die Docker-Images in `versions.lock.yaml` sind digest-gepinnt. Secrets sind nicht Bestandteil des Pakets.
+The underlying Super-Light field path was installed and operated on a fresh Leap 15.3 clone. Later hardening changes mainly concern Findings curation, Admin JavaScript/CSP, publication hygiene and documentation.
 
-# Role-specific LLM routing
+No new blank-VM run was performed in the neutral packaging environment after those later documentation/hardening changes; blank-VM acceptance remains part of operator validation before production rollout.
 
-The canonical `LLM_*` variables remain the compatibility default. The following
-optional prefixes override individual roles:
+The subsequent ResearchRun / user-scoped curation hardening on the development branch is covered by the current CI regression suite: **389 tests passed** on 19 September 2026. This does not replace a fresh deployment acceptance test.
+
+Container images in `versions.lock.yaml` are digest-pinned. Secrets are not part of the package.
+
+## Role-specific LLM routing
+
+Canonical `LLM_*` variables remain the compatibility default. Optional role prefixes:
 
 ```text
 PLANNER_LLM_*
@@ -1453,11 +1505,9 @@ EVIDENCE_LLM_*
 ANSWER_LLM_*
 ```
 
-Each role accepts `BACKEND`, `BASE_URL`, `MODEL`, `API_KEY`, `VERIFY_TLS`,
-`CA_FILE` and `SCOPE` (`local|remote`). Unset values inherit the default.
-Provider `/health` reports effective role routing and scope.
+Each role accepts `BACKEND`, `BASE_URL`, `MODEL`, `API_KEY`, `VERIFY_TLS`, `CA_FILE` and `SCOPE` (`local|remote`). Unset values inherit the default. Provider `/health` reports effective routing and scope.
 
-Remote evidence budgets are configured by:
+Remote evidence budgets:
 
 ```text
 REMOTE_LLM_MAX_CHARS_PER_DOCUMENT
@@ -1467,34 +1517,59 @@ REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT
 REMOTE_ANSWER_MAX_DOCUMENTS
 ```
 
-The graph worker is controlled by `graph_queue.worker.enabled`; cited documents
-are automatically enqueued only when `graph_queue.auto_enqueue_cited_documents`
-is true. Mail background polling is independently controlled by
-`mail.worker.enabled`.
+The Graph Worker is controlled by `graph_queue.worker.enabled`; cited documents are automatically queued only when `graph_queue.auto_enqueue_cited_documents=true`.
 
-Web archive TLS verification is independent of search/fetch/relevance TLS and is
-controlled by `web.yaml: archive.verify_tls`. The current default does not archive
-raw HTML (`write_raw_html: false`); fetched text snapshots and raw PDFs remain
-available for provenance while reducing write amplification.
+Mail background polling is controlled independently by `mail.worker.enabled`.
 
-## AKI-Recherche-Findings (RC10)
+Web-archive TLS verification is separate from Search/Fetch/Relevance TLS and is configured through `web.yaml: archive.verify_tls`.
 
-`POST /graph/research-findings` übernimmt ausschließlich bereits strukturierte Query-Rewriter-/Verifier-Ergebnisse. Der Endpunkt startet keinen Graph-Worker und keinen LLM-Lauf. Akzeptiert werden nur Dokumenteinträge mit `verification_status=match` und `relation_binding=direct`.
+Raw HTML is not archived by default (`write_raw_html: false`); text snapshots and raw PDFs remain available as provenance.
 
-Konfiguration:
+## AKI Recherche Findings
+
+`POST /graph/research-findings` accepts already structured Query-Rewriter/Verifier output and starts neither a Graph Worker nor an additional LLM call. Only entries with `verification_status=match` and `relation_binding=direct` are persisted.
+
+Configuration:
 
 ```yaml
 research_findings:
   enabled: true
   timeout: 5
   max_documents_per_request: 30
+  curation:
+    admin_user_context: true
+    user_self_service: false
+    session_max_seconds: 7200
 ```
 
-Neo4j-Modell:
+The provenance/curation model separates the concrete research run from the shared Finding:
 
 ```text
-(:ResearchFinding:AKIResearchFinding)-[:SUPPORTED_BY]->(:Document)
-(:ResearchFinding)-[:QUERY_ENTITY {role, text, resolution}]->(:Entity)   # nur eindeutig exakt aufgelöst
+(:CanonicalUser)-[:PERFORMED]->(:ResearchRun)-[:PRODUCED]->(:ResearchFinding)
+(:ResearchFinding)-[:SUPPORTED_BY]->(:Document)
+(:ResearchFinding)-[:QUERY_ENTITY {role, text, resolution}]->(:Entity)
 ```
 
-Wesentliche Properties sind `finding_id`, `frame_hash`, `query_frame_json`, `evidence_frame_json`, `intent`, `entity_texts`, `relation_texts`, `constraints_json`, `concepts`, `provenance_code=aki_research`, `provenance_label=AKI Recherche`, Query-Rewriter-/Verifier-Modell, Softwareversion sowie First/Last-Seen und `observation_count`. `finding_id` ist deterministisch aus Provenienz, Dokument-ID und kanonischem Query-Frame gebildet.
+`ResearchRun` stores the originating user/query/runtime provenance. A run or selected `PRODUCED` edges can be dismissed from the curation queue without deleting the shared Finding or its provenance.
+
+The legacy-compatible `finding_id` remains deterministic from provenance, document ID and the complete canonical QueryFrame. A separate `curation_hash` covers the structured Entities, relations, constraints and concepts while excluding free-form `intent` wording. Persistence first looks for an existing Finding on the same supporting document with that curation fingerprint, allowing equivalent provider/chat runs to reuse one global curation decision without changing existing Finding IDs during upgrade.
+
+Admin curation is user-context scoped. The RAG Admin selects a canonical Nextcloud user; the backend requires that the selected user actually produced the Finding and re-checks the supporting document through the user's current live Nextcloud ACL before returning Finding evidence. Unauthorized Findings are omitted from lists and counts.
+
+Optional end-user curation is exposed at `/curation/`. It uses Nextcloud Login Flow v2 once per curation session and creates no separate RAG password. The returned app password is stored only in the encrypted `curation_sessions` table, not in the normal provider credential namespace and not in `identity_bindings`.
+
+A curation session has a configurable **absolute** maximum age; default is 7200 seconds. Request activity does not extend expiry. The browser receives a random HttpOnly/Secure/SameSite=Strict session cookie, while SQLite stores only its hash. State-changing requests require a session-bound CSRF token.
+
+Every request re-checks session expiry, canonical-user enablement, per-user curation permission and live Nextcloud ACL. Logout or expiry invalidates the local session before app-password revocation is attempted. Failed revocations remain `revocation_pending` and cannot authenticate. API startup invalidates all surviving curation sessions and retries revocation.
+
+Shared Entity/Finding/RelationObservation curation records the curator actor for audit provenance. The knowledge decision remains global, while visibility of supporting evidence remains per-user and live-ACL-controlled.
+
+---
+
+# 24. Security and lifecycle documents
+
+For operational and review questions also see:
+
+- `docs/THREAT-MODEL.md` — shared-alias vs. evidence boundary, ACL ordering, prompt injection, archives and Findings;
+- `docs/DATA-LIFECYCLE.md` — deletion, retention, backup/restore and master-key lifecycle;
+- `docs/NEXTCLOUD-CONTEXT-CHAT.md` — neutral comparison with Nextcloud's native Context Chat architecture.
