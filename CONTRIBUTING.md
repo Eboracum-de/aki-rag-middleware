@@ -53,11 +53,16 @@ Changes should preserve these project-level rules unless an architectural change
 
 - Nextcloud is the final document authorization authority.
 - Retrieval indexes may propose candidates but may not grant document access.
-- ACL-rejected documents are not silently replaced by weaker results simply to fill context.
+- ACL-rejected documents do not trigger adaptive fetching/backfill simply to fill context.
+- shared identity/alias curation may improve retrieval across users, but it never grants access to the protected source document.
+- document evidence shown to a user remains subject to the current Nextcloud authorization boundary.
 - local and remote processing boundaries remain administrator-controlled.
 - source scope and retrieval-engine selection remain separate concepts.
 - graph observations are not silently promoted into global facts.
+- archive copies have their own explicit lifecycle; chat/web retention must not be mistaken for source-document revocation.
 - runtime secrets and deployment state stay outside source control.
+
+Security-sensitive changes should include or update an adversarial regression case and remain consistent with `docs/THREAT-MODEL.md`.
 
 ## Pull requests
 

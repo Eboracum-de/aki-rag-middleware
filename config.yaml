@@ -1,4 +1,4 @@
-# AKI RAG Middleware - 0.8.5-rc3 secure multi-user beta candidate
+# AKI RAG Middleware - 0.8.5-rc4 secure multi-user beta candidate
 
 health:
   timeout_seconds: 4
@@ -274,6 +274,10 @@ research_findings:
   enabled: true
   timeout: 5
   max_documents_per_request: 30
+  curation:
+    admin_user_context: true
+    user_self_service: false
+    session_max_seconds: 7200
 
 graph_indexer:
   enabled: true

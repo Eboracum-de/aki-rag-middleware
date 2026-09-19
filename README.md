@@ -13,7 +13,7 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc3` — first public release candidate / public beta. The Super-Light deployment path is the primary field-tested profile. Expect rough edges in administration and Graph-Lite curation; see `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5-rc4` — public-beta release candidate. RC4 consolidates user-scoped Findings/Graph-Lite hardening, self-service curation, installer rerun safeguards and the latest field-test fixes. The Super-Light deployment path remains the primary field-tested profile; see `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
@@ -91,6 +91,8 @@ The middleware keeps source selection separate from retrieval-engine selection.
 
 Archive origins are tracked by stable Nextcloud file IDs and mirrored into retrieval indexes so source scopes can be applied before candidate limits.
 
+Archive scopes are optional. In particular, saved chats are useful as shared/flat-hierarchy working memory, but they are deliberate retained copies: a saved conversation can contain text derived from another document and then has its own Nextcloud file ID, ACL and lifecycle. Deployments that require revocation of an original document to remove every conversational copy should leave `/chatarchive` disabled or define a matching retention/purge process.
+
 ## Privacy and trust boundaries
 
 A private document corpus does not need to be exposed wholesale to an external LLM provider. In the reference architecture:
@@ -104,7 +106,9 @@ A private document corpus does not need to be exposed wholesale to an external L
 
 Those controls reduce disclosure; they do not make remotely transmitted evidence non-sensitive. Administrators remain responsible for deciding which roles may use remote model providers.
 
-See `docs/PRIVACY-ARCHITECTURE.md` and `SECURITY.md` for details.
+AKI also distinguishes **shared retrieval knowledge** from **document evidence**. Curated names/aliases and shared Finding decisions may be reused across users so that the organization benefits from prior curation. That reuse does not grant access to the document that originally motivated the knowledge: document text still needs the current user's live Nextcloud authorization before it becomes answer evidence.
+
+See `docs/PRIVACY-ARCHITECTURE.md`, `docs/THREAT-MODEL.md` and `SECURITY.md` for details.
 
 ## Compatibility and tested baseline
 
@@ -119,6 +123,8 @@ Current public-beta reference points:
 - **Answer provider:** OpenAI-compatible; local and remote model roles are independently configurable
 
 Compatibility statements describe the current tested/project target, not a promise that every combination of Nextcloud, Elasticsearch, proxy and model backend is regression-tested.
+
+For current Nextcloud deployments, the native baseline to evaluate is Nextcloud Context Chat. AKI is not intended to out-feature that supported ecosystem; it addresses a different operating model: reuse of an existing FullTextSearch estate, a replaceable OpenAI-compatible provider boundary, optional Graph-Lite and live Nextcloud authorization of concrete document candidates. See `docs/NEXTCLOUD-CONTEXT-CHAT.md` for the neutral comparison and current caveats.
 
 ## Quick start: Super-Light
 
@@ -148,6 +154,8 @@ The included `clients/nextcloud/akirag/` app is a slim Nextcloud-native research
 
 OpenWebUI can be used as an external client through the provider interface. The middleware does not depend on OpenWebUI-specific retrieval or knowledge features.
 
+The same OpenAI-compatible boundary can be used by other local frontends, RAG systems, agents or research tools when an administrator deliberately registers them as trusted clients. A trusted-client key is an integration-server credential: keep it server-side and restrict externally reachable provider endpoints by network policy/reverse-proxy allowlists or equivalent controls where practical.
+
 The API/provider boundary is intentional: front-end choice should not define the retrieval architecture.
 
 ## Optional scale-up path
@@ -168,15 +176,20 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/BETA-OPERATIONS.md` — beta runbook and acceptance checklist
 - `docs/ARCHITECTURE.md` — architecture and trust model
 - `docs/PRIVACY-ARCHITECTURE.md` — local/remote processing boundaries
+- `docs/THREAT-MODEL.md` — adversaries, shared retrieval knowledge, ACL and archive boundaries
+- `docs/DATA-LIFECYCLE.md` — deletion, backup/restore and derived-store lifecycle
+- `docs/NEXTCLOUD-CONTEXT-CHAT.md` — relationship to Nextcloud's native Context Chat architecture
 - `docs/TECHNICAL-REFERENCE.md` — detailed configuration and APIs
 - `docs/ADMINISTRATION.md` — user, credential, mail, web and graph administration
 - `docs/GRAPHLIGHT-FINDINGS.md` — Findings curation and Graph-Lite safety boundary
 - `docs/KNOWN-LIMITATIONS.md` — known limitations and deferred polish
+- `docs/ROADMAP.md` — explicitly deferred RC5 / 0.8.6 work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
 - `CONTRIBUTING.md` — contribution and licensing policy
 - `CLA.md` / `docs/CLA-PROCESS.md` — contributor rights without copyright assignment
 - `CODE_OF_CONDUCT.md` — community conduct expectations
+- `RELEASE-NOTES-0.8.5-rc4.md` — current release notes
 - `RELEASE-NOTES-0.8.5-rc3.md` — first public release notes
 
 ## Development and tests

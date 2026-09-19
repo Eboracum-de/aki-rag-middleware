@@ -4,6 +4,8 @@
 
 AKI RAG Middleware treats Elasticsearch, Qdrant and Neo4j as candidate-retrieval systems. They are not authorization authorities. Before document evidence is exposed to a verifier or answer model, access is checked live against Nextcloud for the authenticated user.
 
+The graph may contain **shared retrieval knowledge** such as curated names/aliases and shared Finding decisions. Reusing that work across users is intentional and does not grant access to the supporting source document. Source passages and document evidence remain authorization-sensitive. See `docs/THREAT-MODEL.md` for the detailed boundary.
+
 Reversible per-user Nextcloud and IMAP credentials, together with pending Nextcloud Login Flow poll tokens, are encrypted at rest in `runtime/users.sqlite` using AES-256-GCM. The credential master key is stored separately and production mode is fail-closed when required encryption cannot be satisfied.
 
 Global service secrets such as API keys and backend passwords remain environment-file configuration in the current release-candidate line. Keep `runtime.env`, live `provider.env`, `runtime/`, TLS private keys and backups out of source control.
@@ -16,6 +18,8 @@ Global service secrets such as API keys and backend passwords remain environment
 - Back up the credential master key separately from, but together with, the encrypted credential database.
 - Do not manipulate credential rows directly with ad-hoc SQL. Use the Admin UI or supplied CLI commands.
 - Treat Elasticsearch/Qdrant/Neo4j as sensitive infrastructure even though they do not authorize access.
+- Treat `acl.enabled=false` / `--acl-off` as a diagnostic state only; verify `live_acl.enabled=true` in health before opening a shared corpus.
+- Decide deliberately whether optional `/chatarchive` retention is compatible with the deployment's revocation/retention policy. A saved chat is a new Nextcloud object with its own lifecycle.
 
 ## Reporting a vulnerability
 
@@ -32,3 +36,7 @@ Planner, verifier, evidence-control and answer roles can be configured independe
 Graph entity/relation extraction is a separate trust decision because it may process larger document portions. Automatic graph-worker startup and automatic enqueue of cited documents are disabled by default in the reference configuration.
 
 Web archive writes have independent TLS verification settings. Disabling TLS verification is a diagnostic exception and should not be a production default.
+
+Incoming mail, public web pages and saved chats are untrusted content even when they are successfully indexed. Structured verifier/Graph schemas and evidence separation reduce prompt-injection risk but are not a complete defense. Do not treat model extraction as a trust signal.
+
+Deletion and backup are separate from authorization. The current release does not provide a single cross-store purge/restore transaction; see `docs/DATA-LIFECYCLE.md`.

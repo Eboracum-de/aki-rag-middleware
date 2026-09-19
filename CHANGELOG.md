@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased
+
+Planned follow-up work is tracked in `docs/ROADMAP.md`.
+
+## 0.8.5-rc4 – 2026-09-19
+
+- Fix AKI Recherche chat-history endpoints for normal users on Nextcloud 23 by using parser-compatible multi-line `@NoAdminRequired` docblocks; field-tested with a second non-admin user.
+
+- Stop promoting verifier relation targets solely from their target role into Entity curation; keep relation sources and independently extracted target mentions, and hide legacy `Relationsziel` candidates from existing Findings.
+
+- Persist normalized global Entity/non-Entity form decisions so rejected phrases do not return in later Findings; lazily adopt historic manual observations when the schema backfill has not run, and let an explicit later assignment safely reverse the decision.
+- Treat unique canonical-name and curated-alias matches as Finding defaults with a one-click bulk accept action, and add “Als Alias anlegen” for similar known Entities using the established contextual alias policy.
+- Apply ordinary Finding Entity actions immediately while retaining the former technical JSON preview behind an optional “Details ansehen” button.
+
+- Make Observations a real pending-review queue by default and repair exact status filtering, including defensive application-side enforcement and a dedicated manual Non-Entity view.
+- Scope the Observations list/detail/mutation and Relations list to a selected Nextcloud user through the current live ACL of each supporting Document.
+- Remove manually rejected Entity candidates from the curated Finding evidence view while retaining immutable verifier JSON only as a collapsed diagnostic; collapse JSON evidence in the Relations view as well.
+
+- Replace per-pair Finding claim forms with one dynamically filtered Entity A / ontology relation / Entity B selector.
+- Allow active Finding claims to be withdrawn without deleting their RelationObservation or audit provenance.
+- Make persisted document Mentions explicit in the Finding UI, allow searched reassignment of already curated Entity mentions, and promote the “Mentions only” completion path when no relationship is evidenced.
+
+- Abort the Super-Light installer preflight when any existing AKI RAG service is running; report a fully stopped existing stack as informational and allow the repair/rerun path.
+
+- Apply unique exact seed/name resolution to EvidenceFrame-derived Entity candidates as well as QueryFrame Entities.
+- Register the complete RelationObservation property contract at schema initialization and use property-safe reads for optional Finding claims, preventing Neo4j UnknownPropertyKeyWarning noise on stores without relation observations.
+
+- Render Finding EvidenceFrames as readable criteria, mentions and relation observations while retaining expandable raw JSON for diagnostics.
+- Surface named EvidenceFrame constraints and relation endpoints as curator-gated Entity candidates, add explicit existing-Entity search/assignment, and keep free-form verifier predicates separate from ontology claims.
+- Add the controlled `SUPERVISORY_BOARD_MEMBER_OF` predicate for explicitly evidenced supervisory-board memberships; indirect references such as an “Aufsichtsratsschreiben” alone remain insufficient.
+
+- Remove accidentally duplicated/corrupted tails from both profile installers; the CI shell-syntax gate now covers every shipped shell script.
+- Fix ResearchRun dismissal when a run contains findings outside the selected user's current visible subset; validate the run/user context and live-visible evidence instead of rechecking every raw finding.
+- Add single-run and checkbox-based bulk dismissal directly to the Research Findings list while preserving findings and provenance.
+- Remove the obsolete standalone Nextcloud EML conversion shell script; supported mail ingestion uses the per-user IMAP importer and its normalized archive layout.
+- Refuse non-empty install prefixes that are not recognized as AKI RAG installations, preventing accidental overwrite of unrelated application directories when running as root.
+- Fix a provider regression in the Research Finding source-scope guard that could raise a 500 after the answer context was built.
+- Record the exact installer invocation for reproducible Super-Light reruns and add an early rerun preflight for required source paths, CA files, install-prefix writability and Docker availability; report existing stack state without preventing repair of stopped services.
+- Document the recommended rerun workflow and the location of `install/last-install-command.sh`.
+
+- Align ResearchRun Findings with the final answer context instead of the wider Candidate-Verifier match pool, so curation reflects documents that actually reached the answer model.
+- Record selected source scopes and supporting-document source origin in ResearchRun/Document provenance; reject known archive-origin Findings that fall outside an explicit source selection.
+- Treat same-stem HTML/HTM/Markdown files as document-format variants alongside TXT/PDF/ODT/DOC/RTF, improving deduplication of legacy mail decompositions without lowering the near-text similarity threshold.
+
+- Make the smoke test deployment-profile aware: dockerized Super-Light no longer fails for a missing host Python venv, configured-off Qdrant is reported as disabled, and Playwright renderer degradation is reported separately.
+- Keep the optional Playwright renderer service alive when Chromium itself fails to launch, exposing the launch error through its live endpoint instead of entering a restart loop; Web search and non-rendered archive output remain available.
+- Expose an explicit diagnostic reason when per-user Web archiving is disabled or has no target path.
+- Allow a deliberately narrow web-only follow-up rewrite for short acronyms when the immediately preceding user query used the exact acronym inside a longer entity name (for example, FLG after FLG Automation), without enabling general chat-topic carry-over.
+
+- Replace the corpus-wide Findings inbox with user-scoped ResearchRun curation: `CanonicalUser -> ResearchRun -> ResearchFinding -> Document`. ResearchRuns retain original query provenance while equivalent Findings remain globally deduplicated and reuse one shared curation decision.
+- Apply current-user Nextcloud live ACL before Admin or end-user Finding evidence is listed or opened; unauthorized Findings are omitted from counts and legacy global no-entity suppression is no longer a user-context bypass.
+- Add per-ResearchRun and per-produced-Finding dismissal as queue state without deleting provenance or globally suppressing the shared Finding.
+- Add optional end-user `/curation/` self-service. It uses Nextcloud Login Flow, no RAG password, a separately encrypted temporary app password, HttpOnly/Secure/SameSite=Strict cookie, session-bound CSRF and a configurable hard absolute session lifetime (default 7200 seconds).
+- Add per-canonical-user curation permission plus global `admin_user_context` / `user_self_service` controls. API startup invalidates and attempts to revoke all surviving temporary curation app passwords; failed revocations stay unusable as `revocation_pending`.
+- Record curator identity on shared Entity/Finding/Claim decisions for audit provenance.
+
+- Documentation hardening: add an explicit threat model, data lifecycle/backup/deletion guidance and a neutral relationship-to-Nextcloud-Context-Chat document.
+- Clarify the intentional distinction between shared identity/alias/Finding curation and ACL-protected document evidence.
+- Document the current post-ranking live-ACL/no-adaptive-backfill trade-off without claiming the proposed fixed pre-rerank ACL pool is implemented.
+- Document optional Chat Archive retention semantics, prompt-injection/untrusted-content limits, the then-open Finding user-provenance gap, and the absence of a unified cross-store purge/key-rotation workflow; RC4 subsequently closes the Findings user-context/ACL gap through ResearchRun provenance and live-ACL views.
+- Refresh stale internal RC wording and fix inconsistent/broken documentation passages.
+- Refine the prompt-injection threat model: ordinary retrieval is constrained rather than agentic, while Graph persistence and Web-after query egress remain the relevant boundaries.
+- Treat retrieved document/mail/web/chat text explicitly as untrusted evidence in verifier, evidence-control, answer and Web-after prompts; suppress secret-like/internal identifiers from derived public Web queries.
+- Document trusted provider-client keys as integration-server credentials and recommend reverse-proxy network allowlists/mTLS as defense in depth for externally reachable frontends.
+- Refine the Context Chat comparison around live WebDAV authorization, batched ACL cost, independent request processing, model choice and UI/integration agnosticism.
+- Translate the consolidated technical reference to English.
+- Translate the architecture baseline to English and remove evaluative/marketing-style wording in favor of neutral architecture descriptions and trade-offs.
+- Clarify that Graph-Lite Research Findings are optional enrichment: ordinary retrieval/ACL/verification/answering works without Findings or curation, while curated graph knowledge can improve entity and relationship-oriented retrieval.
+- Warn administrators not to perform another user's first Nextcloud authorization under the administrator's frontend identity; the current release has no supported binding-reassignment workflow.
+
+
 ## 0.8.5-rc3 – 2026-09-17
 
 - First public release candidate / public beta under the AKI RAG Middleware project name.
