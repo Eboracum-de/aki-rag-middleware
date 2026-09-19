@@ -20,13 +20,14 @@
   </nav>
 </header>
 {% if graph_area %}
+{% set scope_user_id = request.query_params.get('canonical_user_id', '') %}
 <nav class="sectionnav" aria-label="Graph-Navigation">
   <div>
     <a class="{{ 'active' if path.startswith('/rag-admin/entities') or path.startswith('/rag-admin/entity/') else '' }}" href="{{ request.app.url_path_for('admin_entities') }}">Entitäten</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/candidates') else '' }}" href="{{ request.app.url_path_for('admin_candidates') }}">Merge-Kandidaten</a>
-    <a class="{{ 'active' if path.startswith('/rag-admin/observations') or path.startswith('/rag-admin/observation/') else '' }}" href="{{ request.app.url_path_for('admin_observations') }}">Beobachtungen</a>
-    <a class="{{ 'active' if path.startswith('/rag-admin/relations') else '' }}" href="{{ request.app.url_path_for('admin_relations') }}">Relationen</a>
-    <a class="{{ 'active' if path.startswith('/rag-admin/findings') or path.startswith('/rag-admin/finding/') else '' }}" href="{{ request.app.url_path_for('admin_findings') }}">Findings</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/observations') or path.startswith('/rag-admin/observation/') else '' }}" href="{{ request.app.url_path_for('admin_observations') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Beobachtungen</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/relations') else '' }}" href="{{ request.app.url_path_for('admin_relations') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Relationen</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/findings') or path.startswith('/rag-admin/finding/') else '' }}" href="{{ request.app.url_path_for('admin_findings') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Findings</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/contacts') or path.startswith('/rag-admin/contact/') else '' }}" href="{{ request.app.url_path_for('admin_contacts') }}">Kontaktquellen</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/queue') else '' }}" href="{{ request.app.url_path_for('admin_queue') }}">Graph-Import / Queue</a>
   </div>

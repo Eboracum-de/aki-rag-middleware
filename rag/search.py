@@ -809,6 +809,9 @@ DEDUP_VARIANT_EXTENSIONS = {
     ".docx",
     ".rtf",
     ".txt",
+    ".html",
+    ".htm",
+    ".md",
     ".pdf",
 }
 

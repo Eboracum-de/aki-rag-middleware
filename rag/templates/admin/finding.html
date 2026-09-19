@@ -17,47 +17,103 @@
 </tbody></table>
 </section>
 
+<section>
+<h2>Evidenz</h2>
+<p class="muted">Persistierte Verifier-Evidenz dieses Findings. Freie Bezeichnungen sind Beobachtungen des Verifiers und werden nicht automatisch zu Ontologie-Claims.</p>
+{% set ev = detail.evidence_view or {} %}
+{% if ev.concepts %}<h3>Konzepte</h3><div class="evidence-tags">{% for value in ev.concepts %}<span class="pill">{{ value }}</span>{% endfor %}</div>{% endif %}
+{% if ev.constraints %}<h3>Prüfkriterien</h3><table class="compact"><thead><tr><th>Art</th><th>Wert</th><th>Status</th></tr></thead><tbody>{% for item in ev.constraints %}<tr><td>{{ item.kind or '—' }}</td><td>{{ item.value or '—' }}</td><td>{{ item.status or '—' }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+{% if ev.entities or ev.mentioned_entities %}<h3>Erkannte Erwähnungen</h3><div class="evidence-tags">{% for item in ev.entities %}<span class="pill">{{ item.text or item.name or item.value }}{% if item.role %} · {{ item.role }}{% endif %}</span>{% endfor %}{% for item in ev.mentioned_entities %}<span class="pill">{{ item.text or item.name or item.value }}</span>{% endfor %}</div>{% endif %}
+{% if ev.relations %}<h3>Beobachtete Beziehungen</h3><div class="evidence-relations">{% for item in ev.relations %}<div class="evidence-relation"><strong>{{ item.source or item.subject or '—' }}</strong><span>{{ item.predicate or 'unbenannte Beziehung' }}</span><strong>{{ item.target or item.object or '—' }}</strong><small>Verifier-Beobachtung · noch kein Ontologie-Claim</small></div>{% endfor %}</div>{% endif %}
+{% if not ev.has_content %}<p>—</p>{% endif %}
+<details class="topgap"><summary>Unveränderte Verifier-Rohdaten anzeigen</summary><p class="muted">Enthält aus Gründen der Provenienz auch später verworfene Kandidaten. Maßgeblich für die kuratierte Sicht sind die Entscheidungen darunter.</p><pre>{{ detail.evidence_pretty or '—' }}</pre></details>
+</section>
+
 <section><h2>1. Entity Resolution</h2>
-<p class="muted">Erst die im Finding vermuteten Entities auflösen. Eine bestätigte Zuordnung erzeugt eine dokumentgebundene EntityObservation und <code>Document-[:MENTIONS]-&gt;Entity</code>. Das ist Provenienz, noch keine semantische Beziehung.</p>
+<p class="muted">Eindeutige Namen und bereits bekannte Aliase sind die Vorauswahl. Sie können gesammelt gespeichert und später über Suche/Neuzuordnung oder „Keine Entity“ wieder korrigiert werden. Normale Aktionen speichern direkt; „Details ansehen“ zeigt weiterhin die technische Vorschau.</p>
 {% if not detail.entity_options %}
 <div class="alert warning"><strong>Keine Entity im Finding.</strong> Dieses Finding hat für Graph-Lite derzeit keinen strukturellen Wert und wird in der Standard-Inbox ausgeblendet. Die Recherche-Provenienz bleibt erhalten.</div>
+{% endif %}
+{% if detail.default_entity_count %}
+<form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form entity-defaults">
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="hidden" name="action" value="accept_defaults">
+  <button type="submit">Alle {{ detail.default_entity_count }} eindeutigen Treffer speichern</button>
+  <span class="muted">Eindeutige kanonische Namen und eindeutige kuratierte Aliase</span>
+</form>
+{% endif %}
+<form method="get" action="{{ request.app.url_path_for('admin_finding_detail', finding_id=f.finding_id) }}" class="searchbar">
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="search" name="entity_q" value="{{ detail.entity_search_query or '' }}" placeholder="Bestehende Entity nach Name oder Alias suchen">
+  <button type="submit">Entity suchen</button>
+</form>
+{% if detail.entity_search_results %}
+<form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="form-grid entity-search-assign">
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="hidden" name="action" value="assign">
+  <label>Finding-Erwähnung<select name="entity_text" required>{% for item in detail.entity_options %}<option value="{{ item.text }}">{{ item.text }}{% if item.role %} · {{ item.role }}{% endif %}{% if item.curated %} · derzeit {{ item.curated.display_name }}{% elif item.suppressed %} · derzeit verworfen{% endif %}</option>{% endfor %}</select></label>
+  <label>Bestehende Entity<select name="target_entity_id" required>{% for candidate in detail.entity_search_results %}<option value="{{ candidate.entity_id }}">{{ candidate.display_name }} · {{ candidate.labels|join('/') }}</option>{% endfor %}</select></label>
+  <label>Grund (optional)<input name="reason" value="manuelle Entity-Suche"></label>
+  <div class="filter-row"><button type="submit">Zuordnung speichern</button><button type="submit" name="detail" value="yes" class="secondary">Details ansehen</button></div>
+</form>
 {% endif %}
 {% for item in detail.entity_options %}
 <div class="finding-entity">
   <h3>{{ item.text }}{% if item.role %} <span class="muted">· {{ item.role }}</span>{% endif %}</h3>
   {% if item.curated %}
-    <p><span class="status ok">zugeordnet</span> → <strong>{{ item.curated.display_name }}</strong> <span class="mono smalltext">{{ item.curated.entity_id }}</span></p>
+    <p><span class="status ok">Mention gespeichert</span> → <strong>{{ item.curated.display_name }}</strong> <span class="mono smalltext">{{ item.curated.entity_id }}</span></p>
+    <p class="muted">Das Dokument ist dieser Entity über eine bestätigte <code>MENTIONS</code>-Beobachtung zugeordnet. Zum Korrigieren oben nach der richtigen Entity suchen und diese Erwähnung neu zuordnen.</p>
+    <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form topgap">
+      <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+      <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="suppress">
+      <input type="text" name="reason" placeholder="Grund für Verwerfen (optional)"><button type="submit" class="danger-outline">Doch keine Entity</button><button type="submit" name="detail" value="yes" class="secondary small">Details ansehen</button>
+    </form>
   {% elif item.suppressed %}
-    <p><span class="status stale">als Entity verworfen</span></p>
+    <p><span class="status stale">{% if item.suppression_scope == 'global' %}global als Non-Entity verworfen{% else %}als Entity verworfen{% endif %}</span></p>
+    <p class="muted">{% if item.suppression_scope == 'global' %}Diese normalisierte Form wird in weiteren Findings nicht erneut angeboten. Eine Zuordnung über die Suche oben hebt die globale Entscheidung wieder auf.{% else %}Die Entscheidung gilt für dieses Finding.{% endif %}</p>
   {% else %}
     {% if item.auto_resolved %}
-      <p>Automatischer exakter Treffer: <strong>{{ item.auto_resolved.display_name }}</strong></p>
+      <p><span class="status ok">Vorauswahl · {{ 'eindeutiger Alias' if item.auto_resolved.match_kind == 'alias' else ('kuratierte Zuordnung' if item.auto_resolved.match_kind == 'curated' else 'eindeutiger Name') }}</span> → <strong>{{ item.auto_resolved.display_name }}</strong></p>
       <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+        <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
         <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ item.auto_resolved.entity_id }}">
-        <button class="small">Exakten Treffer übernehmen</button>
+        <button class="small">Diesen Treffer speichern</button><button type="submit" name="detail" value="yes" class="secondary small">Details ansehen</button>
       </form>
     {% endif %}
     {% if item.suggestions %}
-      <div class="entity-suggestions"><strong>Bekannte Entities:</strong>
+      <div class="entity-suggestions"><strong>Ähnliche bekannte Entities:</strong>
       {% for candidate in item.suggestions %}
-        <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form entity-suggestion">
-          <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ candidate.entity_id }}">
-          <button type="submit" class="secondary small">{{ candidate.display_name }}</button>
+        <div class="entity-suggestion">
+          <strong>{{ candidate.display_name }}</strong>
           <span class="muted">{{ candidate.labels|join('/') }} · {{ candidate.document_mentions or 0 }} Dokumente</span>
-        </form>
+          <div class="filter-row">
+            <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+              <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+              <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign"><input type="hidden" name="target_entity_id" value="{{ candidate.entity_id }}">
+              <button type="submit" class="secondary small">Nur zuordnen</button><button type="submit" name="detail" value="yes" class="secondary small">Details ansehen</button>
+            </form>
+            <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form">
+              <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+              <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="assign_alias"><input type="hidden" name="target_entity_id" value="{{ candidate.entity_id }}">
+              <button type="submit" class="small">Als Alias anlegen</button>
+            </form>
+          </div>
+        </div>
       {% endfor %}
       </div>
     {% endif %}
     <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="form-grid topgap">
+      <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
       <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="create">
       <label>Name korrigieren / neu anlegen<input type="text" name="new_name" value="{{ item.text }}" required></label>
       <label>Typ<select name="entity_type" required><option value="">Bitte wählen</option><option value="Person">Person</option><option value="Organization">Organization</option></select></label>
       <label>Grund (optional)<input type="text" name="reason" placeholder="z.B. aus Recherche bestätigt"></label>
-      <div><button type="submit">Neue Entity anlegen</button></div>
+      <div class="filter-row"><button type="submit">Neue Entity anlegen</button><button type="submit" name="detail" value="yes" class="secondary">Details ansehen</button></div>
     </form>
     <form method="post" action="{{ request.app.url_path_for('admin_finding_entity', finding_id=f.finding_id) }}" class="inline-form topgap">
+      <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
       <input type="hidden" name="entity_text" value="{{ item.text }}"><input type="hidden" name="action" value="suppress">
-      <input type="text" name="reason" placeholder="Grund für Verwerfen (optional)"><button type="submit" class="danger-outline">Keine Entity</button>
+      <input type="text" name="reason" placeholder="Grund für Verwerfen (optional)"><button type="submit" class="danger-outline">Keine Entity</button><button type="submit" name="detail" value="yes" class="secondary small">Details ansehen</button>
     </form>
   {% endif %}
 </div>
@@ -66,41 +122,137 @@
 
 {% set curated = detail.curated_entities or [] %}
 <section><h2>2. Claim / Beziehung</h2>
-<p class="muted">Co-Mention ist bereits durch die Entity-Zuordnungen abgebildet. Eine semantische Beziehung wird nur optional als dokumentgebundene <code>RelationObservation</code> angelegt. Predicate-IDs sind sprachneutral und frei administrierbar; die Anzeige kann beliebig sprachlich formuliert werden.</p>
-{% if curated|length < 2 %}
-<p class="muted">Mindestens zwei kuratierte Entities nötig. Bei genau einer Entity bleibt das Finding als Mention/Provenienz wertvoll.</p>
-{% else %}
-<form method="post" action="{{ request.app.url_path_for('admin_finding_claim', finding_id=f.finding_id) }}" class="stack-form">
-  <div class="form-grid">
-    <label>Subject<select name="subject_entity_id" required>{% for e in curated %}<option value="{{ e.entity_id }}">{{ e.display_name }}</option>{% endfor %}</select></label>
-    <label>Predicate-ID<input name="predicate_id" required placeholder="z.B. shareholder_of, invoiced, works_for"></label>
-    <label>Object<select name="object_entity_id" required>{% for e in curated %}<option value="{{ e.entity_id }}">{{ e.display_name }}</option>{% endfor %}</select></label>
-  </div>
-  <div class="form-grid">
-    <label>Anzeigebezeichnung<input name="predicate_label" placeholder="z.B. ist Gesellschafter von"></label>
-    <label>Claim-Text<input name="claim_text" placeholder="Optionaler lesbarer Claim"></label>
-  </div>
-  <div><button type="submit">Claim-Kandidat anlegen</button></div>
+<p class="muted">Alle bestätigten Entity-Zuordnungen sind bereits als dokumentgebundene Mentions gespeichert. Ein Claim ist zusätzlich und nur dann sinnvoll, wenn das Dokument eine konkrete Beziehung ausdrücklich belegt.</p>
+
+{% if not detail.all_entities_decided %}
+<p class="muted">Zuerst alle Entity-Kandidaten bestätigen, neu zuordnen oder verwerfen.</p>
+{% elif f.curator_status == 'mentions_only' %}
+<div class="alert success"><strong>Als „Nur Mentions“ abgeschlossen.</strong> Das Dokument bleibt allen bestätigten Entities als Mention zugeordnet; eine semantische Beziehung wird bewusst nicht behauptet.</div>
+<form method="post" action="{{ request.app.url_path_for('admin_finding_curate', finding_id=f.finding_id) }}" class="inline-form">
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="hidden" name="status" value="">
+  <input type="hidden" name="reason" value="reopen_claim_review">
+  <button type="submit" class="secondary">Zur Claim-Prüfung zurück</button>
 </form>
+{% else %}
+  {% if curated|length >= 2 and detail.claim_options %}
+  <form method="post" action="{{ request.app.url_path_for('admin_finding_claim', finding_id=f.finding_id) }}" class="stack-form claim-builder" data-claim-builder>
+    <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+    <div class="claim-builder-row">
+      <label>Entität A
+        <select name="subject_entity_id" required>
+          {% for entity in curated %}<option value="{{ entity.entity_id }}">{{ entity.display_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Ontologie-Relation
+        <select name="predicate_id" required>
+          {% for pair in detail.claim_options %}
+            {% for predicate in pair.predicates %}
+            <option value="{{ predicate.id }}" data-subject="{{ pair.subject.entity_id }}" data-object="{{ pair.object.entity_id }}">{{ predicate.label }} · {{ predicate.id }}</option>
+            {% endfor %}
+          {% endfor %}
+        </select>
+      </label>
+      <label>Entität B
+        <select name="object_entity_id" required>
+          {% for entity in curated %}<option value="{{ entity.entity_id }}">{{ entity.display_name }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <p class="muted claim-builder-hint">Die Relationenauswahl wird auf die gewählte Richtung und die zulässigen Entity-Typen beschränkt.</p>
+    <label>Kuratornotiz (optional)<input name="claim_text" placeholder="Nur Erläuterung; ändert nicht das Ontologie-Prädikat"></label>
+    <div><button type="submit">Relation prüfen</button></div>
+  </form>
+  {% elif curated|length < 2 %}
+  <p class="muted">Weniger als zwei bestätigte Entities. Es kann keine Beziehung angelegt werden; die bestätigten Mentions bleiben dennoch gespeichert.</p>
+  {% else %}
+  <div class="alert warning"><strong>Keine passende Ontologie-Relation.</strong> Für die bestätigten Entity-Typen/-Kinds ist kein dokument-extrahierbares Predicate zugelassen.</div>
+  {% endif %}
+
+  {% if detail.all_entities_decided and not detail.has_active_claims %}
+  <div class="mention-completion">
+    <p><strong>Keine belegte Beziehung?</strong> Dann das Finding als reine Dokument-Mentions abschließen. Alle bestätigten Entity-Zuordnungen bleiben erhalten.</p>
+    <form method="post" action="{{ request.app.url_path_for('admin_finding_curate', finding_id=f.finding_id) }}" class="inline-form">
+      <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+      <input type="hidden" name="status" value="mentions_only">
+      <input type="text" name="reason" placeholder="Grund (optional)">
+      <button type="submit" class="secondary">Mentions speichern – keinen Claim anlegen</button>
+    </form>
+  </div>
+  {% endif %}
 {% endif %}
+
 {% if detail.claims %}
-<h3 class="topgap">Bereits angelegte Claims</h3>
-<table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Status</th></tr></thead><tbody>
-{% for c in detail.claims %}<tr><td>{{ c.subject_name }}</td><td><code>{{ c.predicate }}</code>{% if c.predicate_text %}<div class="muted">{{ c.predicate_text }}</div>{% endif %}</td><td>{{ c.object_name }}</td><td>{{ c.curator_status or '—' }}</td></tr>{% endfor %}
+<h3 class="topgap">Claim-Übersicht</h3>
+<table>
+<thead><tr><th>Entität A</th><th>Relation</th><th>Entität B</th><th>Status</th><th>Aktion</th></tr></thead>
+<tbody>
+{% for c in detail.claims %}
+<tr>
+  <td>{{ c.subject_name }}</td>
+  <td><code>{{ c.predicate }}</code>{% if c.predicate_text %}<div class="muted">{{ c.predicate_text }}</div>{% endif %}{% if c.curator_note %}<div class="muted">Notiz: {{ c.curator_note }}</div>{% endif %}</td>
+  <td>{{ c.object_name }}</td>
+  <td>
+    {% if c.curator_status == 'review_required' %}
+      <span class="status degraded">Review nötig</span>
+      {% if c.review_reason %}<div class="muted">{{ c.review_reason }}</div>{% endif %}
+    {% elif c.curator_status == 'manual_claim' %}
+      <span class="status ok">kuratiert</span>
+    {% elif c.curator_status == 'withdrawn' %}
+      <span class="status stale">zurückgenommen</span>
+    {% elif c.curator_status == 'superseded' %}
+      <span class="status stale">überholt</span>
+    {% else %}
+      {{ c.curator_status or '—' }}
+    {% endif %}
+  </td>
+  <td>
+    {% if c.curator_status == 'review_required' %}
+      {% if c.can_confirm %}
+      <form method="post" action="{{ request.app.url_path_for('admin_finding_claim_review', finding_id=f.finding_id, relation_id=c.relation_id) }}" class="inline-form">
+        <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+        <input type="hidden" name="action" value="confirm">
+        <button type="submit" class="small">Erneut bestätigen</button>
+      </form>
+      {% else %}
+      <div class="muted">Aktuelle Entity-Zuordnung passt nicht mehr; ggf. korrigierten Claim neu anlegen.</div>
+      {% endif %}
+      <form method="post" action="{{ request.app.url_path_for('admin_finding_claim_review', finding_id=f.finding_id, relation_id=c.relation_id) }}" class="inline-form topgap confirm-submit" data-confirm="Diesen Claim als überholt markieren? Die Provenienz bleibt erhalten.">
+        <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+        <input type="hidden" name="action" value="dismiss">
+        <input type="text" name="reason" placeholder="Grund (optional)">
+        <button type="submit" class="danger-outline small">Als überholt markieren</button>
+      </form>
+    {% endif %}
+    {% if c.curator_status in ['manual_claim', 'review_required'] %}
+    <form method="post" action="{{ request.app.url_path_for('admin_finding_claim_review', finding_id=f.finding_id, relation_id=c.relation_id) }}" class="inline-form topgap confirm-submit" data-confirm="Diesen Claim zurücknehmen? Er bleibt mit Status und Provenienz im Verlauf erhalten.">
+      <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+      <input type="hidden" name="action" value="withdraw">
+      <input type="text" name="reason" placeholder="Grund (optional)">
+      <button type="submit" class="danger-outline small">Claim zurücknehmen</button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
 </tbody></table>
 {% endif %}
 </section>
 
 <section><h2>Finding-Status</h2>
 <p>Aktuell: <strong>{{ f.curator_status or 'aktiv' }}</strong>{% if f.curator_reason %} · {{ f.curator_reason }}{% endif %}</p>
+{% if f.curator_status == 'suppressed' %}
 <form method="post" action="{{ request.app.url_path_for('admin_finding_curate', finding_id=f.finding_id) }}" class="filter-row">
-  {% if f.curator_status == 'suppressed' %}
-    <input type="hidden" name="status" value=""><input type="text" name="reason" placeholder="Grund für Wiederaufnahme (optional)"><button type="submit">Wieder aktivieren</button>
-  {% else %}
-    <input type="hidden" name="status" value="suppressed"><input type="text" name="reason" placeholder="Grund für Unterdrückung"><button type="submit" class="danger">Finding unterdrücken</button>
-  {% endif %}
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="hidden" name="status" value=""><input type="text" name="reason" placeholder="Grund für Wiederaufnahme (optional)"><button type="submit">Wieder aktivieren</button>
 </form>
+{% else %}
+<form method="post" action="{{ request.app.url_path_for('admin_finding_curate', finding_id=f.finding_id) }}" class="filter-row">
+  <input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}">
+  <input type="hidden" name="status" value="suppressed"><input type="text" name="reason" placeholder="Grund für Unterdrückung"><button type="submit" class="danger">Finding unterdrücken</button>
+</form>
+{% endif %}
 </section>
 <details><summary>Query Frame</summary><pre>{{ f.query_frame_json or '—' }}</pre></details>
-<details><summary>Evidence Frame</summary><pre>{{ f.evidence_frame_json or '—' }}</pre></details>
+<details><summary>Evidence Frame (roh)</summary><pre>{{ f.evidence_frame_json or '—' }}</pre></details>
 {% endblock %}

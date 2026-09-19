@@ -3,113 +3,78 @@
 {% block content %}
 <div class="heading-row">
   <div>
-    <h1>Offene Research Findings</h1>
-    <p class="muted">Entity-zentrierte Graph-Lite-Kuration. Findings bleiben Audit-/Rechercheobjekte; Bulk-Aktionen erzeugen nur dokumentgebundene Entscheidungen, keine globalen Faktenkanten.</p>
+    <h1>Research Findings</h1>
+    <p class="muted">Kuration erfolgt im Kontext eines Nextcloud-Benutzers und einer konkreten Recherche. Globale Finding-Entscheidungen werden bei späteren identischen Findings wiederverwendet.</p>
   </div>
-  {% if counts.no_entity %}
-  <form method="post" action="{{ request.app.url_path_for('admin_findings_suppress_no_entity') }}" class="confirm-submit" data-confirm="{{ counts.no_entity }} offene Findings ohne Entity unterdrücken? Die Provenienz bleibt erhalten.">
-    <button type="submit" class="danger-outline">{{ counts.no_entity }} ohne Entity unterdrücken</button>
-  </form>
-  {% endif %}
 </div>
-<div class="cards small">
-  <a class="card" href="{{ request.app.url_path_for('admin_findings') }}?state=open"><span>Offen</span><strong>{{ counts.open or 0 }}</strong></a>
-  <a class="card" href="{{ request.app.url_path_for('admin_findings') }}?state=entities_resolved"><span>Entities geklärt</span><strong>{{ counts.entities_resolved or 0 }}</strong></a>
-  <a class="card" href="{{ request.app.url_path_for('admin_findings') }}?state=claimed"><span>Mit Claim</span><strong>{{ counts.claimed or 0 }}</strong></a>
-  <a class="card" href="{{ request.app.url_path_for('admin_findings') }}?state=no_entity"><span>Ohne Entity</span><strong>{{ counts.no_entity or 0 }}</strong></a>
-  <a class="card" href="{{ request.app.url_path_for('admin_findings') }}?state=suppressed"><span>Unterdrückt</span><strong>{{ counts.suppressed or 0 }}</strong></a>
-</div>
+
 <form method="get" class="searchbar multi">
-  <input type="search" name="q" value="{{ q }}" placeholder="Dokument, Entity, Konzept, Constraint …">
+  <label>Benutzer
+    <select name="canonical_user_id" required>
+      <option value="">Benutzer auswählen …</option>
+      {% for user in users %}
+      <option value="{{ user.canonical_user_id }}" {{ 'selected' if selected_user and selected_user.canonical_user_id == user.canonical_user_id else '' }}>{{ user.nextcloud_login }} · {{ user.nextcloud_server }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <input type="search" name="q" value="{{ q }}" placeholder="Recherche suchen …">
   <select name="state">
-    <option value="open" {{ 'selected' if state == 'open' else '' }}>Offene Findings</option>
-    <option value="inbox" {{ 'selected' if state == 'inbox' else '' }}>Graph-Inbox (offen + geklärt)</option>
-    <option value="all" {{ 'selected' if state == 'all' else '' }}>Alle Findings</option>
-    <option value="entities_resolved" {{ 'selected' if state == 'entities_resolved' else '' }}>Entities geklärt</option>
-    <option value="claimed" {{ 'selected' if state == 'claimed' else '' }}>Mit Claim</option>
-    <option value="no_entity" {{ 'selected' if state == 'no_entity' else '' }}>Ohne Entity / kein Graphwert</option>
-    <option value="suppressed" {{ 'selected' if state == 'suppressed' else '' }}>Unterdrückt</option>
+    <option value="open" {{ 'selected' if state == 'open' else '' }}>Offene Recherchen</option>
+    <option value="completed" {{ 'selected' if state == 'completed' else '' }}>Abgeschlossen</option>
+    <option value="dismissed" {{ 'selected' if state == 'dismissed' else '' }}>Ausgeblendet</option>
+    <option value="all" {{ 'selected' if state == 'all' else '' }}>Alle</option>
   </select>
-  <button type="submit">Filtern</button>
+  <button type="submit">Anzeigen</button>
 </form>
 
-{% if not findings %}<p class="muted">Keine Research Findings für diesen Filter.</p>{% endif %}
-
-{% if finding_groups %}
+{% if not selected_user %}
+<section><p>Bitte zuerst einen Nextcloud-Benutzer auswählen. Die Anzeige verwendet dessen aktuell gespeichertes Nextcloud-Credential für eine Live-ACL-Prüfung.</p></section>
+{% elif acl_error %}
+<div class="alert warning">{{ acl_error }}</div>
+{% elif not research_runs %}
+<p class="muted">Keine Recherchen mit aktuell sichtbaren Findings für diesen Filter.</p>
+{% else %}
+<form id="research-run-bulk-form" method="post" action="{{ request.app.url_path_for('admin_research_runs_dismiss') }}" class="bulk-run-form confirm-submit" data-confirm="Die ausgewählten Recherchen aus der Kurations-Queue entfernen?">
+  <input type="hidden" name="canonical_user_id" value="{{ selected_user.canonical_user_id }}">
+  <div class="bulk-toolbar">
+    <label><input type="checkbox" class="bulk-run-toggle"> alle sichtbaren auswählen</label>
+    <button type="submit" class="danger-outline">Ausgewählte Recherchen ausblenden</button>
+  </div>
+</form>
 <div class="finding-groups">
-{% for group in finding_groups %}
+{% for run in research_runs %}
 <section class="finding-group">
-  <div class="finding-group-head">
+  <div class="heading-row">
     <div>
-      {% if group.kind == 'entity' %}
-      <h2>{{ group.entity_text }}</h2>
-      <span class="muted">{{ group.rows|length }} Finding(s) mit dieser noch offenen Entity-Entscheidung</span>
-      {% elif group.kind == 'no_entity' %}
-      <h2>Ohne erkannte Entity</h2>
-      <span class="muted">{{ group.rows|length }} Finding(s) ohne Graph-Entity</span>
-      {% else %}
-      <h2>Bereits vollständig entschieden</h2>
-      <span class="muted">{{ group.rows|length }} Finding(s)</span>
+      {% if run.effective_status != 'dismissed' %}<label class="run-select"><input type="checkbox" name="run_id" value="{{ run.run_id }}" class="bulk-run-item" form="research-run-bulk-form"> Recherche auswählen</label>{% endif %}
+      <h2>{{ run.user_query or run.retrieval_query or run.run_id }}</h2>
+      <p class="muted">
+        {{ run.created_at or '—' }} ·
+        {{ run.visible_finding_count }} sichtbare Finding(s) ·
+        {{ run.visible_open_count }} offen
+        {% if run.resolved_count %} · {{ run.resolved_count }} global bereits entschieden{% endif %}
+      </p>
+      {% if run.retrieval_query and run.retrieval_query != run.user_query %}
+      <details><summary>Technische Retrieval-Query</summary><code>{{ run.retrieval_query }}</code></details>
+      {% endif %}
+    </div>
+    <div class="filter-row">
+      <a class="button" href="{{ request.app.url_path_for('admin_research_run', run_id=run.run_id) }}?canonical_user_id={{ selected_user.canonical_user_id }}">Kuratieren</a>
+      {% if run.effective_status != 'dismissed' %}
+      <form method="post" action="{{ request.app.url_path_for('admin_research_run_dismiss', run_id=run.run_id) }}" class="confirm-submit" data-confirm="Diese Recherche aus der Kurations-Queue entfernen?">
+        <input type="hidden" name="canonical_user_id" value="{{ selected_user.canonical_user_id }}">
+        <button type="submit" class="danger-outline">Ausblenden</button>
+      </form>
       {% endif %}
     </div>
   </div>
-
-  {% if group.kind == 'entity' %}
-  <form method="post" action="{{ request.app.url_path_for('admin_findings_bulk_entity') }}" class="bulk-finding-form">
-    <input type="hidden" name="entity_text" value="{{ group.entity_text }}">
-    <div class="bulk-toolbar">
-      <label><input type="checkbox" class="bulk-toggle" data-target="group-{{ loop.index }}"> alle sichtbaren auswählen</label>
-      <select name="target_entity_id" aria-label="Ziel-Entity">
-        <option value="">Ziel-Entity wählen …</option>
-        {% for candidate in group.suggestions %}
-        <option value="{{ candidate.entity_id }}">{{ candidate.display_name }}{% if candidate.identity_status %} · {{ candidate.identity_status }}{% endif %}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" name="action" value="resolve">Auswahl zuordnen</button>
-      <button type="submit" name="action" value="suppress" class="secondary" formnovalidate>Auswahl: keine Entity</button>
-    </div>
-    <table>
-      <thead><tr><th class="checkcol"></th><th>Dokument</th><th>Finding</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-      {% for f in group.rows %}
-      <tr>
-        <td><input type="checkbox" name="finding_id" value="{{ f.finding_id }}" class="bulk-item"></td>
-        <td>
-          <strong>{{ f.document_title or f.document_path or f.document_id }}</strong>
-          {% if f.document_path %}<div class="muted">{{ f.document_path }}</div>{% endif %}
-          {% if f.nextcloud_url %}<div><a href="{{ f.nextcloud_url }}" target="_blank" rel="noopener">Nextcloud ↗</a></div>{% endif %}
-        </td>
-        <td>
-          {% if f.concepts %}<div><strong>Konzepte:</strong> {{ f.concepts|join(', ') }}</div>{% endif %}
-          {% if f.intent %}<div class="muted">{{ f.intent }}</div>{% endif %}
-        </td>
-        <td><span class="status degraded">offen {{ f.entity_decisions or 0 }}/{{ f.entity_total or 0 }}</span><div class="muted">{{ f.verification_status or '—' }}</div></td>
-        <td><a href="{{ request.app.url_path_for('admin_finding_detail', finding_id=f.finding_id) }}">Details</a></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </form>
-  {% else %}
-  <table><thead><tr><th>Dokument</th><th>Finding</th><th>Status</th><th></th></tr></thead><tbody>
-  {% for f in group.rows %}
-  <tr>
-    <td><strong>{{ f.document_title or f.document_path or f.document_id }}</strong>{% if f.document_path %}<div class="muted">{{ f.document_path }}</div>{% endif %}</td>
-    <td>{% if f.intent %}<div class="muted">{{ f.intent }}</div>{% endif %}</td>
-    <td>
-      {% if f.graph_state == 'entities_resolved' %}<span class="status ok">Entities geklärt</span>
-      {% elif f.graph_state == 'claimed' %}<span class="status ok">{{ f.claim_count }} Claim(s)</span>
-      {% elif f.graph_state == 'no_entity' %}<span class="status">kein Graphwert</span>
-      {% elif f.graph_state == 'suppressed' %}<span class="status stale">unterdrückt</span>{% endif %}
-    </td>
-    <td><a href="{{ request.app.url_path_for('admin_finding_detail', finding_id=f.finding_id) }}">Details</a></td>
-  </tr>
-  {% endfor %}
-  </tbody></table>
-  {% endif %}
+  <div class="cards small">
+    <div class="card"><span>Status</span><strong>{{ run.effective_status }}</strong></div>
+    <div class="card"><span>Offen</span><strong>{{ run.visible_open_count }}</strong></div>
+    <div class="card"><span>Bereits entschieden</span><strong>{{ run.visible_finding_count - run.visible_open_count }}</strong></div>
+  </div>
 </section>
 {% endfor %}
 </div>
 {% endif %}
-
 {% endblock %}
