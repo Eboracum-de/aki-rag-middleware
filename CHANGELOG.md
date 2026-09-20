@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5-rc4.2 – 2026-09-20
+
+- Retry the **complete idempotent Neo4j schema upgrade** when the API recovers from a startup-time Neo4j outage before persisting Research Findings; do not mark Findings schema readiness after applying only the ResearchFinding subset.
+- Retain undecryptable temporary Findings-curation sessions as locally unusable `revocation_pending` rows instead of deleting them. This preserves the automatic Nextcloud app-password revocation path when a valid master key is temporarily unavailable or later restored.
+- Add regressions for both recovery paths. Private CI baseline: **452 tests passed**, plus Python compile and shipped-shell syntax checks.
+
 ## 0.8.5-rc4.1 – 2026-09-20
 
 - Document the complete Super-Light installer CLI and support reproducible alternate nginx listen ports (`--proxy-http-port` / `--proxy-https-port`) for same-host Nextcloud/Apache deployments; add a path-scoped Apache reverse-proxy example that leaves the Nextcloud root untouched.

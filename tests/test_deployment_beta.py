@@ -285,7 +285,7 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 def test_public_baseline_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.1"'
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.2"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
@@ -370,3 +370,12 @@ def test_super_light_rerun_preserves_admin_credentials_and_proxy_identity():
     assert 'if [[ -z "$ADMIN_PASSWORD" || "$ADMIN_PASSWORD" == "replace-me" ]]' in script
     assert 'printf \'%s:%s\\n\' "${ADMIN_USER:-admin}"' in script
     assert "printf 'admin:%s\\n'" not in script
+
+
+def test_research_finding_runtime_recovery_retries_full_neo4j_schema_upgrade():
+    source = (Path(__file__).resolve().parents[1] / "rag" / "api.py").read_text()
+    marker = "if not _research_finding_schema_ready:"
+    start = source.index(marker, source.index("def graph_research_findings"))
+    block = source[start:start + 500]
+    assert "graph.ensure_schema()" in block
+    assert "graph.ensure_research_finding_schema()" not in block

@@ -1394,7 +1394,10 @@ def graph_research_findings(request: ResearchFindingRequest):
         with GraphStore.from_config(app_config) as graph:
             graph.verify_connectivity()
             if not _research_finding_schema_ready:
-                graph.ensure_research_finding_schema()
+                # Startup may have deferred schema initialization while Neo4j was
+                # unavailable. Recovery must apply the complete idempotent upgrade,
+                # not only the ResearchFinding subset.
+                graph.ensure_schema()
                 _research_finding_schema_ready = True
             result = graph.store_research_findings(
                 query_id=str(request.query_id or ""),

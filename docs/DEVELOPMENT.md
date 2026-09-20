@@ -2,7 +2,7 @@
 
 ## Baseline
 
-`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.1` is the current public-beta hotfix candidate on top of RC4 and consolidates the authorization, installer-state, Finding-queue and Neo4j hardening validated during field testing. Earlier RC and draft identifiers were internal development snapshots and are not maintained as public upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`.
+`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.2` is the current public-beta hotfix candidate on top of RC4 and consolidates the RC4.1 authorization/installer/schema hardening plus the post-review recovery fixes. Earlier RC and draft identifiers were internal development snapshots and are not maintained as public upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`.
 
 ## Repository layout
 
@@ -43,7 +43,7 @@ python -m pytest
 
 Some graph/vector tests require the optional runtime client libraries listed in `requirements.txt`. The deployment regression tests also inspect Docker/installer/config files directly and therefore catch accidental changes to the supported topology.
 
-The rc4.1 hotfix baseline on 20 September 2026 completes **450 tests** under GitHub Actions (Python 3.13), plus Python compile and shipped-shell syntax checks. The Super-Light rerun path was additionally field-tested against an existing RC4 installation with its existing Neo4j store.
+The rc4.2 hotfix baseline on 20 September 2026 completes **452 tests** under GitHub Actions (Python 3.13), plus Python compile and shipped-shell syntax checks. The Super-Light rerun path was additionally field-tested against an existing RC4 installation with its existing Neo4j store.
 
 ## Release rule
 

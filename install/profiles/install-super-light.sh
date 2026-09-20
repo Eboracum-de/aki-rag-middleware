@@ -103,7 +103,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-AKI RAG Middleware 0.8.5-rc4.1 - super-light installation profile
+AKI RAG Middleware 0.8.5-rc4.2 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized

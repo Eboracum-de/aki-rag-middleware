@@ -1,7 +1,7 @@
 # AKI RAG Middleware
 ## Technical documentation and command reference
 
-**Version:** `0.8.5-rc4.1`  
+**Version:** `0.8.5-rc4.2`  
 **Updated:** 20 September 2026
 
 This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
@@ -1539,7 +1539,7 @@ The underlying Super-Light field path was installed and operated on a fresh Leap
 
 No new blank-VM run was performed in the neutral packaging environment after those later documentation/hardening changes; blank-VM acceptance remains part of operator validation before production rollout.
 
-The 0.8.5-rc4.1 hotfix baseline, including the ResearchRun/user-scoped curation hardening and subsequent authorization, installer-state and Neo4j fixes, is covered by the CI regression suite: **450 tests passed** on 20 September 2026. The Super-Light rerun path was additionally field-tested against an existing RC4 installation and Neo4j store.
+The 0.8.5-rc4.2 hotfix baseline, including the ResearchRun/user-scoped curation hardening, RC4.1 authorization/installer/schema fixes and the post-review Neo4j/session-recovery fixes, is covered by the CI regression suite: **452 tests passed** on 20 September 2026. The Super-Light rerun path was additionally field-tested against an existing RC4 installation and Neo4j store.
 
 Container images in `versions.lock.yaml` are digest-pinned. Secrets are not part of the package.
 

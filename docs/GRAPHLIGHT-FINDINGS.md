@@ -1,6 +1,6 @@
 # Graph-Lite Findings curation
 
-**Reference:** `0.8.5-rc4.1`
+**Reference:** `0.8.5-rc4.2`
 
 Graph-Lite turns selected, verified research findings into **curated, document-grounded graph observations**. It is deliberately conservative: a ResearchFinding is provenance-bearing evidence that a query frame matched a document; it is not automatically a global fact.
 

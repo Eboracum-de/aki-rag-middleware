@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc4.1`
+**Reference:** `0.8.5-rc4.2`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.

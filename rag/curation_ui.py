@@ -149,17 +149,21 @@ def cleanup_stale_curation_sessions(cfg: dict[str, Any]) -> dict[str, int]:
     """Invalidate and revoke every curation token left by an earlier API process."""
     store = _store(cfg)
     sessions, undecryptable = store.list_curation_sessions_for_cleanup()
+    # A decryption failure can mean either damaged ciphertext or, importantly,
+    # a temporarily wrong/restored master key. Keep the row locally unusable so
+    # a later startup with the correct key can still revoke its Nextcloud app
+    # password. Deleting it here would destroy the only automatic revocation path.
     for session_id_hash in undecryptable:
-        store.delete_curation_session_by_hash(session_id_hash)
+        store.mark_curation_session_revocation_pending(session_id_hash)
     if undecryptable:
         log.warning(
-            "Discarded %d undecryptable local curation session(s); their Nextcloud "
-            "app passwords could not be revoked automatically.",
+            "Retained %d undecryptable curation session(s) as revocation_pending; "
+            "their Nextcloud app passwords could not be revoked automatically.",
             len(undecryptable),
         )
 
     revoked = 0
-    pending = 0
+    pending = len(undecryptable)
     for session in sessions:
         store.mark_curation_session_revocation_pending(session.session_id_hash)
         if _revoke_app_password(session, cfg):

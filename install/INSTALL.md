@@ -1,10 +1,10 @@
-# Installation – 0.8.5-rc4.1
+# Installation – 0.8.5-rc4.2
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
 Functional profile and deployment mechanism are conceptually separate. In the 0.8.5 line the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
 
-`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.1` is the current hotfix candidate on top of RC4. It retains the Graph-Lite Findings curation model and adds authorization, installer-state, Finding-queue and Neo4j schema hardening. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
+`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.2` is the current hotfix candidate on top of RC4. It retains the Graph-Lite Findings curation model and adds the RC4.1 authorization/installer/schema hardening plus recovery fixes for deferred Neo4j schema upgrades and temporary curation-session revocation. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
 and user-configuration model:
 
 - multi-user + live Nextcloud ACL is the safe installation default;

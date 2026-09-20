@@ -1,6 +1,6 @@
 # Roadmap
 
-This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4.1` contract.
+This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4.2` contract.
 
 ## 0.8.5-rc5 candidates
 

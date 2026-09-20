@@ -201,7 +201,7 @@ def test_self_service_finding_acl_returns_only_authorized_findings():
     assert _filter_findings_with_acl(EnabledAcl(), _session(), rows) == [rows[1]]  # type: ignore[arg-type]
 
 
-def test_startup_cleanup_discards_undecryptable_session_but_continues(
+def test_startup_cleanup_retains_undecryptable_session_pending_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     store = _encrypted_store(tmp_path, monkeypatch)
@@ -213,7 +213,7 @@ def test_startup_cleanup_discards_undecryptable_session_but_continues(
         app_password="bad-session-secret",
         lifetime_seconds=7200,
     )
-    _good_token, good = store.create_curation_session(
+    _good_token, _good = store.create_curation_session(
         canonical_user_id=user.canonical_user_id,
         nextcloud_server=user.nextcloud_server,
         nextcloud_login=user.nextcloud_login,
@@ -236,6 +236,58 @@ def test_startup_cleanup_discards_undecryptable_session_but_continues(
         {"auth": {"credential_store": str(store.path)}}
     )
 
-    assert result == {"found": 2, "revoked": 1, "pending": 0}
+    assert result == {"found": 2, "revoked": 1, "pending": 1}
     assert calls == ["good-session-secret"]
-    assert store.list_curation_sessions() == []
+    with sqlite3.connect(store.path) as con:
+        rows = con.execute(
+            "SELECT session_id_hash,state FROM curation_sessions ORDER BY session_id_hash"
+        ).fetchall()
+    assert rows == [(bad.session_id_hash, "revocation_pending")]
+
+
+def test_startup_cleanup_can_revoke_pending_sessions_after_master_key_is_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = _encrypted_store(tmp_path, monkeypatch)
+    user = _enabled_user(store)
+    _token, session = store.create_curation_session(
+        canonical_user_id=user.canonical_user_id,
+        nextcloud_server=user.nextcloud_server,
+        nextcloud_login=user.nextcloud_login,
+        app_password="recoverable-session-secret",
+        lifetime_seconds=7200,
+    )
+    good_key = Path(monkeypatch.getenv("RAG_CREDENTIAL_MASTER_KEY_FILE")) if hasattr(monkeypatch, "getenv") else tmp_path / "credential-master.key"
+    # Replace the key file contents temporarily: ciphertext remains valid but is
+    # unreadable until the original key is restored.
+    original_key = (tmp_path / "credential-master.key").read_bytes()
+    (tmp_path / "credential-master.key").unlink()
+    generate_master_key(tmp_path / "credential-master.key", mode=0o600)
+    wrong_key_store = CredentialStore(store.path)
+
+    monkeypatch.setattr("rag.curation_ui._revoke_app_password", lambda current, cfg: True)
+    first = cleanup_stale_curation_sessions(
+        {"auth": {"credential_store": str(store.path)}}
+    )
+    assert first == {"found": 1, "revoked": 0, "pending": 1}
+    with sqlite3.connect(store.path) as con:
+        assert con.execute(
+            "SELECT state FROM curation_sessions WHERE session_id_hash=?",
+            (session.session_id_hash,),
+        ).fetchone() == ("revocation_pending",)
+
+    (tmp_path / "credential-master.key").write_bytes(original_key)
+    # cleanup_stale_curation_sessions constructs a fresh CredentialStore and can
+    # now decrypt/revoke the retained pending row.
+    calls = []
+    monkeypatch.setattr(
+        "rag.curation_ui._revoke_app_password",
+        lambda current, cfg: calls.append(current.app_password) or True,
+    )
+    second = cleanup_stale_curation_sessions(
+        {"auth": {"credential_store": str(store.path)}}
+    )
+    assert second == {"found": 1, "revoked": 1, "pending": 0}
+    assert calls == ["recoverable-session-secret"]
+    with sqlite3.connect(store.path) as con:
+        assert con.execute("SELECT COUNT(*) FROM curation_sessions").fetchone()[0] == 0
