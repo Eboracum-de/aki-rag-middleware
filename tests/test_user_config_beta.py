@@ -69,11 +69,22 @@ def test_fresh_beta_config_is_secure_multiuser_default():
     cfg = yaml.safe_load(Path("config.yaml").read_text())
     assert cfg["acl"]["enabled"] is True
     assert cfg["acl"]["identity_mode"] == "credential_store"
-    assert cfg["acl"]["verify_tls"] is True
-    assert cfg["auth"]["verify_tls"] is True
-    assert cfg["carddav"]["verify_tls"] is True
+    assert cfg["nextcloud"]["verify_tls"] is True
+    assert cfg["nextcloud"]["ca_file"] == ""
+    assert "verify_tls" not in cfg["acl"]
+    assert "verify_tls" not in cfg["auth"]
+    assert "verify_tls" not in cfg["carddav"]
     assert cfg["security"]["allow_insecure_nextcloud"] is False
     assert validate_security_config(cfg) == []
+
+
+def test_missing_canonical_nextcloud_ca_is_rejected(tmp_path: Path):
+    cfg = yaml.safe_load(Path("config.yaml").read_text())
+    cfg["auth"]["credential_store"] = str(tmp_path / "users.sqlite")
+    cfg["acl"]["credential_store"] = str(tmp_path / "users.sqlite")
+    cfg["nextcloud"]["ca_file"] = str(tmp_path / "missing-root-ca.pem")
+    errors = validate_security_config(cfg)
+    assert any("nextcloud.ca_file does not exist" in error for error in errors)
 
 
 def test_insecure_nextcloud_requires_explicit_escape_hatch(tmp_path: Path):

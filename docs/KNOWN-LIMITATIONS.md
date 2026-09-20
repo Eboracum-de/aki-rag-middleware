@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc4.2`
+**Reference:** `0.8.5-rc4.3`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
@@ -19,6 +19,9 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   services. Their availability and backup are outside the local Compose stack.
 - Bundled nginx and OpenWebUI are opt-in in Super-Light. AKI Recherche is the
   reference user UI for the current beta.
+- The locally built Playwright renderer pins Playwright/Python package versions and the
+  Microsoft base-image tag (`v1.62.0-noble`), but the base image is not yet pinned by
+  immutable digest. Digest pinning is deferred dependency hardening.
 
 ## Contact seeds and Admin UI
 
@@ -76,6 +79,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Raw HTML, when enabled, contains the fetched main response rather than a package
   of every referenced resource.
 - Background PDF rendering uses an in-process bounded task queue. If the API container is restarted while a render is pending, that render job is not durable and its sidecar may remain `pending`; text evidence and the answer are unaffected.
+- Playwright PDF rendering is backgrounded, but the WebDAV archive write that creates the run directory, text snapshots, metadata/fetch-log material and initial `recherche.md` is still synchronous. On higher-latency Nextcloud/WebDAV paths this archive phase can dominate Web Research response time even when search/fetch/relevance are fast. This is a performance limitation, not an evidence or renderer failure.
 - Web pages, incoming mail and saved chats can contain adversarial or instruction-like
   text. Structured verifier/Graph schemas and evidence separation reduce risk, but
   0.8.5 does not claim a complete prompt-injection defense. See `THREAT-MODEL.md`.

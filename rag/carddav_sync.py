@@ -25,6 +25,7 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
+from rag.nextcloud_tls import nextcloud_verify_value
 from rag.credential_store import (
     CanonicalUser,
     ContactSyncSettings,
@@ -63,7 +64,7 @@ class CardDAVSettings:
     password: str
     user_id: str
     cloud_id: str
-    verify_tls: bool
+    verify_tls: bool | str
     timeout: float
     include_addressbooks: list[str]
     exclude_addressbooks: list[str]
@@ -108,7 +109,7 @@ class CardDAVSettings:
             password=password,
             user_id=user_id,
             cloud_id=cloud_id,
-            verify_tls=bool(cfg_get(cfg, "carddav.verify_tls", default=True)),
+            verify_tls=nextcloud_verify_value(cfg, "carddav", "acl"),
             timeout=float(cfg_get(cfg, "carddav.timeout", default=120)),
             include_addressbooks=include,
             exclude_addressbooks=exclude,
@@ -157,7 +158,7 @@ class CardDAVSettings:
             password=credential.secret,
             user_id=user.nextcloud_login,
             cloud_id=cloud_id,
-            verify_tls=bool(cfg_get(cfg, "carddav.verify_tls", default=True)),
+            verify_tls=nextcloud_verify_value(cfg, "carddav", "acl"),
             timeout=float(cfg_get(cfg, "carddav.timeout", default=120)),
             include_addressbooks=include,
             exclude_addressbooks=exclude,

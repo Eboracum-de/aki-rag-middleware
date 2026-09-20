@@ -7,6 +7,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from rag.credential_store import CredentialStore
+from rag.internal_auth import (
+    ENV_NAME as INTERNAL_API_KEY_ENV,
+    PROVIDER_ENV_NAME,
+    MIN_KEY_LENGTH,
+)
 
 
 def _get(cfg: dict[str, Any], path: str, default: Any = None) -> Any:
@@ -34,6 +39,17 @@ def validate_security_config(cfg: dict[str, Any]) -> list[str]:
     allow_insecure = _truthy(_get(cfg, "security.allow_insecure_nextcloud", False), False)
     base_url = str(_get(cfg, "nextcloud.base_url", "") or "").strip().rstrip("/")
 
+    internal_key = str(os.getenv(INTERNAL_API_KEY_ENV, "") or "").strip()
+    if len(internal_key) < MIN_KEY_LENGTH:
+        errors.append(
+            f"{INTERNAL_API_KEY_ENV} must be configured with at least {MIN_KEY_LENGTH} characters"
+        )
+    provider_internal_key = str(os.getenv(PROVIDER_ENV_NAME, "") or "").strip()
+    if len(provider_internal_key) < MIN_KEY_LENGTH:
+        errors.append(
+            f"{PROVIDER_ENV_NAME} must be configured with at least {MIN_KEY_LENGTH} characters"
+        )
+
     if acl_enabled:
         if mode not in {"credential_store", "single_user", "mapped_users"}:
             errors.append(f"unknown acl.identity_mode={mode!r}")
@@ -48,11 +64,24 @@ def validate_security_config(cfg: dict[str, Any]) -> list[str]:
                     "nextcloud.base_url must use HTTPS; set security.allow_insecure_nextcloud=true only for an explicit lab exception"
                 )
 
-        for path in ("acl.verify_tls", "auth.verify_tls", "carddav.verify_tls"):
-            if not _truthy(_get(cfg, path, True), True) and not allow_insecure:
+        nextcloud_ca_file = str(_get(cfg, "nextcloud.ca_file", "") or "").strip()
+        canonical_verify = _get(cfg, "nextcloud.verify_tls", None)
+        if nextcloud_ca_file:
+            if not Path(nextcloud_ca_file).exists():
+                errors.append(f"nextcloud.ca_file does not exist: {nextcloud_ca_file}")
+        elif canonical_verify is not None:
+            if not _truthy(canonical_verify, True) and not allow_insecure:
                 errors.append(
-                    f"{path}=false requires security.allow_insecure_nextcloud=true"
+                    "nextcloud.verify_tls=false requires security.allow_insecure_nextcloud=true"
                 )
+        else:
+            # Upgrade compatibility: old installations may still carry
+            # component-local TLS switches until config.yaml is migrated.
+            for path in ("acl.verify_tls", "auth.verify_tls", "carddav.verify_tls"):
+                if not _truthy(_get(cfg, path, True), True) and not allow_insecure:
+                    errors.append(
+                        f"{path}=false requires security.allow_insecure_nextcloud=true"
+                    )
 
     if mode == "credential_store" and acl_enabled:
         acl_store = str(_get(cfg, "acl.credential_store", "runtime/users.sqlite") or "runtime/users.sqlite").strip()

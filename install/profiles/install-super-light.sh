@@ -11,9 +11,15 @@ ASSUME_YES=0
 PLAN_ONLY=0
 START_STACK=1
 WITH_OPENWEBUI=0
+OPENWEBUI_EXPLICIT=0
+OPENWEBUI_FROM_STATE=0
 WITH_PROXY=0
+PROXY_EXPLICIT=0
+PROXY_FROM_STATE=0
 PROXY_HTTP_PORT=80
 PROXY_HTTPS_PORT=443
+PROXY_HTTP_PORT_EXPLICIT=0
+PROXY_HTTPS_PORT_EXPLICIT=0
 CA_CERTIFICATES=()
 X509_STRICT=0
 
@@ -33,8 +39,10 @@ Options:
   --prefix PATH             Install prefix (default: /opt/nextcloud-rag)
   --skip-system-packages    Do not install Docker/curl/jq/openssl
   --no-start                Prepare files/images but do not start the stack
-  --with-openwebui          Also start bundled OpenWebUI (default: off)
-  --with-proxy              Also start bundled nginx (default: off)
+  --with-openwebui          Start/retain bundled OpenWebUI (fresh default: off)
+  --no-openwebui            Disable/remove bundled OpenWebUI on this host
+  --with-proxy              Start/retain bundled nginx (fresh default: off)
+  --no-proxy                Disable/remove bundled nginx
   --proxy-http-port PORT     nginx HTTP listen port (default: 80)
   --proxy-https-port PORT    nginx HTTPS listen port (default: 443)
   --ca-certificate FILE     Trust one private CA certificate inside API/provider containers; repeatable
@@ -60,10 +68,12 @@ while [[ $# -gt 0 ]]; do
     --elasticsearch-index) ELASTICSEARCH_INDEX="$2"; shift 2 ;;
     --skip-system-packages) INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --no-start) START_STACK=0; shift ;;
-    --with-openwebui) WITH_OPENWEBUI=1; shift ;;
-    --with-proxy) WITH_PROXY=1; shift ;;
-    --proxy-http-port) [[ $# -ge 2 ]] || { echo "--proxy-http-port requires a port" >&2; exit 2; }; PROXY_HTTP_PORT="$2"; shift 2 ;;
-    --proxy-https-port) [[ $# -ge 2 ]] || { echo "--proxy-https-port requires a port" >&2; exit 2; }; PROXY_HTTPS_PORT="$2"; shift 2 ;;
+    --with-openwebui) WITH_OPENWEBUI=1; OPENWEBUI_EXPLICIT=1; shift ;;
+    --no-openwebui) WITH_OPENWEBUI=0; OPENWEBUI_EXPLICIT=1; shift ;;
+    --with-proxy) WITH_PROXY=1; PROXY_EXPLICIT=1; shift ;;
+    --no-proxy) WITH_PROXY=0; PROXY_EXPLICIT=1; shift ;;
+    --proxy-http-port) [[ $# -ge 2 ]] || { echo "--proxy-http-port requires a port" >&2; exit 2; }; PROXY_HTTP_PORT="$2"; PROXY_HTTP_PORT_EXPLICIT=1; shift 2 ;;
+    --proxy-https-port) [[ $# -ge 2 ]] || { echo "--proxy-https-port requires a port" >&2; exit 2; }; PROXY_HTTPS_PORT="$2"; PROXY_HTTPS_PORT_EXPLICIT=1; shift 2 ;;
     --ca-certificate) [[ $# -ge 2 ]] || { echo "--ca-certificate requires a file" >&2; exit 2; }; CA_CERTIFICATES+=("$2"); shift 2 ;;
     --x509-strict) X509_STRICT=1; shift ;;
     --no-x509-strict) X509_STRICT=0; shift ;;
@@ -75,6 +85,50 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { printf '\n==> %s\n' "$*"; }
+
+read_state_bool() {
+  local key="$1" value="$2"
+  case "$value" in
+    0|1) printf '%s' "$value" ;;
+    *) echo "Invalid boolean value in install-state.env for $key: $value" >&2; exit 2 ;;
+  esac
+}
+
+load_install_state() {
+  local state_file="$PREFIX/install/install-state.env"
+  [[ -f "$state_file" ]] || return 0
+  local recognized=0
+  [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized=1
+  [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]] && recognized=1
+  [[ $recognized -eq 1 ]] || return 0
+
+  local state_local_openwebui=0 state_local_proxy=0
+  local state_proxy_http_port=80 state_proxy_https_port=443
+  local key value
+  while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    case "$key" in
+      LOCAL_OPENWEBUI) state_local_openwebui="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_PROXY) state_local_proxy="$(read_state_bool "$key" "$value")" ;;
+      PROXY_HTTP_PORT) state_proxy_http_port="$value" ;;
+      PROXY_HTTPS_PORT) state_proxy_https_port="$value" ;;
+      *) : ;;
+    esac
+  done < "$state_file"
+
+  if [[ $OPENWEBUI_EXPLICIT -eq 0 ]]; then
+    WITH_OPENWEBUI=$state_local_openwebui
+    [[ $state_local_openwebui -eq 1 ]] && OPENWEBUI_FROM_STATE=1
+  fi
+  if [[ $PROXY_EXPLICIT -eq 0 ]]; then
+    WITH_PROXY=$state_local_proxy
+    [[ $state_local_proxy -eq 1 ]] && PROXY_FROM_STATE=1
+  fi
+  [[ $PROXY_HTTP_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTP_PORT=$state_proxy_http_port
+  [[ $PROXY_HTTPS_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTPS_PORT=$state_proxy_https_port
+}
+
+load_install_state
 
 validate_port() {
   local name="$1"
@@ -103,7 +157,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-AKI RAG Middleware 0.8.5-rc4.2 - super-light installation profile
+AKI RAG Middleware 0.8.5-rc4.3 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized
@@ -115,8 +169,8 @@ Graph extraction worker: disabled
 Qdrant/embeddings:       disabled / not installed
 Reranker/TEI:            disabled / not installed
 Playwright archive:      local renderer enabled
-OpenWebUI:               $([[ $WITH_OPENWEBUI -eq 1 ]] && echo pull/start || echo not pulled/not started)
-Reverse proxy:           $([[ $WITH_PROXY -eq 1 ]] && echo "bundled/start on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}" || echo disabled)
+OpenWebUI:               $([[ $WITH_OPENWEBUI -eq 1 ]] && echo "pull/start$([[ $OPENWEBUI_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-openwebui to disable)')" || echo not pulled/not started)
+Reverse proxy:           $([[ $WITH_PROXY -eq 1 ]] && echo "bundled/start on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}$([[ $PROXY_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-proxy to disable)')" || echo disabled)
 Nextcloud URL:           ${NEXTCLOUD_URL:-<required before start>}
 Elasticsearch URL:       ${ELASTICSEARCH_URL:-<required before start>}
 Elasticsearch index:     $ELASTICSEARCH_INDEX
@@ -301,6 +355,7 @@ mkdir -p "$PREFIX/runtime" "$PREFIX/runtime/ca"
 touch "$PREFIX/runtime/ca/.keep"
 # Keep private trust anchors as site-owned runtime state.  The Docker build only
 # consumes runtime/ca; other runtime secrets are excluded via .dockerignore.
+NEXTCLOUD_CA_FILE=""
 if [[ ${#CA_CERTIFICATES[@]} -gt 0 ]]; then
   log "Installing private CA trust anchors for containerized middleware"
   rm -f "$PREFIX/runtime/ca"/installer-*.crt
@@ -311,6 +366,9 @@ if [[ ${#CA_CERTIFICATES[@]} -gt 0 ]]; then
     cp "$ca_source" "$PREFIX/runtime/ca/$ca_name"
     chmod 0644 "$PREFIX/runtime/ca/$ca_name"
   done
+  cat "$PREFIX/runtime/ca"/installer-*.crt > "$PREFIX/runtime/ca/nextcloud-ca-bundle.pem"
+  chmod 0644 "$PREFIX/runtime/ca/nextcloud-ca-bundle.pem"
+  NEXTCLOUD_CA_FILE="/app/runtime/ca/nextcloud-ca-bundle.pem"
 fi
 
 if [[ ! -f "$PREFIX/config.yaml" ]]; then
@@ -334,6 +392,11 @@ fi
 if [[ -n "$NEXTCLOUD_URL" ]]; then
   esc="$(sed_repl "${NEXTCLOUD_URL%/}")"
   sed -i "/^nextcloud:/,/^[^[:space:]]/ s|^  base_url:.*|  base_url: ${esc}/|" "$PREFIX/config.yaml"
+fi
+if [[ -n "$NEXTCLOUD_CA_FILE" ]]; then
+  esc="$(sed_repl "$NEXTCLOUD_CA_FILE")"
+  sed -i "/^nextcloud:/,/^[^[:space:]]/ s|^  verify_tls:.*|  verify_tls: true|" "$PREFIX/config.yaml"
+  sed -i "/^nextcloud:/,/^[^[:space:]]/ s|^  ca_file:.*|  ca_file: ${esc}|" "$PREFIX/config.yaml"
 fi
 if [[ -n "$ELASTICSEARCH_URL" ]]; then
   esc="$(sed_repl "${ELASTICSEARCH_URL%/}")"
@@ -361,6 +424,16 @@ PROVIDER_API_KEY="$(sed -n 's/^PROVIDER_API_KEY=//p' "$PREFIX/runtime.env" | hea
 if [[ -z "$PROVIDER_API_KEY" || "$PROVIDER_API_KEY" == "replace-me" ]]; then
   PROVIDER_API_KEY="$(random_secret)"
   set_runtime_env_value PROVIDER_API_KEY "$PROVIDER_API_KEY"
+fi
+RAG_INTERNAL_API_KEY="$(sed -n 's/^RAG_INTERNAL_API_KEY=//p' "$PREFIX/runtime.env" | head -1)"
+if [[ -z "$RAG_INTERNAL_API_KEY" || "$RAG_INTERNAL_API_KEY" == "replace-me" ]]; then
+  RAG_INTERNAL_API_KEY="$(random_secret)"
+  set_runtime_env_value RAG_INTERNAL_API_KEY "$RAG_INTERNAL_API_KEY"
+fi
+RAG_PROVIDER_INTERNAL_KEY="$(sed -n 's/^RAG_PROVIDER_INTERNAL_KEY=//p' "$PREFIX/runtime.env" | head -1)"
+if [[ -z "$RAG_PROVIDER_INTERNAL_KEY" || "$RAG_PROVIDER_INTERNAL_KEY" == "replace-me" ]]; then
+  RAG_PROVIDER_INTERNAL_KEY="$(random_secret)"
+  set_runtime_env_value RAG_PROVIDER_INTERNAL_KEY "$RAG_PROVIDER_INTERNAL_KEY"
 fi
 ADMIN_USER="$(sed -n 's/^RAG_ADMIN_USER=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$ADMIN_USER" || "$ADMIN_USER" == "replace-me" ]]; then
@@ -408,6 +481,8 @@ LOCAL_NEO4J=1
 LOCAL_PLAYWRIGHT=1
 LOCAL_OPENWEBUI=$WITH_OPENWEBUI
 LOCAL_PROXY=$WITH_PROXY
+PROXY_HTTP_PORT=$PROXY_HTTP_PORT
+PROXY_HTTPS_PORT=$PROXY_HTTPS_PORT
 MULTI_USER=1
 ENVSTATE
 chmod 0644 "$PREFIX/install/install-state.env"
@@ -459,6 +534,8 @@ EOFSSL
   chmod 644 "$TLS_DIR/server.crt"
   printf '%s:%s\n' "${ADMIN_USER:-admin}" "$(openssl passwd -apr1 "$ADMIN_PASSWORD")" > "$PREFIX/install/nginx/htpasswd"
   chmod 644 "$PREFIX/install/nginx/htpasswd"
+  printf 'proxy_set_header X-AKI-Internal-Key "%s";\n' "$RAG_INTERNAL_API_KEY" > "$PREFIX/install/nginx/internal-auth.conf"
+  chmod 600 "$PREFIX/install/nginx/internal-auth.conf"
   if [[ $WITH_OPENWEBUI -eq 1 ]]; then
     cp "$PREFIX/install/nginx/nginx-openwebui.conf" "$PREFIX/install/nginx/generated.conf"
   else
@@ -518,6 +595,7 @@ EOFOVR
     volumes:
       - ../nginx/generated.conf:/etc/nginx/nginx.conf:ro
       - ../nginx/htpasswd:/etc/nginx/htpasswd:ro
+      - ../nginx/internal-auth.conf:/etc/nginx/internal-auth.conf:ro
       - ../nginx/tls:/etc/nginx/tls:ro
     depends_on:
       - provider

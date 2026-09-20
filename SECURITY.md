@@ -10,10 +10,17 @@ Reversible per-user Nextcloud and IMAP credentials, together with pending Nextcl
 
 Global service secrets such as API keys and backend passwords remain environment-file configuration in the current release-candidate line. Keep `runtime.env`, live `provider.env`, `runtime/`, TLS private keys and backups out of source control.
 
+The FastAPI middleware on port 8765 is an **internal service boundary**. RC4.3 uses two installer-managed machine credentials: `RAG_INTERNAL_API_KEY` proves membership in the internal service plane, while `RAG_PROVIDER_INTERNAL_KEY` proves the narrower trusted-provider role. The provider supplies both on provider-originated middleware calls. Bundled nginx receives only the internal key and therefore cannot impersonate the provider merely by forwarding a request. These machine credentials do not replace provider Bearer authentication, RAG Admin authentication, Nextcloud live ACL or curation-session authentication.
+
+Direct exposure of port 8765 is unsupported. Native startup refuses a non-loopback `RAG_API_HOST` unless `RAG_ALLOW_REMOTE_INTERNAL_API=true` is deliberately set. An alternative reverse proxy that bypasses bundled nginx must both authenticate its clients and supply the internal machine credential to protected middleware routes.
+
 ## Deployment expectations
 
 - Use HTTPS for Nextcloud and verify TLS certificates.
 - Keep RAG Admin behind authentication and an administrator-controlled reverse proxy/network boundary.
+- Keep port 8765 loopback-only. Do not rely on `X-RAG-User-ID` as caller authentication. Internal service calls require `RAG_INTERNAL_API_KEY`; provider/user routes additionally require the separate `RAG_PROVIDER_INTERNAL_KEY`.
+- If nginx Basic Auth is intentionally disabled, provide equivalent upstream authentication before any proxy is allowed to inject the internal machine credential.
+- Security zones are enforced centrally as `PUBLIC`, `TRUSTED_PROVIDER`, `INTERNAL`, `ADMIN` and `USER`; core FastAPI routes publish the assigned zone in OpenAPI as `x-aki-security-zone`.
 - Protect `runtime.env`, `runtime/users.sqlite` and the credential master key with restrictive ownership and permissions.
 - Back up the credential master key separately from, but together with, the encrypted credential database.
 - Do not manipulate credential rows directly with ad-hoc SQL. Use the Admin UI or supplied CLI commands.

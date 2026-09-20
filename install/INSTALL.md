@@ -1,10 +1,10 @@
-# Installation – 0.8.5-rc4.2
+# Installation – 0.8.5-rc4.3
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
 Functional profile and deployment mechanism are conceptually separate. In the 0.8.5 line the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
 
-`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.2` is the current hotfix candidate on top of RC4. It retains the Graph-Lite Findings curation model and adds the RC4.1 authorization/installer/schema hardening plus recovery fixes for deferred Neo4j schema upgrades and temporary curation-session revocation. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
+`0.8.5-rc4.3` is the current release-candidate baseline. It retains the Graph-Lite Findings curation model and adds the rc4.x authorization, installer, TLS and internal-service hardening, including explicit Standard Playwright lifecycle management and rerun safety. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
 and user-configuration model:
 
 - multi-user + live Nextcloud ACL is the safe installation default;
@@ -63,6 +63,18 @@ The current reference keeps Qdrant at 1024 dimensions (`embedding.dimensions: 10
 The example keeps Ollama and TEI bound to `127.0.0.1`, pins Ollama to `0.24.0`,
 and uses `Alibaba-NLP/gte-multilingual-reranker-base` through the TEI CPU image.
 
+Reranking is **disabled by default** in both reference profiles:
+
+```yaml
+reranker:
+  backend: none
+```
+
+Enable `backend: tei` or `backend: local` only for comparative testing. A
+Standard install does not pre-download the local Hugging Face reranker model
+unless `--with-reranker-download` is supplied. TEI is an external/local-helper
+service and does not require that model cache in the middleware venv.
+
 The default prefix is `/opt/nextcloud-rag` and the service user is `rag`.
 
 ## 2. Installation modes
@@ -72,6 +84,8 @@ The default prefix is `/opt/nextcloud-rag` and the service user is `rag`.
 --single-user  explicit one-user mode; live ACL remains enabled
 --acl-off      explicit diagnostic mode; never use for a shared document set
 ```
+
+Common connection/frontend/proxy switches now use the same names in Standard and Super-Light. On a recognized Standard rerun, the installer reports the existing AKI installation and verifies that native AKI processes, systemd units and local Docker Compose services are stopped before modifying files. If the running state cannot be determined reliably, the rerun aborts without changes. On rerun, an existing OpenWebUI/proxy selection is retained unless explicitly overridden with `--no-openwebui` / `--no-proxy`. Standard also accepts `--nextcloud-url`, `--elasticsearch-url`, `--elasticsearch-index`, `--proxy-http-port` and `--proxy-https-port`, so deployment scripts do not need profile-specific spellings.
 
 Other useful flags:
 
@@ -106,6 +120,8 @@ At minimum check:
 ```yaml
 nextcloud:
   base_url: "https://cloud.example.org/nextcloud"
+  verify_tls: true
+  ca_file: ""
 
 elasticsearch:
   url: "http://127.0.0.1:9200"
@@ -139,31 +155,23 @@ acl:
   enabled: true
   identity_mode: credential_store
   credential_store: runtime/users.sqlite
-  verify_tls: true
 
 auth:
   credential_store: runtime/users.sqlite
   nextcloud_login_flow_enabled: true
-  verify_tls: true
 ```
 
-For a private CA, configure a trusted CA rather than disabling TLS verification.
+For a private Nextcloud CA, configure a trusted CA rather than disabling TLS
+verification. Both supported installer profiles accept repeatable
+`--ca-certificate FILE` options and build a Nextcloud-specific CA bundle. In a
+native Standard install this becomes
+`/opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem` and is written to
+`nextcloud.ca_file`. This deliberately avoids global
+`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` overrides, which can otherwise replace
+the public trust used for OpenAI, Hugging Face and unrelated HTTPS endpoints.
+
 `security.allow_insecure_nextcloud=true` exists only as an explicit lab escape
-hatch. For the native/standard deployment, install the private root/intermediate
-CA into the host trust store and point Python HTTP clients at that system bundle
-when necessary. For example, after installing the CA system-wide, add the actual
-CA-bundle path for the host to `provider.env`/`runtime.env`:
-
-```bash
-SSL_CERT_FILE=/path/to/system/ca-bundle
-REQUESTS_CA_BUNDLE=/path/to/system/ca-bundle
-```
-
-Use `python3 -c 'import ssl; print(ssl.get_default_verify_paths())'` to inspect
-the host Python/OpenSSL defaults. On SUSE-family systems an administrator can
-place private anchors in `/etc/pki/trust/anchors/` and run
-`update-ca-certificates`. The containerized super-light profile has a dedicated
-`--ca-certificate` installer option described in its README.
+hatch.
 
 Edit `/opt/nextcloud-rag/provider.env` for the actual LLM backend/model names.
 The reference configuration uses OpenAI GPT-5.6 Luna for planner/verifier/answer; place `LLM_API_KEY` only in `runtime.env`. Embeddings remain independently configured in `config.yaml` and default to administrator-managed local Ollama with `qwen3-embedding:4b`.
@@ -191,7 +199,7 @@ HTTP :80 -> 308 HTTPS redirect
              `-- /          -> selected user UI; without UI -> redirect to /rag-admin/
 ```
 
-Optional Qdrant and Neo4j bind to loopback. The bundled OpenWebUI uses host networking but explicitly binds its own server to `127.0.0.1:3000`; it reaches the provider directly at `http://127.0.0.1:8766/v1`. This internal loopback hop is intentionally independent of nginx TLS/certificate replacement.
+Optional Qdrant and Neo4j bind to loopback. The FastAPI middleware on `127.0.0.1:8765` is additionally protected by an installer-managed `RAG_INTERNAL_API_KEY`. The provider sends this machine credential on internal calls; nginx injects it only on protected API/auth proxy locations. The bundled OpenWebUI uses host networking but explicitly binds its own server to `127.0.0.1:3000`; it reaches the provider directly at `http://127.0.0.1:8766/v1`. This internal loopback hop is intentionally independent of nginx TLS/certificate replacement.
 
 The installer generates a self-signed nginx bootstrap certificate with SANs for
 the current hostname, localhost and detected IPv4 addresses. Browsers will warn
@@ -203,7 +211,7 @@ TCP 443 and, if the redirect should be reachable, TCP 80.
 
 ### Bundled OpenWebUI and HTTPS
 
-Existing Apache/reverse proxy deployments may leave the bundled nginx disabled and proxy the public paths directly, or run nginx on alternate internal listen ports. Keep `/v1/`, `/auth/nextcloud/`, `/rag-admin/` and `/rag-api/` as distinct pass-through paths. The Admin UI emits path-only asset/navigation URLs in RC3, so the public host/scheme is no longer baked from the internal FastAPI request. API/provider services remain loopback-bound by default; do not expose 8765/8766 publicly.
+Existing Apache/reverse proxy deployments should preferably keep the bundled nginx on alternate loopback/internal ports and proxy the public paths through it. This preserves the tested TLS/rate-limit/authentication rules and RC4.3 security-zone handling. A deployment using `--no-proxy` may proxy directly to 8765 only as an advanced configuration: the external proxy must implement equivalent client authentication and may inject **only** the general `X-AKI-Internal-Key` value from `RAG_INTERNAL_API_KEY` for INTERNAL/ADMIN access. Do not give a generic reverse proxy `RAG_PROVIDER_INTERNAL_KEY`; TRUSTED_PROVIDER/USER calls should originate from the AKI provider. Never expose 8765/8766 directly to an untrusted network.
 
 #### Same host as Nextcloud/Apache
 
@@ -222,6 +230,8 @@ sudo ./install/install.sh \
 ```
 
 The selected ports are part of the recorded `install/last-install-command.sh`, so an installer rerun reproduces the same topology. The RAG nginx still uses its normal TLS/Auth/rate-limit configuration; only the listen ports change. Keep 81/444 blocked from untrusted networks when they are used only as an Apache backend.
+
+The general machine credential injected by RAG nginx authenticates nginx to the INTERNAL service plane; it is **not** an end-user/admin login and it does not grant TRUSTED_PROVIDER/USER privileges. The provider-role secret remains confined to the API/provider runtime. Do not use `--no-proxy-basic-auth` unless an upstream proxy already provides equivalent authentication before requests reach RAG nginx.
 
 In the Nextcloud HTTPS virtual host, proxy only the RAG path prefixes to nginx on loopback. Do **not** proxy `/`, because that would replace the Nextcloud application root. A minimal Apache example is:
 
@@ -379,6 +389,15 @@ from ordinary internal retrieval (and retained in an exclusion history when the
 target changes), so a mixed business-document/Web-archive folder would hide the
 other documents below that root as well.
 
+Rendered-PDF enrichment uses the local Playwright renderer configured under
+`archive.renderer` in `web.yaml`. In the Standard profile the renderer is an
+optional Compose service. Use `--with-playwright` to set
+`archive.renderer.enabled: true`, prepare/build the renderer, start it on
+`127.0.0.1:8090` and record `LOCAL_PLAYWRIGHT=1`. Use `--no-playwright` to
+set the renderer disabled and remove the local container. If neither switch is
+passed on a rerun, the existing `web.yaml` setting remains authoritative.
+Super-Light manages the same renderer as part of its normal stack and enables it by default; do not pass `--with-playwright` to the Super-Light installer. The explicit `--with-playwright` / `--no-playwright` switches belong to the Standard profile.
+
 ## 7a. Periodic Elasticsearch -> Qdrant sync
 
 The installable snapshot includes `start-sync-worker.sh`. It periodically invokes the existing state-aware `rag.sync` implementation; it is not a second indexer. Default policy:
@@ -522,7 +541,7 @@ degradation and never bypasses document ACL.
 ## 12. Security notes
 
 - Multi-user + live ACL is default; unsafe modes require an explicit flag.
-- Nextcloud TLS certificate checking is default for Login Flow, ACL and CardDAV.
+- Nextcloud TLS certificate checking is centralized under `nextcloud.verify_tls` / `nextcloud.ca_file` and applies to Login Flow, live ACL, CardDAV, mail WebDAV and web archive.
 - Security-critical config is validated on API startup.
 - Trusted-client API keys are stored hashed in `users.sqlite`; the bundled
   frontend's plaintext key remains in chmod-0600 `runtime.env`.
@@ -576,10 +595,7 @@ Then:
 11. stop Elasticsearch temporarily and verify the user receives a service-unavailable message rather than a generic 500/502;
 12. verify normal document sync leaves bulk graph enqueue disabled and backend degradation never turns into an ACL fail-open.
 
-The Super-Light clone acceptance pass for `0.8.4-rc2` has been completed on the
-Leap 15.3 target: fresh installation required no manual runtime repair and per-user
-Kontakt-DB import succeeded. Repeat the same checklist on the intended beta host
-before exposing it to users.
+Blank-VM acceptance for `0.8.5-rc4.3` has been completed for both supported mappings. Super-Light/dockerized installed successfully and passed document search plus RAG Admin checks. Standard/native also completed installation and passed document search plus RAG Admin checks, including automatic startup of the optional Playwright renderer when selected with `--with-playwright`. Repeat the same checklist on the intended deployment host before exposing it to users.
 
 
 ## 13. Administration reference
@@ -622,7 +638,7 @@ Qdrant, embedding backend and Nextcloud Live-ACL.
 
 Fresh installs create `runtime/credential-master.key` as `root:rag 0640`, add
 `RAG_CREDENTIAL_MASTER_KEY_FILE` and `RAG_CREDENTIAL_ENCRYPTION=required` to
-`runtime.env`, and verify the encrypted credential store. `0.8.5-rc4` is the first public release candidate; no upgrade path from unpublished internal snapshots is documented or supported.
+`runtime.env`, and verify the encrypted credential store. `0.8.5-rc4.3` is the current release-candidate baseline; no upgrade path from unpublished internal snapshots is documented or supported.
 
 The master key must be backed up separately. The Admin UI can report encryption
 status and replace IMAP credentials, but does not reveal stored secrets or create
@@ -717,12 +733,50 @@ The compatibility alias `--no-x509-strict` is still accepted. Do not substitute
 `verify_tls: false` unless deliberately diagnosing a TLS issue; that disables the
 actual certificate verification rather than only the additional strict flag.
 
+These settings cover the direction **AKI middleware -> Nextcloud**. If the
+Nextcloud-hosted AKI Recherche app connects to an AKI HTTPS endpoint signed by an
+internal CA, Nextcloud itself must also trust that CA in its own certificate
+store. A host-level `curl` succeeding does not prove that Nextcloud's outbound
+HTTP client trusts the same certificate chain.
+
 ### Native standard deployment and private CAs
 
-For the native deployment install the private CA in the host trust store. On
-SUSE-family systems the normal local anchor directory is
-`/etc/pki/trust/anchors/`; refresh the trust bundle with `update-ca-certificates`.
-The `tls.x509_strict` setting applies to native middleware processes as well.
+The native profile accepts the same repeatable `--ca-certificate FILE` option.
+The installer validates each PEM, copies the supplied root/intermediate
+certificates into `runtime/ca/`, builds
+`runtime/ca/nextcloud-ca-bundle.pem` and writes that path to
+`nextcloud.ca_file`. This trust bundle is used only for middleware connections
+to Nextcloud (Login Flow, live ACL, CardDAV, mail WebDAV and web archive); it does
+not replace the public CA bundle used for OpenAI, Hugging Face or unrelated web
+requests.
+
+Example:
+
+```bash
+sudo ./install/install.sh \
+  --profile standard \
+  --deployment native \
+  --nextcloud-url https://cloud.internal.example/nextcloud \
+  --ca-certificate /secure/Company_Root_CA.crt \
+  --with-systemd \
+  -y
+```
+
+Manual configuration remains possible:
+
+```yaml
+nextcloud:
+  base_url: https://cloud.internal.example/nextcloud
+  verify_tls: true
+  ca_file: /opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem
+```
+
+Legacy `auth.verify_tls`, `acl.verify_tls`, `acl.ca_file` and
+`carddav.verify_tls` values are still read as upgrade fallbacks when the
+canonical `nextcloud` TLS keys are absent.
+
+The `tls.x509_strict` setting applies to native middleware processes and
+standalone Nextcloud workers as well.
 
 ## Retrieval policy
 

@@ -13,7 +13,7 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc4.2` — public-beta hotfix candidate. RC4.2 retains the RC4/RC4.1 feature set and adds two post-review recovery fixes: full Neo4j schema retry after deferred startup initialization and safe retention of undecryptable temporary curation sessions for later app-password revocation. The Super-Light deployment path remains the primary field-tested profile; see `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5-rc4.3` — current release-candidate baseline. RC4.3 hardens the internal API trust boundary with a dedicated machine credential between the provider/trusted reverse proxy and FastAPI, closes direct access to Graph/planner/retrieval/Login-Flow routes, and includes the installer/rerun fixes found during rc9→rc4.x field testing. Blank-VM acceptance has been completed for both supported deployment mappings: Standard/native and Super-Light/dockerized; see `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
@@ -189,7 +189,8 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `CONTRIBUTING.md` — contribution and licensing policy
 - `CLA.md` / `docs/CLA-PROCESS.md` — contributor rights without copyright assignment
 - `CODE_OF_CONDUCT.md` — community conduct expectations
-- `RELEASE-NOTES-0.8.5-rc4.2.md` — current hotfix release notes
+- `RELEASE-NOTES-0.8.5-rc4.3.md` — current release-candidate notes
+- `RELEASE-NOTES-0.8.5-rc4.2.md` — previous hotfix release notes
 - `RELEASE-NOTES-0.8.5-rc4.1.md` — previous hotfix release notes
 - `RELEASE-NOTES-0.8.5-rc4.md` — previous release-candidate notes
 - `RELEASE-NOTES-0.8.5-rc3.md` — first public release notes

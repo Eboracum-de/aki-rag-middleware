@@ -8,10 +8,12 @@ import httpx
 import requests
 
 from fastapi import (
+    Depends,
     FastAPI,
     HTTPException,
     Request,
 )
+from fastapi.responses import JSONResponse
 
 from pydantic import (
     BaseModel,
@@ -23,6 +25,15 @@ from rag.credential_store import CredentialStore
 from rag.logging_utils import get_logger, configure_third_party_logging
 from rag.runtime_validation import require_secure_runtime_config
 from rag.tls_compat import configure_tls_compat
+from rag.nextcloud_tls import nextcloud_verify_value
+from rag.api_security import (
+    ADMIN as SECURITY_ADMIN,
+    INTERNAL as SECURITY_INTERNAL,
+    PUBLIC as SECURITY_PUBLIC,
+    TRUSTED_PROVIDER as SECURITY_TRUSTED_PROVIDER,
+    USER as SECURITY_USER,
+    ApiSecurity,
+)
 from rag.elasticsearch_client import requests_options as elastic_requests_options
 from rag.planner import create_plan
 from rag.graph_indexer import GraphEvidenceIndexer
@@ -70,6 +81,7 @@ app_config = load_config()
 configure_tls_compat(app_config)
 graph_queue = GraphQueue(app_config)
 live_acl = NextcloudLiveAcl(app_config)
+api_security = ApiSecurity(app_config, live_acl)
 credential_store = CredentialStore(str(cfg_get(app_config, "auth.credential_store", default="runtime/users.sqlite") or "runtime/users.sqlite"))
 _web_arm_instance: WebResearchArm | None = None
 _research_finding_schema_ready = False
@@ -190,6 +202,44 @@ app.include_router(create_admin_router(app_config, graph_queue, load_web_config(
 app.include_router(create_curation_router(app_config))
 
 
+def _zone(zone: str, dependency: Any | None = None) -> dict[str, Any]:
+    value: dict[str, Any] = {"openapi_extra": {"x-aki-security-zone": zone}}
+    if dependency is not None:
+        value["dependencies"] = [Depends(dependency)]
+    return value
+
+
+ZONE_PUBLIC = _zone(SECURITY_PUBLIC)
+ZONE_INTERNAL = _zone(SECURITY_INTERNAL, api_security.require_internal_client)
+ZONE_TRUSTED_PROVIDER = _zone(
+    SECURITY_TRUSTED_PROVIDER, api_security.require_trusted_provider
+)
+ZONE_USER = _zone(SECURITY_USER, api_security.require_current_user)
+ZONE_ADMIN = _zone(SECURITY_ADMIN, api_security.require_admin)
+
+
+@app.middleware("http")
+async def require_internal_api_auth(request: Request, call_next):
+    """Defense-in-depth default deny for middleware routes.
+
+    Route dependencies below define the finer PUBLIC/TRUSTED_PROVIDER/INTERNAL/
+    ADMIN/USER zones. This middleware remains the coarse baseline so a future
+    endpoint cannot become reachable merely because its zone dependency was
+    accidentally omitted.
+    """
+    if api_security.is_baseline_exempt(request.url.path):
+        return await call_next(request)
+    try:
+        api_security.require_internal_client(request)
+    except HTTPException as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+    return await call_next(request)
+
+
 # ------------------------------------------------------------
 # Request-Modelle
 # ------------------------------------------------------------
@@ -218,8 +268,8 @@ def _nextcloud_login_base() -> str:
     return str(cfg_get(app_config, "nextcloud.base_url", default="") or "").strip().rstrip("/")
 
 
-def _nextcloud_auth_verify() -> bool:
-    return bool(cfg_get(app_config, "auth.verify_tls", default=cfg_get(app_config, "acl.verify_tls", default=True)))
+def _nextcloud_auth_verify() -> bool | str:
+    return nextcloud_verify_value(app_config, "auth", "acl", "carddav")
 
 
 def _nextcloud_flow_ttl_seconds() -> float:
@@ -993,7 +1043,7 @@ def _health_web(timeout: float) -> dict[str, Any]:
 
 
 
-@app.post("/auth/nextcloud/start", tags=["auth"])
+@app.post("/auth/nextcloud/start", tags=["auth"], **ZONE_TRUSTED_PROVIDER)
 def nextcloud_auth_start(body: NextcloudAuthStartRequest, request: Request) -> dict[str, Any]:
     if not bool(cfg_get(app_config, "auth.nextcloud_login_flow_enabled", default=True)):
         raise HTTPException(status_code=404, detail="Nextcloud Login Flow is disabled")
@@ -1008,7 +1058,7 @@ def nextcloud_auth_start(body: NextcloudAuthStartRequest, request: Request) -> d
         raise HTTPException(status_code=502, detail=f"Nextcloud Login Flow start failed: {type(exc).__name__}: {exc}") from exc
 
 
-@app.post("/auth/nextcloud/ensure", tags=["auth"])
+@app.post("/auth/nextcloud/ensure", tags=["auth"], **ZONE_TRUSTED_PROVIDER)
 def nextcloud_auth_ensure(body: NextcloudAuthEnsureRequest, request: Request) -> dict[str, Any]:
     """Ensure that the external request identity is bound to Nextcloud.
 
@@ -1067,7 +1117,7 @@ def nextcloud_auth_ensure(body: NextcloudAuthEnsureRequest, request: Request) ->
         raise HTTPException(status_code=502, detail=f"Nextcloud Login Flow ensure failed: {type(exc).__name__}: {exc}") from exc
 
 
-@app.get("/auth/nextcloud/status/{flow_id}", tags=["auth"])
+@app.get("/auth/nextcloud/status/{flow_id}", tags=["auth"], **ZONE_TRUSTED_PROVIDER)
 def nextcloud_auth_status(flow_id: str) -> dict[str, Any]:
     flow = credential_store.get_nextcloud_flow(flow_id)
     if flow is None:
@@ -1079,13 +1129,13 @@ def nextcloud_auth_status(flow_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Nextcloud Login Flow poll failed: {type(exc).__name__}: {exc}") from exc
 
 
-@app.delete("/auth/nextcloud/{rag_user_id}", tags=["auth"])
+@app.delete("/auth/nextcloud/{rag_user_id}", tags=["auth"], **ZONE_ADMIN)
 def nextcloud_auth_disconnect(rag_user_id: str) -> dict[str, Any]:
     deleted = credential_store.delete_credential(rag_user_id, "nextcloud")
     return {"rag_user_id": rag_user_id, "deleted": bool(deleted)}
 
 
-@app.get("/live", include_in_schema=False)
+@app.get("/live", include_in_schema=False, **ZONE_PUBLIC)
 def live():
     """Cheap local liveness endpoint; performs no external probes."""
     return {"ok": True, "service": "nextcloud-hybrid-rag-api", "version": VERSION}
@@ -1094,6 +1144,7 @@ def live():
 @app.get(
     "/health",
     summary="Status der RAG-Middleware und Retrieval-Arme",
+    **ZONE_INTERNAL
 )
 def health():
     timeout = float(cfg_get(app_config, "health.timeout_seconds", default=4.0) or 4.0)
@@ -1187,6 +1238,7 @@ def health():
         "Quellen als Evidence zu und archiviert ausgewählte Quellen optional "
         "benutzerspezifisch in Nextcloud. Suchmaschinen-Snippets sind nie Evidence."
     ),
+    **ZONE_USER
 )
 async def web_search(request: WebSearchRequest, http_request: Request):
     try:
@@ -1206,6 +1258,7 @@ async def web_search(request: WebSearchRequest, http_request: Request):
 @app.post(
     "/web/archive/finalize",
     summary="Web-Rechercheakte mit LLM-Ausgabe abschließen",
+    **ZONE_USER
 )
 async def web_archive_finalize(request: WebArchiveFinalizeRequest, http_request: Request):
     try:
@@ -1235,6 +1288,7 @@ async def web_archive_finalize(request: WebArchiveFinalizeRequest, http_request:
 @app.post(
     "/query-context",
     summary="Liefere Neo4j Seed-/Alias-Kontext fuer das Query-Rewriting",
+    **ZONE_TRUSTED_PROVIDER
 )
 def query_context(request: PlanRequest):
     """Return query-side entity/alias hints without performing retrieval."""
@@ -1261,6 +1315,7 @@ def query_context(request: PlanRequest):
         "Suchplan. Es wird noch keine Dokumentensuche "
         "ausgeführt."
     ),
+    **ZONE_TRUSTED_PROVIDER
 )
 def plan(
     request: PlanRequest,
@@ -1311,6 +1366,7 @@ def plan(
 @app.get(
     "/graph/stats",
     summary="Graph-Statistik",
+    **ZONE_ADMIN
 )
 def graph_stats():
     try:
@@ -1328,6 +1384,7 @@ def graph_stats():
 @app.post(
     "/graph/document",
     summary="Zeige Dokumentgraph-Diagnose",
+    **ZONE_ADMIN
 )
 def graph_document(request: GraphDocumentRequest):
     try:
@@ -1350,6 +1407,7 @@ def graph_document(request: GraphDocumentRequest):
         "SQLite. Die eigentliche Neo4j-Graphifizierung erledigt rag.graph_worker "
         "später außerhalb des Chat-Antwortpfades."
     ),
+    **ZONE_INTERNAL
 )
 def graph_enqueue_evidence(request: GraphEvidenceRequest):
     try:
@@ -1370,6 +1428,7 @@ def graph_enqueue_evidence(request: GraphEvidenceRequest):
         "vom Candidate-Verifier positiv bestätigten Recherche-Nutzen in Neo4j. "
         "Es wird kein zusätzlicher LLM-/Graph-Extraktionslauf gestartet."
     ),
+    **ZONE_INTERNAL
 )
 def graph_research_findings(request: ResearchFindingRequest):
     global _research_finding_schema_ready
@@ -1426,6 +1485,7 @@ def graph_research_findings(request: ResearchFindingRequest):
 @app.get(
     "/graph/queue/stats",
     summary="Graph-Queue-Statistik",
+    **ZONE_ADMIN
 )
 def graph_queue_stats():
     try:
@@ -1440,6 +1500,7 @@ def graph_queue_stats():
 @app.get(
     "/graph/queue/jobs",
     summary="Letzte Graph-Queue-Jobs",
+    **ZONE_ADMIN
 )
 def graph_queue_jobs(limit: int = 20):
     try:
@@ -1459,6 +1520,7 @@ def graph_queue_jobs(limit: int = 20):
         "Dokumente inkrementell in Neo4j. Fuzzy/mehrdeutige Namensformen "
         "bleiben Kandidaten und werden nicht als Identität aufgelöst."
     ),
+    **ZONE_INTERNAL
 )
 def graph_index_evidence(request: GraphEvidenceRequest):
 
@@ -1493,6 +1555,7 @@ def graph_index_evidence(request: GraphEvidenceRequest):
         "exakte Dateinamen sowie archivierte Webquellen deterministisch auf und "
         "liefert Dokumenttext für /use. Mehrdeutige Dateinamen werden nicht geraten."
     ),
+    **ZONE_USER
 )
 async def documents_resolve(body: DocumentResolveRequest, http_request: Request):
     try:
@@ -1661,6 +1724,7 @@ async def documents_resolve(body: DocumentResolveRequest, http_request: Request)
         "ohne Query Planner, Entity Expansion, Vector/Graph, RRF oder Reranker. "
         "Live-ACL bleibt die Sicherheitsgrenze."
     ),
+    **ZONE_USER
 )
 def elastic_search_endpoint(body: ElasticSearchRequest, http_request: Request):
     try:
@@ -1786,6 +1850,7 @@ def _dedupe_acl_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "ES/Qdrant/Graph-Arme aus, fusioniert die Probe-Ranglisten per RRF und "
         "rerankt die gemeinsame Kandidatenmenge einmal gegen die Originalfrage."
     ),
+    **ZONE_USER
 )
 def multi_search(body: MultiSearchRequest, http_request: Request):
     try:
@@ -1966,6 +2031,7 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
         "Kandidaten per Reciprocal Rank Fusion und bewertet die besten Treffer "
         "anschließend mit einem Cross-Encoder-Reranker."
     ),
+    **ZONE_USER
 )
 def search(
     body: SearchRequest,

@@ -64,6 +64,7 @@ from rag.llm_backend import build_llm_backend
 from rag.llm_roles import build_role_backends
 from rag.logging_utils import get_logger
 from rag.credential_store import CredentialStore, scope_identity
+from rag.internal_auth import provider_api_headers
 from rag.tls_compat import configure_tls_compat
 from rag.retrieval_policy import configured_internal_arms, load_retrieval_policy
 from rag.retrieval_planner import (
@@ -127,6 +128,11 @@ RETRIEVAL_RECORD_DIRECTORY = Path(
 MODEL_ID = os.getenv("PROVIDER_MODEL_ID", "nextcloud-hybrid-rag")
 MODEL_NAME = os.getenv("PROVIDER_MODEL_NAME", "AKI RAG Middleware")
 RAG_MIDDLEWARE_URL = os.getenv("RAG_MIDDLEWARE_URL", "http://127.0.0.1:8765").rstrip("/")
+
+
+def _middleware_client(*, timeout: float) -> httpx.AsyncClient:
+    """Create an authenticated client for the internal middleware API."""
+    return httpx.AsyncClient(timeout=timeout, headers=provider_api_headers())
 # Answer-/control-LLM backend.  New LLM_* variables are canonical; the old
 # OLLAMA_* variables remain a backwards-compatible fallback.
 _LEGACY_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -1974,7 +1980,7 @@ async def _rag_search(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/search",
             json={
@@ -2021,7 +2027,7 @@ async def _rag_query_context(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
             response = await client.post(
                 f"{RAG_MIDDLEWARE_URL}/query-context",
                 json={"query": question},
@@ -3125,7 +3131,7 @@ async def _rag_multi_search(
     else:
         verification_pool = RETRIEVAL_PLANNER.verification_candidate_limit
     result_limit = max(SEARCH_LIMIT, verification_pool)
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/multi-search",
             json={
@@ -3174,7 +3180,7 @@ async def _elastic_search(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/elastic/search",
             json={
@@ -3205,7 +3211,7 @@ async def _web_search(
         headers["X-RAG-User-ID"] = user_id
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
-    async with httpx.AsyncClient(timeout=max(HTTP_TIMEOUT, 300.0)) as client:
+    async with _middleware_client(timeout=max(HTTP_TIMEOUT, 300.0)) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/web/search",
             json={"query": question},
@@ -3319,7 +3325,7 @@ async def _web_finalize_archive(
         headers["X-RAG-User-ID"] = user_id
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
-    async with httpx.AsyncClient(timeout=max(HTTP_TIMEOUT, 120.0)) as client:
+    async with _middleware_client(timeout=max(HTTP_TIMEOUT, 120.0)) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/web/archive/finalize",
             json={
@@ -3445,7 +3451,7 @@ async def _rag_resolve_documents(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/documents/resolve",
             json={
@@ -3544,7 +3550,7 @@ async def _graph_enqueue_evidence(
         "documents": documents,
     }
     try:
-        async with httpx.AsyncClient(timeout=GRAPH_EVIDENCE_HOOK_TIMEOUT) as client:
+        async with _middleware_client(timeout=GRAPH_EVIDENCE_HOOK_TIMEOUT) as client:
             response = await client.post(
                 f"{RAG_MIDDLEWARE_URL}/graph/enqueue-evidence",
                 json=payload,
@@ -3655,7 +3661,7 @@ async def _store_positive_research_findings(
         "documents": documents,
     }
     try:
-        async with httpx.AsyncClient(timeout=RESEARCH_FINDINGS_TIMEOUT) as client:
+        async with _middleware_client(timeout=RESEARCH_FINDINGS_TIMEOUT) as client:
             response = await client.post(
                 f"{RAG_MIDDLEWARE_URL}/graph/research-findings",
                 json=payload,
@@ -5298,7 +5304,7 @@ def _llm_unavailable_text(exc: Exception | str, *, found: int = 0) -> str:
 
 
 async def _middleware_health() -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=min(float(HTTP_TIMEOUT), 15.0)) as client:
+    async with _middleware_client(timeout=min(float(HTTP_TIMEOUT), 15.0)) as client:
         response = await client.get(f"{RAG_MIDDLEWARE_URL}/health")
         response.raise_for_status()
         payload = response.json()
@@ -5314,7 +5320,7 @@ async def _ensure_nextcloud_binding(user_id: str | None) -> dict[str, Any]:
     headers: dict[str, str] = {}
     if user_id:
         headers["X-RAG-User-ID"] = str(user_id)
-    async with httpx.AsyncClient(timeout=min(float(HTTP_TIMEOUT), 20.0)) as client:
+    async with _middleware_client(timeout=min(float(HTTP_TIMEOUT), 20.0)) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/auth/nextcloud/ensure",
             json={},

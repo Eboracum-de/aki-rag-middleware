@@ -72,6 +72,27 @@ class LiveAclTests(unittest.TestCase):
         self.assertEqual([x["document_id"] for x in decision.results], ["files:2"])
 
 
+def test_acl_uses_canonical_nextcloud_ca_file():
+    os.environ["NEXTCLOUD_USERNAME"] = "alice"
+    os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+    cfg = {
+        "nextcloud": {
+            "base_url": "https://nc.example",
+            "verify_tls": True,
+            "ca_file": "/opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem",
+        },
+        "acl": {"enabled": True, "identity_mode": "single_user"},
+    }
+    response = httpx.Response(
+        207,
+        content=MULTISTATUS_ONE,
+        request=httpx.Request("SEARCH", "https://nc.example/remote.php/dav/"),
+    )
+    with patch("rag.acl.httpx.request", return_value=response) as request_mock:
+        NextcloudLiveAcl(cfg).authorize([{"document_id": "files:2"}])
+    assert request_mock.call_args.kwargs["verify"] == "/opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem"
+
+
 if __name__ == "__main__":
     unittest.main()
 

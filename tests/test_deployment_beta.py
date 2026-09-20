@@ -54,11 +54,38 @@ def test_compose_minimal_default_is_proxy_only():
     assert services["neo4j"]["profiles"] == ["neo4j"]
 
 
+def test_standard_playwright_renderer_is_optional_compose_service():
+    cfg = yaml.safe_load((ROOT / "install/docker-compose.yml").read_text())
+    renderer = cfg["services"]["playwright-renderer"]
+    assert renderer["profiles"] == ["renderer"]
+    assert renderer["build"]["context"] == "./components/playwright-renderer"
+    assert renderer["ports"] == ["127.0.0.1:${PLAYWRIGHT_PORT:-8090}:8080"]
+    assert "playwright_state:/state" in renderer["volumes"]
+    installer = _standard_installer_text()
+    assert 'archive.renderer.enabled' in installer
+    assert '--with-playwright' in installer
+    assert '--no-playwright' in installer
+    assert "PLAYWRIGHT_EXPLICIT=1" in installer
+    assert "web.setdefault('archive', {}).setdefault('renderer', {})['enabled'] = playwright_enabled" in installer
+    assert '--profile renderer build playwright-renderer' in installer
+    assert '--profile renderer up -d playwright-renderer' in installer
+    assert 'LOCAL_PLAYWRIGHT=$PLAYWRIGHT_ENABLED' in installer
+
+
 def test_bind_mounts_are_selinux_relabelled():
     cfg = yaml.safe_load((ROOT / "install/docker-compose.yml").read_text())
     proxy_mounts = cfg["services"]["proxy"]["volumes"]
     assert all(m.endswith(":ro,z") for m in proxy_mounts)
 
+
+
+def test_standard_defaults_to_no_reranker_and_no_model_download():
+    cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
+    assert cfg["reranker"]["backend"] == "none"
+    installer = _standard_installer_text()
+    assert "DOWNLOAD_RERANKER=0" in installer
+    assert "--with-reranker-download" in installer
+    assert "reranker opt-in" in installer
 
 
 def test_optional_external_services_are_not_bundled():
@@ -130,8 +157,17 @@ def test_docker_and_ml_beta_dependencies_are_pinned():
     cfg = yaml.safe_load((ROOT / "install/docker-compose.yml").read_text())
     images = {name: spec["image"] for name, spec in cfg["services"].items()}
     assert "latest" not in "\n".join(images.values())
-    assert set(images) == {"proxy", "qdrant", "neo4j", "openwebui"}
-    assert all("@sha256:" in image for image in images.values())
+    assert set(images) == {"proxy", "qdrant", "neo4j", "openwebui", "playwright-renderer"}
+    external_images = [
+        image
+        for name, image in images.items()
+        if "build" not in cfg["services"][name]
+    ]
+    assert all("@sha256:" in image for image in external_images)
+    assert images["playwright-renderer"] == "rag-playwright-renderer:0.2.2"
+    renderer_dockerfile = (ROOT / "install/components/playwright-renderer/Dockerfile").read_text()
+    assert "PIP_ROOT_USER_ACTION=ignore" in renderer_dockerfile
+    assert "PIP_DISABLE_PIP_VERSION_CHECK=1" in renderer_dockerfile
     assert "v1.19.0@sha256:" in images["qdrant"]
     assert "5.26.29-community@sha256:" in images["neo4j"]
     assert "v0.11.0@sha256:" in images["openwebui"]
@@ -157,13 +193,25 @@ def test_beta_defaults_are_multiuser_and_tls_verified():
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
     assert cfg["acl"]["enabled"] is True
     assert cfg["acl"]["identity_mode"] == "credential_store"
-    assert cfg["acl"]["verify_tls"] is True
-    assert cfg["auth"]["verify_tls"] is True
-    assert cfg["carddav"]["verify_tls"] is True
+    assert cfg["nextcloud"]["verify_tls"] is True
+    assert cfg["nextcloud"]["ca_file"] == ""
+    assert "verify_tls" not in cfg["acl"]
+    assert "verify_tls" not in cfg["auth"]
+    assert "verify_tls" not in cfg["carddav"]
     installer = _standard_installer_text()
     assert "MULTI_USER=1" in installer
     assert "--single-user" in installer
     assert "--acl-off" in installer
+
+
+def test_installers_support_scoped_private_nextcloud_ca_without_global_env_override():
+    standard = _standard_installer_text()
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    for installer in (standard, super_light):
+        assert "--ca-certificate" in installer
+        assert "nextcloud-ca-bundle.pem" in installer
+    assert "REQUESTS_CA_BUNDLE=" not in standard
+    assert "SSL_CERT_FILE=" not in standard
 
 
 def test_per_user_mail_and_web_are_not_shipped_in_yaml():
@@ -255,7 +303,7 @@ def test_installer_waits_for_bundled_ui_and_proxy_health():
     smoke = (ROOT / "install/smoke-test.sh").read_text()
     assert 'Waiting for OpenWebUI on 127.0.0.1:${OPENWEBUI_PORT:-3000}' in installer
     assert 'http://127.0.0.1:${OPENWEBUI_PORT:-3000}/health' in installer
-    assert 'https://127.0.0.1/proxy-health' in installer
+    assert '"https://127.0.0.1:${PROXY_HTTPS_PORT}/proxy-health"' in installer
     assert 'LOCAL_OPENWEBUI=0' in status
     assert 'openwebui "${OPENWEBUI_PORT:-3000}"' in status
     assert 'OpenWebUI HTTP (127.0.0.1:${OPENWEBUI_PORT:-3000})' in smoke
@@ -285,7 +333,7 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 def test_public_baseline_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.2"'
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.3"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
@@ -379,3 +427,146 @@ def test_research_finding_runtime_recovery_retries_full_neo4j_schema_upgrade():
     block = source[start:start + 500]
     assert "graph.ensure_schema()" in block
     assert "graph.ensure_research_finding_schema()" not in block
+
+
+def test_standard_installer_common_connection_and_proxy_options_are_supported(tmp_path):
+    result = subprocess.run(
+        [
+            "bash", str(ROOT / "install/profiles/install-standard.sh"),
+            "--plan",
+            "--prefix", str(tmp_path / "fresh"),
+            "--nextcloud-url", "https://cloud.example/nextcloud",
+            "--elasticsearch-url", "http://10.0.0.20:9200",
+            "--elasticsearch-index", "my_index",
+            "--with-proxy",
+            "--proxy-http-port", "81",
+            "--proxy-https-port", "444",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Nextcloud URL override:   https://cloud.example/nextcloud" in result.stdout
+    assert "Elasticsearch URL:       http://10.0.0.20:9200" in result.stdout
+    assert "Elasticsearch index:     my_index" in result.stdout
+    assert "HTTPS 444 + HTTP redirect on 81" in result.stdout
+
+
+def test_standard_rerun_can_explicitly_disable_inherited_openwebui(tmp_path):
+    prefix = tmp_path / "aki"
+    (prefix / "install").mkdir(parents=True)
+    (prefix / "rag").mkdir()
+    (prefix / "config.yaml").write_text("{}\n")
+    (prefix / ".aki-rag-installation").write_text(
+        "AKI_RAG_INSTALLATION=1\nDEPLOYMENT_PROFILE=standard\nDEPLOYMENT_MODE=native\n"
+    )
+    (prefix / "install/install-state.env").write_text(
+        "DEPLOYMENT_PROFILE=standard\n"
+        "LOCAL_QDRANT=0\n"
+        "LOCAL_NEO4J=0\n"
+        "LOCAL_OPENWEBUI=1\n"
+        "LOCAL_PROXY=1\n"
+        "PROXY_HTTP_PORT=80\n"
+        "PROXY_HTTPS_PORT=443\n"
+        "PROXY_BASIC_AUTH_STATE=1\n"
+    )
+
+    inherited = subprocess.run(
+        ["bash", str(ROOT / "install/profiles/install-standard.sh"), "--plan", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert inherited.returncode == 0, inherited.stderr
+    assert (
+        "OpenWebUI:                install/start "
+        "(retained from existing install; use --no-openwebui to disable)"
+    ) in inherited.stdout
+
+    disabled = subprocess.run(
+        [
+            "bash", str(ROOT / "install/profiles/install-standard.sh"),
+            "--plan", "--prefix", str(prefix), "--no-openwebui",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert disabled.returncode == 0, disabled.stderr
+    assert "OpenWebUI:                external/skip" in disabled.stdout
+
+
+def test_common_optional_frontend_proxy_switches_exist_in_both_profiles():
+    standard = (ROOT / "install/profiles/install-standard.sh").read_text()
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    common = {
+        "--nextcloud-url", "--elasticsearch-url", "--elasticsearch-index",
+        "--with-openwebui", "--no-openwebui", "--with-proxy", "--no-proxy",
+        "--proxy-http-port", "--proxy-https-port",
+        "--x509-strict", "--no-x509-strict", "--plan",
+    }
+    for option in common:
+        assert option in standard, option
+        assert option in super_light, option
+
+
+def test_standard_rerun_preflight_detects_existing_and_running_services():
+    installer = _standard_installer_text()
+    assert '[INFO] Existing AKI RAG installation detected at $PREFIX.' in installer
+    assert 'for name in api provider graph-worker sync-worker mail-worker' in installer
+    assert 'systemctl is-active --quiet "$unit"' in installer
+    assert 'ps --services --filter status=running' in installer
+    assert 'Could not inspect the existing Docker Compose stack' in installer
+    assert '[WARN] Existing AKI RAG services are running:' in installer
+    assert 'no installation changes were made' in installer.lower()
+    assert installer.index("preflight_existing_install") < installer.index("confirm_plan", installer.index("preflight_existing_install"))
+
+
+def test_standard_neo4j_schema_init_runs_from_application_root_with_progress():
+    installer = _standard_installer_text()
+    marker = 'log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"'
+    start = installer.index(marker)
+    block = installer[start:start + 2600]
+    assert 'cd "$PREFIX"' in block
+    assert '"$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init' in block
+    assert "Neo4j/schema initialization still waiting" in block
+    assert "AKI schema upgrade completed after" in block
+
+
+def test_standard_proxy_health_uses_configured_https_port():
+    installer = _standard_installer_text()
+    assert '"https://127.0.0.1:${PROXY_HTTPS_PORT}/proxy-health"' in installer
+    assert 'did not become healthy on HTTPS ${PROXY_HTTPS_PORT}' in installer
+
+
+def test_internal_api_key_is_installer_managed_and_proxy_injected():
+    installer = _standard_installer_text()
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    compose = (ROOT / "install/docker-compose.yml").read_text()
+    for source in (installer, super_light):
+        assert "RAG_INTERNAL_API_KEY" in source
+        assert "RAG_PROVIDER_INTERNAL_KEY" in source
+        assert "internal-auth.conf" in source
+        assert 'proxy_set_header X-AKI-Internal-Key "%s";' in source
+    assert "./nginx/internal-auth.conf:/etc/nginx/internal-auth.conf:ro,z" in compose
+
+    for name in ("nginx.conf", "nginx-openwebui.conf"):
+        nginx = (ROOT / "install/nginx" / name).read_text()
+        assert nginx.count("include /etc/nginx/internal-auth.conf;") >= 5
+        assert "X-AKI-Provider-Key" not in nginx
+
+
+def test_direct_api_health_tools_send_internal_machine_key():
+    status = (ROOT / "status.sh").read_text()
+    smoke = (ROOT / "install/smoke-test.sh").read_text()
+    for source in (status, smoke):
+        assert "X-AKI-Internal-Key" in source
+        assert "RAG_INTERNAL_API_KEY" in source
+
+
+def test_native_api_refuses_accidental_non_loopback_bind():
+    start_api = (ROOT / "start-api.sh").read_text()
+    assert "RAG_ALLOW_REMOTE_INTERNAL_API" in start_api
+    assert "Refusing non-loopback RAG_API_HOST" in start_api
+    assert "127.0.0.1|::1|localhost" in start_api

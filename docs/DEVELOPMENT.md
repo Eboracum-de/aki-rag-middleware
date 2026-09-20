@@ -2,7 +2,7 @@
 
 ## Baseline
 
-`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.2` is the current public-beta hotfix candidate on top of RC4 and consolidates the RC4.1 authorization/installer/schema hardening plus the post-review recovery fixes. Earlier RC and draft identifiers were internal development snapshots and are not maintained as public upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`.
+`0.8.5-rc4.3` is the current release-candidate baseline and consolidates the rc4.x authorization, installer, TLS, internal-service and recovery hardening. Earlier draft identifiers remain development snapshots rather than maintained upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`, and both have completed rc4.3 blank-VM acceptance.
 
 ## Repository layout
 

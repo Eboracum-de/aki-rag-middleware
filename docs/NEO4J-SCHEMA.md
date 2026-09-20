@@ -1,6 +1,6 @@
 # Neo4j application schema
 
-This is the canonical internal reference for the Neo4j schema supported by AKI RAG Middleware 0.8.5-rc4.2. It describes the application contract derived from all Cypher access in the private development repository. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
+This is the canonical internal reference for the Neo4j schema supported by AKI RAG Middleware 0.8.5-rc4.3. It describes the application contract derived from all Cypher access in the private development repository. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
 
 ## Contract rules
 

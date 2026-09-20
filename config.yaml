@@ -198,7 +198,6 @@ carddav:
   # If absent, nextcloud.base_url + /remote.php/dav is used.
   username_env: "NEXTCLOUD_USERNAME"
   password_env: "NEXTCLOUD_APP_PASSWORD"
-  verify_tls: true
   timeout: 120
   include_addressbooks: []
   exclude_addressbooks: []
@@ -218,7 +217,6 @@ acl:
   password_env: "NEXTCLOUD_APP_PASSWORD"
   # Empty = derive <nextcloud.base_url>/remote.php/dav/
   webdav_url: ""
-  verify_tls: true
   timeout: 15
   # WebDAV SEARCH ids per request; batching prevents pathological OR trees.
   batch_size: 100
@@ -356,8 +354,9 @@ admin_ui:
   allow_unauthenticated: false
 
 reranker:
+  # Disabled by default. Enable local or tei explicitly for comparative testing.
   # local = CPU/host model; tei = external Text Embeddings Inference reranker.
-  backend: "local"
+  backend: "none"
   model: "BAAI/bge-reranker-v2-m3"
   device: "cpu"
   max_length: 512
@@ -374,7 +373,6 @@ auth:
   # poll tokens are encrypted at rest using the separate credential master key.
   nextcloud_login_flow_enabled: true
   credential_store: "runtime/users.sqlite"
-  verify_tls: true
   # Reuse one pending browser login for this many seconds instead of creating
   # a new Nextcloud Login Flow on every repeated client request.
   login_flow_ttl_seconds: 1200
@@ -383,6 +381,12 @@ nextcloud:
   # Replace before first start. HTTP requires security.allow_insecure_nextcloud=true.
   base_url: "https://nextcloud.example.invalid/"
   cloud_id: "nextcloud"
+  # Canonical TLS policy for every middleware -> Nextcloud connection:
+  # Login Flow, live ACL, CardDAV, mail WebDAV and web archive.
+  verify_tls: true
+  # Optional PEM CA bundle for a private/internal Nextcloud PKI. This is scoped
+  # to Nextcloud traffic only and does not replace public trust for LLM/HF/etc.
+  ca_file: ""
 
 dedup:
   enabled: true

@@ -137,7 +137,6 @@ neo4j:
 carddav:
   username_env: NEXTCLOUD_USERNAME
   password_env: NEXTCLOUD_APP_PASSWORD
-  verify_tls: true
   timeout: 120
   include_addressbooks: []
   exclude_addressbooks: []
@@ -148,7 +147,6 @@ acl:
   username_env: NEXTCLOUD_USERNAME
   password_env: NEXTCLOUD_APP_PASSWORD
   webdav_url: ''
-  verify_tls: true
   timeout: 15
   batch_size: 100
 entity_resolution:
@@ -272,11 +270,12 @@ reranker:
 auth:
   nextcloud_login_flow_enabled: true
   credential_store: runtime/users.sqlite
-  verify_tls: true
   login_flow_ttl_seconds: 1200
 nextcloud:
   base_url: https://nextcloud.example.invalid/
   cloud_id: nextcloud
+  verify_tls: true
+  ca_file: ''
 dedup:
   enabled: true
   near_text_ratio: 0.96

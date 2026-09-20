@@ -2,23 +2,37 @@
 set -euo pipefail
 
 # Bootstrap a blank Linux VM into a usable AKI RAG Middleware node.
-# 0.8.5-rc4 standard profile implementation.
+# 0.8.5-rc4.3 standard profile implementation.
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PREFIX="/opt/nextcloud-rag"
 RAG_USER="rag"
 RAG_GROUP="rag"
+NEXTCLOUD_URL=""
+CA_CERTIFICATES=()
+ELASTICSEARCH_URL=""
+ELASTICSEARCH_INDEX=""
 INSTALL_SYSTEM_PACKAGES=1
 WITH_QDRANT=0
 WITH_NEO4J=0
 WITH_OPENWEBUI=0
+OPENWEBUI_EXPLICIT=0
+WITH_PLAYWRIGHT=0
+PLAYWRIGHT_EXPLICIT=0
+OPENWEBUI_FROM_STATE=0
 WITH_PROXY=1
+PROXY_EXPLICIT=0
+PROXY_FROM_STATE=0
+PROXY_HTTP_PORT=80
+PROXY_HTTPS_PORT=443
+PROXY_HTTP_PORT_EXPLICIT=0
+PROXY_HTTPS_PORT_EXPLICIT=0
 PROXY_BASIC_AUTH=1
 MULTI_USER=1
 ACL_OFF=0
 ACL_MODE_EXPLICIT=0
 WITH_SYSTEMD=0
-DOWNLOAD_RERANKER=1
+DOWNLOAD_RERANKER=0
 ASSUME_YES=0
 PLAN_ONLY=0
 X509_STRICT=0
@@ -28,22 +42,33 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --prefix PATH            Install directory (default: /opt/nextcloud-rag)
-  --user USER              Service user (default: rag)
-  --skip-system-packages   Do not install OS packages/Docker
-  --with-qdrant           Install/start a local Qdrant container
-  --with-neo4j            Install/start a local Neo4j container
-  --core                   Local data stack: Qdrant + Neo4j
-  --with-openwebui         Start OpenWebUI container (served at / by proxy)
-  --no-proxy               Do not start the nginx reverse proxy (advanced/dev)
-  --no-proxy-basic-auth    Disable nginx Basic Auth gate; rate limits remain active
+  --prefix PATH             Install directory (default: /opt/nextcloud-rag)
+  --user USER               Service user (default: rag)
+  --nextcloud-url URL       Override Nextcloud base URL in config.yaml
+  --ca-certificate FILE     Trust one private CA certificate for Nextcloud; repeatable
+  --elasticsearch-url URL   Override Elasticsearch URL in config.yaml
+  --elasticsearch-index ID  Override Elasticsearch index in config.yaml
+  --skip-system-packages    Do not install OS packages/Docker
+  --with-qdrant             Install/start a local Qdrant container
+  --with-neo4j              Install/start a local Neo4j container
+  --core                    Local data stack: Qdrant + Neo4j
+  --with-openwebui          Start/retain bundled OpenWebUI
+  --no-openwebui            Disable/remove bundled OpenWebUI on this host
+  --with-playwright         Enable/build/start Playwright Web-archive renderer
+  --no-playwright           Disable/remove Playwright Web-archive renderer
+  --with-proxy              Start/retain bundled nginx reverse proxy
+  --no-proxy                Disable/remove bundled nginx reverse proxy
+  --proxy-http-port PORT     nginx HTTP listen port (default: 80)
+  --proxy-https-port PORT    nginx HTTPS listen port (default: 443)
+  --no-proxy-basic-auth     Disable nginx Basic Auth gate; rate limits remain active
   --multi-user             Explicitly select the default multi-user credential_store mode
   --single-user            Explicit one-user mode; live ACL remains enabled
   --acl-off                Diagnostic only: disable live document ACL explicitly
   --full                   Full bundled stack: Qdrant + Neo4j + OpenWebUI
   --with-systemd           Also install/enable optional systemd services
   --no-systemd             Legacy alias; keep systemd integration disabled
-  --no-reranker-download   Do not pre-download Hugging Face reranker model
+  --with-reranker-download Pre-download local Hugging Face reranker model (opt-in)
+  --no-reranker-download   Keep reranker model download disabled (default)
   --x509-strict            Enable Python/OpenSSL VERIFY_X509_STRICT (default: off)
   --no-x509-strict         Compatibility alias; keep strict mode disabled
   --plan                    Show the installation plan and exit without changes
@@ -64,21 +89,32 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) PREFIX="$2"; shift 2 ;;
     --user) RAG_USER="$2"; RAG_GROUP="$2"; shift 2 ;;
+    --nextcloud-url) [[ $# -ge 2 ]] || { echo "--nextcloud-url requires a URL" >&2; exit 2; }; NEXTCLOUD_URL="$2"; shift 2 ;;
+    --ca-certificate) [[ $# -ge 2 ]] || { echo "--ca-certificate requires a file" >&2; exit 2; }; CA_CERTIFICATES+=("$2"); shift 2 ;;
+    --elasticsearch-url) [[ $# -ge 2 ]] || { echo "--elasticsearch-url requires a URL" >&2; exit 2; }; ELASTICSEARCH_URL="$2"; shift 2 ;;
+    --elasticsearch-index) [[ $# -ge 2 ]] || { echo "--elasticsearch-index requires an index" >&2; exit 2; }; ELASTICSEARCH_INDEX="$2"; shift 2 ;;
     --skip-system-packages) INSTALL_SYSTEM_PACKAGES=0; shift ;;
     --with-qdrant) WITH_QDRANT=1; shift ;;
     --with-neo4j) WITH_NEO4J=1; shift ;;
     --core) WITH_QDRANT=1; WITH_NEO4J=1; shift ;;
     --with-ollama|--ollama-gpu|--ollama-models) echo "Bundled Ollama is not part of this release; install/manage Ollama or another compatible backend separately and configure its URL in config.yaml/provider.env." >&2; exit 2 ;;
-    --with-openwebui) WITH_OPENWEBUI=1; shift ;;
+    --with-openwebui) WITH_OPENWEBUI=1; OPENWEBUI_EXPLICIT=1; shift ;;
+    --no-openwebui) WITH_OPENWEBUI=0; OPENWEBUI_EXPLICIT=1; shift ;;
+    --with-playwright) WITH_PLAYWRIGHT=1; PLAYWRIGHT_EXPLICIT=1; shift ;;
+    --no-playwright) WITH_PLAYWRIGHT=0; PLAYWRIGHT_EXPLICIT=1; shift ;;
     --with-searxng) echo "--with-searxng was removed from the bundled stack; install/configure SearXNG externally and point web.yaml to it." >&2; exit 2 ;;
-    --no-proxy) WITH_PROXY=0; shift ;;
+    --with-proxy) WITH_PROXY=1; PROXY_EXPLICIT=1; shift ;;
+    --no-proxy) WITH_PROXY=0; PROXY_EXPLICIT=1; shift ;;
+    --proxy-http-port) [[ $# -ge 2 ]] || { echo "--proxy-http-port requires a port" >&2; exit 2; }; PROXY_HTTP_PORT="$2"; PROXY_HTTP_PORT_EXPLICIT=1; shift 2 ;;
+    --proxy-https-port) [[ $# -ge 2 ]] || { echo "--proxy-https-port requires a port" >&2; exit 2; }; PROXY_HTTPS_PORT="$2"; PROXY_HTTPS_PORT_EXPLICIT=1; shift 2 ;;
     --no-proxy-basic-auth) PROXY_BASIC_AUTH=0; shift ;;
     --multi-user) MULTI_USER=1; ACL_OFF=0; ACL_MODE_EXPLICIT=1; shift ;;
     --single-user) MULTI_USER=0; ACL_OFF=0; ACL_MODE_EXPLICIT=1; shift ;;
     --acl-off) MULTI_USER=0; ACL_OFF=1; ACL_MODE_EXPLICIT=1; shift ;;
-    --full) WITH_QDRANT=1; WITH_NEO4J=1; WITH_OPENWEBUI=1; shift ;;
+    --full) WITH_QDRANT=1; WITH_NEO4J=1; WITH_OPENWEBUI=1; WITH_PLAYWRIGHT=1; PLAYWRIGHT_EXPLICIT=1; shift ;;
     --with-systemd) WITH_SYSTEMD=1; shift ;;
     --no-systemd) WITH_SYSTEMD=0; shift ;;
+    --with-reranker-download) DOWNLOAD_RERANKER=1; shift ;;
     --no-reranker-download) DOWNLOAD_RERANKER=0; shift ;;
     --x509-strict) X509_STRICT=1; shift ;;
     --no-x509-strict) X509_STRICT=0; shift ;;
@@ -134,7 +170,10 @@ load_install_state() {
   local state_local_qdrant=0
   local state_local_neo4j=0
   local state_local_openwebui=0
+  local state_local_playwright=0
   local state_local_proxy=1
+  local state_proxy_http_port=80
+  local state_proxy_https_port=443
   local state_proxy_basic_auth=1
   local key value
 
@@ -144,7 +183,10 @@ load_install_state() {
       LOCAL_QDRANT) state_local_qdrant="$(read_state_bool "$key" "$value")" ;;
       LOCAL_NEO4J) state_local_neo4j="$(read_state_bool "$key" "$value")" ;;
       LOCAL_OPENWEBUI) state_local_openwebui="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_PLAYWRIGHT) state_local_playwright="$(read_state_bool "$key" "$value")" ;;
       LOCAL_PROXY) state_local_proxy="$(read_state_bool "$key" "$value")" ;;
+      PROXY_HTTP_PORT) state_proxy_http_port="$value" ;;
+      PROXY_HTTPS_PORT) state_proxy_https_port="$value" ;;
       PROXY_BASIC_AUTH_STATE) state_proxy_basic_auth="$(read_state_bool "$key" "$value")" ;;
       DEPLOYMENT_PROFILE)
         case "$value" in standard|super-light) ;; *)
@@ -160,14 +202,58 @@ load_install_state() {
   # unless an explicit removal mechanism is added in a later release.
   [[ $WITH_QDRANT -eq 0 && $state_local_qdrant -eq 1 ]] && WITH_QDRANT=1
   [[ $WITH_NEO4J -eq 0 && $state_local_neo4j -eq 1 ]] && WITH_NEO4J=1
-  [[ $WITH_OPENWEBUI -eq 0 && $state_local_openwebui -eq 1 ]] && WITH_OPENWEBUI=1
-  [[ $WITH_PROXY -eq 1 && $state_local_proxy -eq 0 ]] && WITH_PROXY=0
+  if [[ $OPENWEBUI_EXPLICIT -eq 0 ]]; then
+    WITH_OPENWEBUI=$state_local_openwebui
+    [[ $state_local_openwebui -eq 1 ]] && OPENWEBUI_FROM_STATE=1
+  fi
+  if [[ $PLAYWRIGHT_EXPLICIT -eq 0 ]]; then
+    WITH_PLAYWRIGHT=$state_local_playwright
+  fi
+  if [[ $PROXY_EXPLICIT -eq 0 ]]; then
+    WITH_PROXY=$state_local_proxy
+    PROXY_FROM_STATE=1
+  fi
+  [[ $PROXY_HTTP_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTP_PORT=$state_proxy_http_port
+  [[ $PROXY_HTTPS_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTPS_PORT=$state_proxy_https_port
   [[ $PROXY_BASIC_AUTH -eq 1 && $state_proxy_basic_auth -eq 0 ]] && PROXY_BASIC_AUTH=0
   return 0
 }
 
 validate_install_prefix
 load_install_state
+
+validate_port() {
+  local name="$1" value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 || 10#$value > 65535 )); then
+    echo "$name must be an integer from 1 to 65535: $value" >&2
+    exit 2
+  fi
+}
+validate_port --proxy-http-port "$PROXY_HTTP_PORT"
+validate_port --proxy-https-port "$PROXY_HTTPS_PORT"
+if [[ "$PROXY_HTTP_PORT" == "$PROXY_HTTPS_PORT" ]]; then
+  echo "--proxy-http-port and --proxy-https-port must be different" >&2
+  exit 2
+fi
+
+for ca_source in "${CA_CERTIFICATES[@]}"; do
+  [[ -r "$ca_source" ]] || {
+    echo "CA certificate is not readable: $ca_source" >&2
+    exit 2
+  }
+  cert_count="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$ca_source" || true)"
+  [[ "$cert_count" -eq 1 ]] || {
+    echo "--ca-certificate expects exactly one PEM certificate per file: $ca_source" >&2
+    echo "Repeat --ca-certificate for root/intermediate certificates." >&2
+    exit 2
+  }
+  if command -v openssl >/dev/null 2>&1; then
+    openssl x509 -in "$ca_source" -noout >/dev/null 2>&1 || {
+      echo "Invalid PEM X.509 certificate: $ca_source" >&2
+      exit 2
+    }
+  fi
+done
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -178,13 +264,14 @@ print_plan() {
   [[ $WITH_QDRANT -eq 1 ]] && { disk_low=$((disk_low + 0)); disk_high=$((disk_high + 1)); }
   [[ $WITH_NEO4J -eq 1 ]] && { disk_low=$((disk_low + 1)); disk_high=$((disk_high + 2)); }
   [[ $WITH_OPENWEBUI -eq 1 ]] && { disk_low=$((disk_low + 6)); disk_high=$((disk_high + 8)); }
+  [[ $WITH_PLAYWRIGHT -eq 1 ]] && { disk_low=$((disk_low + 1)); disk_high=$((disk_high + 2)); }
   if [[ $DOWNLOAD_RERANKER -eq 0 ]]; then
     disk_low=$(( disk_low > 2 ? disk_low - 2 : 1 ))
     disk_high=$(( disk_high > 3 ? disk_high - 3 : 2 ))
   fi
 
   local docker_needed=0
-  if [[ $WITH_PROXY -eq 1 || $WITH_QDRANT -eq 1 || $WITH_NEO4J -eq 1 || $WITH_OPENWEBUI -eq 1 ]]; then
+  if [[ $WITH_PROXY -eq 1 || $WITH_QDRANT -eq 1 || $WITH_NEO4J -eq 1 || $WITH_OPENWEBUI -eq 1 || $WITH_PLAYWRIGHT -eq 1 ]]; then
     docker_needed=1
   fi
 
@@ -196,14 +283,19 @@ Install prefix:          $PREFIX
 Service user:            $RAG_USER
 System packages:         $([[ $INSTALL_SYSTEM_PACKAGES -eq 1 ]] && echo install/update || echo leave unchanged)
 Docker/Compose:          $([[ $docker_needed -eq 1 ]] && echo required || echo not required by selected components)
-Reverse proxy/nginx:     $([[ $WITH_PROXY -eq 1 ]] && echo install/start\; HTTPS 443 + HTTP redirect on 80 || echo skip)
+Reverse proxy/nginx:     $([[ $WITH_PROXY -eq 1 ]] && echo "install/start; HTTPS ${PROXY_HTTPS_PORT} + HTTP redirect on ${PROXY_HTTP_PORT}$([[ $PROXY_FROM_STATE -eq 1 ]] && echo ' (retained from existing install)')" || echo skip)
 Proxy Basic Auth gate:    $([[ $WITH_PROXY -eq 1 && $PROXY_BASIC_AUTH -eq 1 ]] && echo enabled || echo disabled)
 Qdrant:                  $([[ $WITH_QDRANT -eq 1 ]] && echo install/start || echo disabled/external)
 Neo4j:                   $([[ $WITH_NEO4J -eq 1 ]] && echo install/start || echo disabled/external)
 Python venv/dependencies: install/update
-Reranker model cache:     $([[ $DOWNLOAD_RERANKER -eq 1 ]] && echo "download only for backend=local" || echo skip)
+Reranker model cache:     $([[ $DOWNLOAD_RERANKER -eq 1 ]] && echo "pre-download requested (used only for backend=local)" || echo "skip (default; reranker opt-in)")
 LLM/embedding backend:    external/admin-managed (Ollama or compatible service)
-OpenWebUI:                $([[ $WITH_OPENWEBUI -eq 1 ]] && echo install/start || echo external/skip)
+Nextcloud URL override:   ${NEXTCLOUD_URL:-<preserve/configure in config.yaml>}
+Nextcloud private CA:      ${#CA_CERTIFICATES[@]} certificate(s) supplied on this run
+Elasticsearch URL:       ${ELASTICSEARCH_URL:-<preserve/configure in config.yaml>}
+Elasticsearch index:     ${ELASTICSEARCH_INDEX:-<preserve/configure in config.yaml>}
+OpenWebUI:                $([[ $WITH_OPENWEBUI -eq 1 ]] && echo "install/start$([[ $OPENWEBUI_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-openwebui to disable)')" || echo external/skip)
+Playwright renderer:      $([[ $PLAYWRIGHT_EXPLICIT -eq 1 ]] && ([[ $WITH_PLAYWRIGHT -eq 1 ]] && echo enable/build/start || echo disable/remove) || ([[ $WITH_PLAYWRIGHT -eq 1 ]] && echo "retain enabled state" || echo "preserve web.yaml state"))
 Web search service:       external/admin-managed (not bundled)
 ACL mode:                 $([[ $ACL_OFF -eq 1 ]] && echo ACL-OFF-DIAGNOSTIC || ([[ $MULTI_USER -eq 1 ]] && echo multi-user credential_store || echo single_user-live-ACL))
 Systemd units:            $([[ $WITH_SYSTEMD -eq 1 ]] && echo optional install/enable || echo skip \(start scripts are default\))
@@ -241,6 +333,83 @@ confirm_plan() {
   esac
 }
 
+preflight_existing_install() {
+  [[ $PREFIX_RECOGNIZED_AKI -eq 1 ]] || return 0
+
+  echo "[INFO] Existing AKI RAG installation detected at $PREFIX."
+
+  local running=()
+  local name pid pidfile unit
+  for name in api provider graph-worker sync-worker mail-worker; do
+    pidfile="$PREFIX/run/$name.pid"
+    if [[ -f "$pidfile" ]]; then
+      pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        running+=("$name(pid=$pid)")
+      fi
+    fi
+  done
+
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in rag-api.service rag-provider.service rag-graph-worker.service rag-sync-worker.service rag-mail-worker.service; do
+      if systemctl is-active --quiet "$unit" 2>/dev/null; then
+        running+=("$unit")
+      fi
+    done
+  fi
+
+  local docker_selected=0
+  [[ $WITH_PROXY -eq 1 || $WITH_QDRANT -eq 1 || $WITH_NEO4J -eq 1 || $WITH_OPENWEBUI -eq 1 || $WITH_PLAYWRIGHT -eq 1 ]] && docker_selected=1
+
+  if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then
+      local existing_compose=()
+      if docker compose version >/dev/null 2>&1; then
+        existing_compose=(docker compose)
+      elif command -v docker-compose >/dev/null 2>&1; then
+        existing_compose=(docker-compose)
+      fi
+      if [[ ${#existing_compose[@]} -gt 0 && -f "$PREFIX/install/docker-compose.yml" ]]; then
+        local docker_running
+        if ! docker_running="$(
+          cd "$PREFIX/install" &&
+          "${existing_compose[@]}" -f docker-compose.yml --env-file .env ps --services --filter status=running 2>/dev/null
+        )"; then
+          echo "[WARN] Could not inspect the existing Docker Compose stack; cannot verify that it is stopped." >&2
+          echo "No installation changes were made." >&2
+          exit 2
+        fi
+        if [[ -n "$docker_running" ]]; then
+          while IFS= read -r name; do
+            [[ -n "$name" ]] && running+=("docker:$name")
+          done <<< "$docker_running"
+        fi
+      elif [[ $docker_selected -eq 1 ]]; then
+        echo "[WARN] Existing installation uses local Docker components, but Docker Compose is unavailable; cannot verify that the stack is stopped." >&2
+        echo "No installation changes were made." >&2
+        exit 2
+      fi
+    elif [[ $docker_selected -eq 1 ]]; then
+      echo "[WARN] Existing installation uses local Docker components, but the Docker daemon is not reachable; cannot verify that the stack is stopped." >&2
+      echo "No installation changes were made." >&2
+      exit 2
+    fi
+  elif [[ $docker_selected -eq 1 ]]; then
+    echo "[WARN] Existing installation uses local Docker components, but Docker is unavailable; cannot verify that the stack is stopped." >&2
+    echo "No installation changes were made." >&2
+    exit 2
+  fi
+
+  if [[ ${#running[@]} -gt 0 ]]; then
+    echo "[WARN] Existing AKI RAG services are running: ${running[*]}" >&2
+    echo "Stop the existing middleware and local containers before rerunning the installer; no installation changes were made." >&2
+    echo "Typical first step: $PREFIX/stop-all.sh" >&2
+    exit 2
+  fi
+
+  echo "[INFO] Existing AKI RAG installation is stopped; rerun may update it."
+}
+
 if [[ $PLAN_ONLY -eq 1 ]]; then
   print_plan
   exit 0
@@ -251,6 +420,7 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
+preflight_existing_install
 confirm_plan
 
 detect_python() {
@@ -281,7 +451,7 @@ select_python() {
 }
 
 docker_needed() {
-  [[ $WITH_PROXY -eq 1 || $WITH_QDRANT -eq 1 || $WITH_NEO4J -eq 1 || $WITH_OPENWEBUI -eq 1 ]]
+  [[ $WITH_PROXY -eq 1 || $WITH_QDRANT -eq 1 || $WITH_NEO4J -eq 1 || $WITH_OPENWEBUI -eq 1 || $WITH_PLAYWRIGHT -eq 1 ]]
 }
 
 install_system_packages() {
@@ -452,8 +622,23 @@ DEPLOYMENT_PROFILE=standard
 DEPLOYMENT_MODE=native
 MARKER
 chmod 0644 "$PREFIX/.aki-rag-installation"
-mkdir -p "$PREFIX/runtime"
+mkdir -p "$PREFIX/runtime" "$PREFIX/runtime/ca"
 chmod 700 "$PREFIX/runtime"
+NEXTCLOUD_CA_FILE=""
+if [[ ${#CA_CERTIFICATES[@]} -gt 0 ]]; then
+  log "Installing private CA bundle for Nextcloud TLS"
+  rm -f "$PREFIX/runtime/ca"/nextcloud-installer-*.crt
+  ca_index=0
+  for ca_source in "${CA_CERTIFICATES[@]}"; do
+    ca_index=$((ca_index + 1))
+    printf -v ca_name 'nextcloud-installer-%02d.crt' "$ca_index"
+    cp "$ca_source" "$PREFIX/runtime/ca/$ca_name"
+    chmod 0644 "$PREFIX/runtime/ca/$ca_name"
+  done
+  NEXTCLOUD_CA_FILE="$PREFIX/runtime/ca/nextcloud-ca-bundle.pem"
+  cat "$PREFIX/runtime/ca"/nextcloud-installer-*.crt > "$NEXTCLOUD_CA_FILE"
+  chmod 0644 "$NEXTCLOUD_CA_FILE"
+fi
 chown -R "$RAG_USER:$RAG_GROUP" "$PREFIX"
 
 log "Creating Python virtual environment"
@@ -483,6 +668,8 @@ NEO4J_PASSWORD="$(random_secret)"
 ADMIN_USER="admin"
 ADMIN_PASSWORD="$(random_secret)"
 PROVIDER_API_KEY="$(random_secret)"
+RAG_INTERNAL_API_KEY="$(random_secret)"
+RAG_PROVIDER_INTERNAL_KEY="$(random_secret)"
 
 if [[ ! -f "$PREFIX/runtime.env" ]]; then
   log "Creating runtime.env"
@@ -491,6 +678,8 @@ NEO4J_PASSWORD=$NEO4J_PASSWORD
 RAG_ADMIN_USER=admin
 RAG_ADMIN_PASSWORD=$ADMIN_PASSWORD
 PROVIDER_API_KEY=$PROVIDER_API_KEY
+RAG_INTERNAL_API_KEY=$RAG_INTERNAL_API_KEY
+RAG_PROVIDER_INTERNAL_KEY=$RAG_PROVIDER_INTERNAL_KEY
 LLM_API_KEY=
 EMBEDDING_API_KEY=
 GRAPH_ENTITY_API_KEY=
@@ -511,6 +700,8 @@ else
   ADMIN_USER="$(grep '^RAG_ADMIN_USER=' "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
   ADMIN_PASSWORD="$(grep '^RAG_ADMIN_PASSWORD=' "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
   PROVIDER_API_KEY="$(grep '^PROVIDER_API_KEY=' "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
+  RAG_INTERNAL_API_KEY="$(grep '^RAG_INTERNAL_API_KEY=' "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
+  RAG_PROVIDER_INTERNAL_KEY="$(grep '^RAG_PROVIDER_INTERNAL_KEY=' "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
 fi
 
 ensure_runtime_key() {
@@ -527,10 +718,14 @@ ensure_runtime_key() {
 [[ -n "$ADMIN_USER" ]] || ADMIN_USER="admin"
 [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(random_secret)"
 [[ -n "$PROVIDER_API_KEY" ]] || PROVIDER_API_KEY="$(random_secret)"
+[[ -n "$RAG_INTERNAL_API_KEY" ]] || RAG_INTERNAL_API_KEY="$(random_secret)"
+[[ -n "$RAG_PROVIDER_INTERNAL_KEY" ]] || RAG_PROVIDER_INTERNAL_KEY="$(random_secret)"
 ensure_runtime_key NEO4J_PASSWORD "$NEO4J_PASSWORD"
 ensure_runtime_key RAG_ADMIN_USER "$ADMIN_USER"
 ensure_runtime_key RAG_ADMIN_PASSWORD "$ADMIN_PASSWORD"
 ensure_runtime_key PROVIDER_API_KEY "$PROVIDER_API_KEY"
+ensure_runtime_key RAG_INTERNAL_API_KEY "$RAG_INTERNAL_API_KEY"
+ensure_runtime_key RAG_PROVIDER_INTERNAL_KEY "$RAG_PROVIDER_INTERNAL_KEY"
 ensure_runtime_key ELASTICSEARCH_PASSWORD ""
 chmod 600 "$PREFIX/runtime.env"
 chown "$RAG_USER:$RAG_GROUP" "$PREFIX/runtime.env"
@@ -657,13 +852,26 @@ chown "$RAG_USER:$RAG_GROUP" "$PREFIX/install/.env"
 # First-install component capability defaults. Existing site configuration is
 # preserved on reruns, but a fresh VM should not probe services the admin did
 # not select.
-run_as_rag "$PREFIX/.venv/bin/python" - "$PREFIX/config.yaml" "$PREFIX/web.yaml" "$WITH_QDRANT" "$WITH_NEO4J" "$MULTI_USER" "$ACL_OFF" "$ACL_MODE_EXPLICIT" "$FRESH_CONFIG" "$X509_STRICT" <<'PYCFG'
+run_as_rag "$PREFIX/.venv/bin/python" - "$PREFIX/config.yaml" "$PREFIX/web.yaml" "$WITH_QDRANT" "$WITH_NEO4J" "$MULTI_USER" "$ACL_OFF" "$ACL_MODE_EXPLICIT" "$FRESH_CONFIG" "$X509_STRICT" "$NEXTCLOUD_URL" "$NEXTCLOUD_CA_FILE" "$ELASTICSEARCH_URL" "$ELASTICSEARCH_INDEX" "$PLAYWRIGHT_EXPLICIT" "$WITH_PLAYWRIGHT" <<'PYCFG'
 import sys, yaml
 from pathlib import Path
 config_path, web_path = Path(sys.argv[1]), Path(sys.argv[2])
 with config_path.open(encoding='utf-8') as f: cfg=yaml.safe_load(f) or {}
 fresh = bool(int(sys.argv[8]))
 cfg.setdefault('tls', {})['x509_strict'] = bool(int(sys.argv[9]))
+nextcloud_url, nextcloud_ca_file, elasticsearch_url, elasticsearch_index = sys.argv[10:14]
+playwright_explicit = bool(int(sys.argv[14]))
+playwright_enabled = bool(int(sys.argv[15]))
+if nextcloud_url:
+    cfg.setdefault('nextcloud', {})['base_url'] = nextcloud_url
+if nextcloud_ca_file:
+    nextcloud = cfg.setdefault('nextcloud', {})
+    nextcloud['verify_tls'] = True
+    nextcloud['ca_file'] = nextcloud_ca_file
+if elasticsearch_url:
+    cfg.setdefault('elasticsearch', {})['url'] = elasticsearch_url
+if elasticsearch_index:
+    cfg.setdefault('elasticsearch', {})['index'] = elasticsearch_index
 if fresh or bool(int(sys.argv[3])):
     cfg.setdefault('qdrant', {})['enabled'] = bool(int(sys.argv[3]))
 if fresh or bool(int(sys.argv[4])):
@@ -697,6 +905,8 @@ if fresh or bool(int(sys.argv[7])):
         acl['identity_mode'] = 'single_user'
 with config_path.open('w', encoding='utf-8') as f: yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 with web_path.open(encoding='utf-8') as f: web=yaml.safe_load(f) or {}
+if playwright_explicit:
+    web.setdefault('archive', {}).setdefault('renderer', {})['enabled'] = playwright_enabled
 with web_path.open('w', encoding='utf-8') as f: yaml.safe_dump(web, f, sort_keys=False, allow_unicode=True)
 PYCFG
 
@@ -753,10 +963,20 @@ PYHT
 )"
 printf '%s:%s\n' "${ADMIN_USER:-admin}" "$HTPASS_HASH" > "$PREFIX/install/nginx/htpasswd"
 chmod 644 "$PREFIX/install/nginx/htpasswd"
+printf 'proxy_set_header X-AKI-Internal-Key "%s";\n' "$RAG_INTERNAL_API_KEY" > "$PREFIX/install/nginx/internal-auth.conf"
+chmod 600 "$PREFIX/install/nginx/internal-auth.conf"
 if [[ $WITH_OPENWEBUI -eq 1 ]]; then
   cp "$PREFIX/install/nginx/nginx-openwebui.conf" "$PREFIX/install/nginx/generated.conf"
 else
   cp "$PREFIX/install/nginx/nginx.conf" "$PREFIX/install/nginx/generated.conf"
+fi
+sed -i \
+  -e "s/listen 80 default_server;/listen ${PROXY_HTTP_PORT} default_server;/" \
+  -e "s/listen 443 ssl default_server;/listen ${PROXY_HTTPS_PORT} ssl default_server;/" \
+  "$PREFIX/install/nginx/generated.conf"
+if [[ "$PROXY_HTTPS_PORT" != "443" ]]; then
+  sed -i 's|return 308 https://$host$request_uri;|return 308 https://$host:'"${PROXY_HTTPS_PORT}"'$request_uri;|' \
+    "$PREFIX/install/nginx/generated.conf"
 fi
 chmod 644 "$PREFIX/install/nginx/generated.conf"
 chmod 755 "$PREFIX" "$PREFIX/install" "$PREFIX/install/nginx"
@@ -764,7 +984,44 @@ if [[ $PROXY_BASIC_AUTH -eq 0 ]]; then
   sed -i '/^[[:space:]]*auth_basic /d; /^[[:space:]]*auth_basic_user_file /d' "$PREFIX/install/nginx/generated.conf"
 fi
 
+PLAYWRIGHT_ENABLED="$(
+  run_as_rag "$PREFIX/.venv/bin/python" - "$PREFIX/web.yaml" <<'PYRENDER'
+import sys
+from pathlib import Path
+import yaml
+
+path = Path(sys.argv[1])
+with path.open(encoding="utf-8") as handle:
+    cfg = yaml.safe_load(handle) or {}
+value = (((cfg.get("archive") or {}).get("renderer") or {}).get("enabled", False))
+if isinstance(value, bool):
+    enabled = value
+else:
+    enabled = str(value).strip().casefold() in {"1", "true", "yes", "on"}
+print("1" if enabled else "0")
+PYRENDER
+)"
+case "$PLAYWRIGHT_ENABLED" in 0|1) ;; *)
+  echo "Could not determine archive.renderer.enabled from $PREFIX/web.yaml" >&2
+  exit 1
+esac
+
 cd "$PREFIX/install"
+# Explicit negative switches win over retained rerun state. Remove only the
+# container; persistent volumes are preserved for a later re-enable.
+if [[ $OPENWEBUI_EXPLICIT -eq 1 && $WITH_OPENWEBUI -eq 0 ]]; then
+  compose_cmd -f docker-compose.yml --env-file .env --profile ui stop openwebui >/dev/null 2>&1 || true
+  compose_cmd -f docker-compose.yml --env-file .env --profile ui rm -f openwebui >/dev/null 2>&1 || true
+fi
+if [[ $PROXY_EXPLICIT -eq 1 && $WITH_PROXY -eq 0 ]]; then
+  compose_cmd -f docker-compose.yml --env-file .env stop proxy >/dev/null 2>&1 || true
+  compose_cmd -f docker-compose.yml --env-file .env rm -f proxy >/dev/null 2>&1 || true
+fi
+if [[ "$PLAYWRIGHT_ENABLED" -eq 0 ]]; then
+  compose_cmd -f docker-compose.yml --env-file .env --profile renderer stop playwright-renderer >/dev/null 2>&1 || true
+  compose_cmd -f docker-compose.yml --env-file .env --profile renderer rm -f playwright-renderer >/dev/null 2>&1 || true
+fi
+
 LOCAL_SERVICES=()
 LOCAL_PROFILE_ARGS=()
 if [[ $WITH_QDRANT -eq 1 ]]; then
@@ -780,22 +1037,60 @@ if [[ ${#LOCAL_SERVICES[@]} -gt 0 ]]; then
   compose_cmd -f docker-compose.yml --env-file .env "${LOCAL_PROFILE_ARGS[@]}" up -d "${LOCAL_SERVICES[@]}"
 fi
 
+if [[ "$PLAYWRIGHT_ENABLED" -eq 1 ]]; then
+  log "Preparing and starting Playwright renderer for Web archive"
+  "$PREFIX/install/components/playwright-renderer/prepare.sh"
+  compose_cmd -f docker-compose.yml --env-file .env --profile renderer build playwright-renderer
+  compose_cmd -f docker-compose.yml --env-file .env --profile renderer up -d playwright-renderer
+  PLAYWRIGHT_READY=0
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${PLAYWRIGHT_PORT:-8090}/live" >/dev/null 2>&1; then
+      PLAYWRIGHT_READY=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ $PLAYWRIGHT_READY -ne 1 ]]; then
+    echo "Playwright renderer did not become reachable on 127.0.0.1:${PLAYWRIGHT_PORT:-8090}." >&2
+    compose_cmd -f docker-compose.yml --env-file .env --profile renderer logs --tail=120 playwright-renderer >&2 || true
+    exit 1
+  fi
+fi
+
 if [[ $WITH_NEO4J -eq 1 ]]; then
   log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"
   NEO4J_SCHEMA_READY=0
-  for _ in $(seq 1 90); do
-    if run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
-      "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init \
-      >/dev/null 2>&1; then
+  NEO4J_SCHEMA_ATTEMPTS=90
+  NEO4J_SCHEMA_STARTED_AT=$(date +%s)
+  NEO4J_SCHEMA_LAST_NOTICE=0
+  for attempt in $(seq 1 "$NEO4J_SCHEMA_ATTEMPTS"); do
+    # The installer currently runs from $PREFIX/install for Compose. Python
+    # modules live one directory above, so run schema initialization with the
+    # application root as cwd instead of relying on an incidental PYTHONPATH.
+    if (
+      cd "$PREFIX"
+      run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+        "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init
+    ) >/dev/null 2>&1; then
       NEO4J_SCHEMA_READY=1
+      elapsed=$(( $(date +%s) - NEO4J_SCHEMA_STARTED_AT ))
+      echo "[INFO] Neo4j is ready; AKI schema upgrade completed after ${elapsed}s."
       break
+    fi
+    elapsed=$(( $(date +%s) - NEO4J_SCHEMA_STARTED_AT ))
+    if (( elapsed - NEO4J_SCHEMA_LAST_NOTICE >= 10 )); then
+      echo "[INFO] Neo4j/schema initialization still waiting (${elapsed}s; attempt ${attempt}/${NEO4J_SCHEMA_ATTEMPTS}) ..."
+      NEO4J_SCHEMA_LAST_NOTICE=$elapsed
     fi
     sleep 2
   done
   if [[ $NEO4J_SCHEMA_READY -ne 1 ]]; then
     echo "Neo4j did not become ready or the AKI schema upgrade failed." >&2
-    run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
-      "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init >&2 || true
+    (
+      cd "$PREFIX"
+      run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+        "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init
+    ) >&2 || true
     compose_cmd -f docker-compose.yml --env-file .env --profile neo4j logs --tail=120 neo4j >&2 || true
     exit 1
   fi
@@ -846,18 +1141,18 @@ if [[ $WITH_OPENWEBUI -eq 1 ]]; then
 fi
 
 if [[ $WITH_PROXY -eq 1 ]]; then
-  log "Starting nginx reverse proxy on HTTPS 443 (HTTP 80 redirects)"
+  log "Starting nginx reverse proxy on HTTPS ${PROXY_HTTPS_PORT} (HTTP ${PROXY_HTTP_PORT} redirects)"
   compose_cmd -f docker-compose.yml --env-file .env up -d proxy
   PROXY_READY=0
   for _ in $(seq 1 30); do
-    if curl -kfsS --max-time 3 https://127.0.0.1/proxy-health >/dev/null 2>&1; then
+    if curl -kfsS --max-time 3 "https://127.0.0.1:${PROXY_HTTPS_PORT}/proxy-health" >/dev/null 2>&1; then
       PROXY_READY=1
       break
     fi
     sleep 1
   done
   if [[ $PROXY_READY -ne 1 ]]; then
-    echo "nginx reverse proxy did not become healthy on HTTPS 443." >&2
+    echo "nginx reverse proxy did not become healthy on HTTPS ${PROXY_HTTPS_PORT}." >&2
     compose_cmd -f docker-compose.yml --env-file .env logs --tail=80 proxy >&2 || true
     exit 1
   fi
@@ -867,7 +1162,10 @@ cat > "$PREFIX/install/install-state.env" <<STATE
 LOCAL_QDRANT=$WITH_QDRANT
 LOCAL_NEO4J=$WITH_NEO4J
 LOCAL_OPENWEBUI=$WITH_OPENWEBUI
+LOCAL_PLAYWRIGHT=$PLAYWRIGHT_ENABLED
 LOCAL_PROXY=$WITH_PROXY
+PROXY_HTTP_PORT=$PROXY_HTTP_PORT
+PROXY_HTTPS_PORT=$PROXY_HTTPS_PORT
 PROXY_BASIC_AUTH_STATE=$PROXY_BASIC_AUTH
 MULTI_USER=$MULTI_USER
 ACL_OFF=$ACL_OFF
@@ -880,11 +1178,11 @@ import yaml
 with open('$PREFIX/config.yaml', encoding='utf-8') as f:
     cfg=yaml.safe_load(f) or {}
 r=cfg.get('reranker') or {}
-print(str(r.get('backend') or 'local').strip().lower())
+print(str(r.get('backend') or 'none').strip().lower())
 print(str(r.get('model') or 'BAAI/bge-reranker-v2-m3'))
 PY
 )
-  RERANK_BACKEND="${RERANK_CFG[0]:-local}"
+  RERANK_BACKEND="${RERANK_CFG[0]:-none}"
   RERANK_MODEL="${RERANK_CFG[1]:-BAAI/bge-reranker-v2-m3}"
   if [[ "$RERANK_BACKEND" == "local" ]]; then
     log "Pre-downloading local reranker model: $RERANK_MODEL"
@@ -925,6 +1223,7 @@ Qdrant:      $([[ $WITH_QDRANT -eq 1 ]] && echo local/running || echo external/n
 Neo4j:       $([[ $WITH_NEO4J -eq 1 ]] && echo local/running || echo external/not installed by this run)
 LLM backend: external/admin-managed
 OpenWebUI:   $([[ $WITH_OPENWEBUI -eq 1 ]] && echo local/running || echo external/not installed by this run)
+Playwright:  $([[ $PLAYWRIGHT_ENABLED -eq 1 ]] && echo local/running || echo disabled/not installed by this run)
 Web search:   external/admin-managed; configure web.yaml when needed
 Proxy:       $([[ $WITH_PROXY -eq 1 ]] && echo https://HOST/ \(self-signed bootstrap TLS\) || echo skipped)
 Proxy gate:  $([[ $WITH_PROXY -eq 1 && $PROXY_BASIC_AUTH -eq 1 ]] && echo Basic-Auth + rate-limit || echo rate-limit/no Basic-Auth)

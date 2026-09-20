@@ -1,7 +1,7 @@
-# Super-light installation profile (0.8.5-rc4)
+# Super-light installation profile (0.8.5-rc4.3)
 
 
-0.8.5-rc4 uses X.509 strict mode **off by default** while normal TLS certificate/hostname verification remains enabled. Use `--x509-strict` only for PKIs that require and satisfy the additional strict checks.
+0.8.5-rc4.3 uses X.509 strict mode **off by default** while normal TLS certificate/hostname verification remains enabled. Use `--x509-strict` only for PKIs that require and satisfy the additional strict checks.
 The profile uses legacy Compose file format **2.4** so it also works with the `docker-compose 1.25.1` commonly found on Leap 15.3. OpenWebUI and the bundled nginx proxy are disabled by default; add `--with-openwebui` and/or `--with-proxy` explicitly.
 
 This deployment is intended for small/older Linux hosts where the middleware
@@ -25,7 +25,7 @@ running an embedding model or a CrossEncoder reranker.
   post-retrieval evidence is sent to a remote role; the corpus itself remains
   in Nextcloud/Elasticsearch.
 - **Mail worker:** common `rag.mail_worker` scheduler in its own Compose service when mail is enabled.
-- **Playwright:** local fail-open screen-PDF renderer for selected web sources; HTML→PDF work is queued after answer evidence/archive creation.
+- **Playwright:** enabled by default as a local fail-open screen-PDF renderer for selected web sources; HTML→PDF work is queued after answer evidence/archive creation. Super-Light does not use a `--with-playwright` switch.
 
 The normal verifier window in this profile is **10 authorized candidates** (standard remains 6).
 
@@ -78,9 +78,11 @@ sudo ./install/install.sh --profile super-light -y \
 
 The installer preserves these trust anchors as local installation state and
 bakes them into the API/provider image in addition to the normal public CA
-bundle. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` point to the resulting system
-bundle inside the image. This lets `acl.verify_tls`, `auth.verify_tls`,
-`carddav.verify_tls` and ordinary Python/httpx HTTPS clients remain enabled.
+bundle. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` point to that additive system
+bundle inside the image. In addition, the supplied certificates are concatenated
+to `/app/runtime/ca/nextcloud-ca-bundle.pem` and configured as
+`nextcloud.ca_file`, so Login Flow, live ACL, CardDAV, mail WebDAV and web
+archive use one explicit Nextcloud trust policy.
 
 Changing the private CA requires rerunning the installer with the desired
 `--ca-certificate` option(s), which rebuilds the API/provider image. The server
@@ -155,13 +157,9 @@ Per-source metadata sidecars are written as hidden files, e.g.
 `.01-source.metadata.json`, and record viewport/landscape, state reuse and cleanup
 actions. The PDF is a readable research snapshot, not WARC/WACZ or a forensic archive.
 
-## 0.8.4 clone acceptance
+## rc4.3 blank-VM acceptance
 
-A fresh Leap 15.3 clone installation of 0.8.4-rc3 completed without manual runtime
-repair. Kontakt-DB import through the Admin UI also completed successfully. On the
-acceptance VM, 3.9 GiB assigned RAM showed roughly 1.7 GiB / 44% use at idle with
-about 99% CPU idle and no swap. Treat this as an observed test point, not a hard
-resource guarantee; Chromium/Web Research produces transient peaks.
+A fresh Super-Light installation of 0.8.5-rc4.3 completed successfully and passed document-search and RAG Admin checks with the bundled Playwright renderer running as part of the normal stack. Earlier Leap 15.3 acceptance measurements with 3.9 GiB assigned RAM showed roughly 1.7 GiB / 44% use at idle with about 99% CPU idle and no swap. Treat this as an observed test point, not a hard resource guarantee; Chromium/Web Research produces transient peaks.
 
 ## Privacy boundary
 

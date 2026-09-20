@@ -1,6 +1,15 @@
 # Roadmap
 
-This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4.2` contract.
+This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4.3` contract.
+
+## rc4.3 follow-up polish
+
+The following items were deliberately left out of the rc4.3 acceptance baseline because they do not block the validated deployment paths:
+
+- pin the Microsoft Playwright base image by immutable digest in addition to the existing version tag/package pins;
+- make the Standard `--plan` wording distinguish a fresh Playwright default-off install from a rerun that preserves an existing `web.yaml` choice;
+- bound each Neo4j schema-readiness attempt so periodic installer progress output cannot be delayed by one long connection attempt;
+- reduce synchronous WebDAV archive latency, preferably with bounded parallel writes / fewer file-ID `PROPFIND` round trips while preserving immediate `/use:Wn` and answer-finalization semantics.
 
 ## 0.8.5-rc5 candidates
 

@@ -2393,7 +2393,7 @@ class GraphStore:
         ids: set[str] = set()
         queries = [
             """MATCH (d:Document)-[:MENTIONS]->(e:Entity) WHERE e.entity_id IN $entity_ids RETURN DISTINCT d.document_id AS document_id""",
-            """MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o:EntityObservation)-[:RESOLVED_TO]->(e:Entity) WHERE e.entity_id IN $entity_ids RETURN DISTINCT d.document_id AS document_id""",
+            """MATCH (d:Document)-[r1]->(o:EntityObservation)-[r2]->(e:Entity) WHERE type(r1)='HAS_ENTITY_OBSERVATION' AND type(r2)='RESOLVED_TO' AND e.entity_id IN $entity_ids RETURN DISTINCT d.document_id AS document_id""",
             """MATCH (d:Document)-[r:MENTIONS_NAME]->(:MentionName) WHERE any(x IN coalesce(properties(r)['candidate_entity_ids'],[]) WHERE x IN $entity_ids) RETURN DISTINCT d.document_id AS document_id""",
         ]
         for query in queries:
@@ -6313,7 +6313,8 @@ class GraphStore:
             MATCH (o:EntityObservation)
             WHERE (o)-[:RESOLVED_TO]->(e)
                OR o.curator_target_entity_id=$entity_id
-            OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
+            OPTIONAL MATCH (d:Document)-[document_observation]->(o)
+            WHERE type(document_observation)='HAS_ENTITY_OBSERVATION'
             RETURN o.observation_id AS observation_id,
                    properties(o)['document_id'] AS document_id,
                    properties(d)['title'] AS document_title,
@@ -6355,7 +6356,8 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (o:EntityObservation)
-            OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
+            OPTIONAL MATCH (d:Document)-[document_observation]->(o)
+            WHERE type(document_observation)='HAS_ENTITY_OBSERVATION'
             OPTIONAL MATCH (o)-[:RESOLVED_TO]->(e:Entity)
             WHERE (
                     $status='all'
@@ -6468,7 +6470,8 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (o:EntityObservation {observation_id:$observation_id})
-            OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
+            OPTIONAL MATCH (d:Document)-[document_observation]->(o)
+            WHERE type(document_observation)='HAS_ENTITY_OBSERVATION'
             OPTIONAL MATCH (o)-[:RESOLVED_TO]->(e:Entity)
             RETURN o.observation_id AS observation_id,
                    properties(o)['document_id'] AS document_id,

@@ -1,7 +1,7 @@
 # AKI RAG Middleware
 ## Technical documentation and command reference
 
-**Version:** `0.8.5-rc4.2`  
+**Version:** `0.8.5-rc4.3`  
 **Updated:** 20 September 2026
 
 This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
@@ -42,6 +42,21 @@ Reverse-proxy paths:
 
 Without a user UI, `/` redirects to `/rag-admin/`.
 
+### Internal API trust boundary
+
+Port `8765` is an internal FastAPI service and is loopback-bound by the supported profiles. RC4.3 enforces explicit route zones through central FastAPI dependencies:
+
+- `PUBLIC`: no internal machine credential; currently only `/live`;
+- `INTERNAL`: requires `X-AKI-Internal-Key` / `RAG_INTERNAL_API_KEY`;
+- `TRUSTED_PROVIDER`: requires the internal key plus `X-AKI-Provider-Key` / `RAG_PROVIDER_INTERNAL_KEY`;
+- `USER`: trusted-provider authentication plus a usable scoped identity in multi-user modes; Nextcloud live ACL remains the final document authorization boundary;
+- `ADMIN`: internal machine authentication plus RAG Admin Basic credentials.
+
+The bundled provider sends both internal and provider-role credentials. Bundled nginx receives and injects only the internal credential, after its configured proxy authentication layer, so an nginx-forwarded request cannot acquire provider privileges. Client-supplied internal-key values are overwritten by nginx.
+
+Core FastAPI routes expose their assigned zone in OpenAPI as `x-aki-security-zone`, and CI verifies the route/zone mapping. `X-RAG-User-ID` remains an identity lookup key used only after the trusted-provider boundary; it is **not** caller authentication. Direct access to port 8765 is unsupported. Native startup rejects non-loopback `RAG_API_HOST` unless `RAG_ALLOW_REMOTE_INTERNAL_API=true` is explicitly configured.
+
+
 ---
 
 # 2. Installation
@@ -54,19 +69,26 @@ sudo ./install/install.sh --plan --full
 
 ## 2.2 Standard/native installer options
 
-The public wrapper accepts `--profile standard|super-light` and `--deployment native|dockerized`. In the 0.8.5 line the regression-tested combinations are `standard+native` and `super-light+dockerized`. The options below belong to the standard/native profile.
+The public wrapper accepts `--profile standard|super-light` and `--deployment native|dockerized`. In the 0.8.5 line the regression-tested combinations are `standard+native` and `super-light+dockerized`. Common connection/frontend/proxy switches now use the same names in both profiles. Profile-specific resource switches remain separate because Super-Light deliberately has no Qdrant/reranker arm. On rerun, prior OpenWebUI/proxy selections are retained unless an explicit `--no-...` override is supplied. The options below belong to the standard/native profile.
 
 | Option | Meaning |
 |---|---|
 | `--prefix PATH` | installation directory, default `/opt/nextcloud-rag` |
 | `--user USER` | service user, default `rag` |
+| `--nextcloud-url URL` | override the Nextcloud base URL in `config.yaml` |
+| `--elasticsearch-url URL` | override the Elasticsearch endpoint in `config.yaml` |
+| `--elasticsearch-index ID` | override the Elasticsearch index in `config.yaml` |
 | `--skip-system-packages` | do not install OS packages/Docker |
 | `--with-qdrant` | install/start local Qdrant |
 | `--with-neo4j` | install/start local Neo4j |
 | `--core` | Qdrant + Neo4j |
-| `--with-openwebui` | install/start the pinned OpenWebUI build |
+| `--with-openwebui` | install/start or retain the pinned OpenWebUI build |
+| `--no-openwebui` | explicitly disable/remove the OpenWebUI container; persistent volume is retained |
 | `--full` | Qdrant + Neo4j + OpenWebUI |
-| `--no-proxy` | do not start the bundled nginx proxy |
+| `--with-proxy` | explicitly enable/retain the bundled nginx proxy |
+| `--no-proxy` | explicitly disable/remove the bundled nginx proxy |
+| `--proxy-http-port PORT` | nginx HTTP listen port; default 80 |
+| `--proxy-https-port PORT` | nginx HTTPS listen port; default 443 |
 | `--no-proxy-basic-auth` | disable nginx Basic Auth gate; rate limits remain |
 | `--multi-user` | explicit multi-user / credential-store mode; default |
 | `--single-user` | explicit single-user mode; live ACL remains enabled |
@@ -96,8 +118,10 @@ Super-Light has a separate CLI because it configures the external Nextcloud/Full
 | `--prefix PATH` | installation directory; default `/opt/nextcloud-rag` |
 | `--skip-system-packages` | do not install Docker/curl/jq/openssl |
 | `--no-start` | prepare files/images but do not start the stack |
-| `--with-openwebui` | also start the bundled OpenWebUI; default off |
-| `--with-proxy` | also start the bundled nginx TLS/auth gate; default off |
+| `--with-openwebui` | start/retain the bundled OpenWebUI; fresh default off |
+| `--no-openwebui` | explicitly disable/remove bundled OpenWebUI on rerun |
+| `--with-proxy` | start/retain the bundled nginx TLS/auth gate; fresh default off |
+| `--no-proxy` | explicitly disable/remove bundled nginx on rerun |
 | `--proxy-http-port PORT` | nginx HTTP listen port; default 80 |
 | `--proxy-https-port PORT` | nginx HTTPS listen port; default 443 |
 | `--ca-certificate FILE` | add a private root/intermediate CA to API/provider containers; repeatable |
@@ -1302,27 +1326,30 @@ Deleted:
 
 # 18. HTTP API quick reference
 
-Internal API, normally bound to `127.0.0.1:8765`:
+Internal API, normally bound to `127.0.0.1:8765`. The zone labels below are enforced by central dependencies; callers should use the provider or bundled admin/proxy paths rather than constructing internal headers manually.
 
 ```text
-POST   /auth/nextcloud/start
-POST   /auth/nextcloud/ensure
-GET    /auth/nextcloud/status/{flow_id}
-DELETE /auth/nextcloud/{rag_user_id}
-GET    /health
-POST   /web/search
-POST   /web/archive/finalize
-POST   /plan
-GET    /graph/stats
-POST   /graph/document
-POST   /graph/enqueue-evidence
-GET    /graph/queue/stats
-GET    /graph/queue/jobs
-POST   /graph/index-evidence
-POST   /documents/resolve
-POST   /elastic/search
-POST   /multi-search
-POST   /search
+GET    /live                              PUBLIC
+GET    /health                            INTERNAL
+POST   /auth/nextcloud/start              TRUSTED_PROVIDER
+POST   /auth/nextcloud/ensure             TRUSTED_PROVIDER
+GET    /auth/nextcloud/status/{flow_id}   TRUSTED_PROVIDER
+DELETE /auth/nextcloud/{rag_user_id}       ADMIN
+POST   /web/search                         USER
+POST   /web/archive/finalize               USER
+POST   /query-context                      TRUSTED_PROVIDER
+POST   /plan                               TRUSTED_PROVIDER
+GET    /graph/stats                        ADMIN
+POST   /graph/document                     ADMIN
+POST   /graph/enqueue-evidence             INTERNAL
+POST   /graph/research-findings            INTERNAL
+GET    /graph/queue/stats                  ADMIN
+GET    /graph/queue/jobs                   ADMIN
+POST   /graph/index-evidence               INTERNAL
+POST   /documents/resolve                  USER
+POST   /elastic/search                     USER
+POST   /multi-search                       USER
+POST   /search                             USER
 ```
 
 These endpoints are primarily internal Provider/Admin interfaces. Ordinary users talk to the OpenAI-compatible provider under `/v1/`.
@@ -1400,11 +1427,18 @@ Global secrets such as `LLM_API_KEY`, `WEB_SEARCH_API_KEY`, `ELASTICSEARCH_PASSW
 
 ## 19.5 TLS
 
-Nextcloud TLS verification is the default. `security.allow_insecure_nextcloud=true` is a lab escape hatch only.
+Nextcloud TLS verification is the default. `nextcloud.verify_tls` and
+`nextcloud.ca_file` are the canonical policy for Login Flow, live ACL, CardDAV,
+mail WebDAV and web archive. `security.allow_insecure_nextcloud=true` is a lab
+escape hatch only.
 
-Private CAs for Elasticsearch/LLM/Web can be installed through the corresponding CA/verify settings. In dockerized Super-Light, `install.sh --profile super-light --ca-certificate <PEM>` may be repeated; certificates are added to the API/Provider image trust store.
-
-For native deployments, maintain the private CA in the host trust store. If the Python runtime does not automatically use the system bundle, set `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` to the combined host CA bundle.
+Both supported installers accept repeatable `--ca-certificate <PEM>` options.
+They build a Nextcloud-specific CA bundle and point `nextcloud.ca_file` at it;
+the native profile does not set global `SSL_CERT_FILE` or
+`REQUESTS_CA_BUNDLE`, so unrelated public HTTPS clients retain their normal
+trust store. Super-Light additionally adds supplied anchors to its container
+system trust bundle. Private CAs for Elasticsearch/LLM/Web remain independently
+configurable through their corresponding CA/verify settings.
 
 ## 19.6 Untrusted evidence and prompt injection
 
@@ -1535,13 +1569,9 @@ JavaScript syntax         OK
 Package hygiene           OK
 ```
 
-The underlying Super-Light field path was installed and operated on a fresh Leap 15.3 clone. Later hardening changes mainly concern Findings curation, Admin JavaScript/CSP, publication hygiene and documentation.
+The rc4.3 release-candidate baseline has completed blank-VM acceptance for both supported deployment mappings. Super-Light/dockerized completed installation and passed document-search and RAG Admin checks with Playwright active as part of the normal stack. Standard/native completed installation and passed document-search and RAG Admin checks; the optional Playwright renderer was built and started automatically when selected. CI covers the shared regression suite, while the field passes exercise real Nextcloud/Elasticsearch/Neo4j and installer behavior.
 
-No new blank-VM run was performed in the neutral packaging environment after those later documentation/hardening changes; blank-VM acceptance remains part of operator validation before production rollout.
-
-The 0.8.5-rc4.2 hotfix baseline, including the ResearchRun/user-scoped curation hardening, RC4.1 authorization/installer/schema fixes and the post-review Neo4j/session-recovery fixes, is covered by the CI regression suite: **452 tests passed** on 20 September 2026. The Super-Light rerun path was additionally field-tested against an existing RC4 installation and Neo4j store.
-
-Container images in `versions.lock.yaml` are digest-pinned. Secrets are not part of the package.
+Registry images recorded in the Compose lock set are digest-pinned. The locally built Playwright renderer currently uses a version-tag-pinned Microsoft base image rather than an immutable base-image digest; this is documented deferred hardening in `KNOWN-LIMITATIONS.md`. Secrets are not part of the package.
 
 ## Role-specific LLM routing
 

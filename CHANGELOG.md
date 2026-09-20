@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.5-rc4.3 – 2026-09-20
+
+- Complete rc4.3 blank-VM acceptance for both supported deployment mappings (Standard/native and Super-Light/dockerized), align current documentation/version locks to rc4.3, and record deferred Playwright/Neo4j/WebDAV polish without changing the accepted runtime behavior.
+- Add explicit Standard installer switches `--with-playwright` / `--no-playwright`; they update `archive.renderer.enabled`, while reruns without either switch preserve the existing `web.yaml` choice.
+- Make reranking explicitly opt-in: Standard now defaults to `reranker.backend: none`, missing reranker configuration is treated as disabled, and the installer no longer downloads a Hugging Face reranker model unless `--with-reranker-download` is requested. TEI/local reranking remains available for controlled comparison tests.
+- Restore Standard-profile lifecycle management for the optional Playwright web-archive renderer: declare it as a Compose `renderer` profile, build/start it automatically when `archive.renderer.enabled=true`, remove it when disabled, persist `LOCAL_PLAYWRIGHT` state and expose its health in `status.sh`/smoke diagnostics.
+- Centralize outbound Nextcloud TLS under `nextcloud.verify_tls` / `nextcloud.ca_file` for Login Flow, live ACL, CardDAV, mail WebDAV and web archive; add repeatable `--ca-certificate` support to Standard as well as Super-Light so private Nextcloud CAs are scoped to Nextcloud traffic without replacing public OpenAI/Hugging Face trust. Standalone Nextcloud workers now also apply the configured X.509 strict compatibility policy.
+- Add fail-closed machine authentication and explicit `PUBLIC` / `TRUSTED_PROVIDER` / `INTERNAL` / `ADMIN` / `USER` zones for the internal FastAPI API. `RAG_INTERNAL_API_KEY` authenticates the service plane while the separate `RAG_PROVIDER_INTERNAL_KEY` proves trusted-provider role; USER routes additionally require a usable scoped identity before the existing Nextcloud live ACL authorizes evidence.
+- Inject the internal machine credential only from trusted nginx API/auth locations after the proxy's administrator/access authentication layer. Keep `/live`, RAG Admin and self-service curation on their existing dedicated authentication models.
+- Refuse accidental non-loopback native API binding unless `RAG_ALLOW_REMOTE_INTERNAL_API=true` is explicitly set, and authenticate direct health/status probes.
+- Generate and preserve both internal machine-role keys on Standard and Super-Light installer reruns without rotating existing valid keys; nginx receives only the general internal key, never the provider-role secret.
+- Harmonize the common Standard/Super-Light installer CLI: both profiles accept the same Nextcloud/Elasticsearch connection switches and symmetric OpenWebUI/proxy enable/disable flags plus proxy listen-port overrides.
+- Preserve prior OpenWebUI/proxy selections on rerun by default, while making `--no-openwebui` and `--no-proxy` authoritative overrides; Standard removes explicitly disabled containers but retains persistent volumes.
+- Allow Standard installer connection overrides to update `config.yaml` without replacing unrelated site configuration.
+- Add a fail-closed Standard rerun preflight: report recognized existing installations, detect native PID-file processes, active `rag-*.service` units and running Compose services, and abort before modifications when services are active or their state cannot be verified.
+- Fix Standard Neo4j schema initialization after Compose startup by running `python -m rag.graph` from the application root rather than `$PREFIX/install`; add 10-second progress notices while Neo4j/schema readiness is pending.
+- Probe Standard nginx health on the configured HTTPS listen port instead of hard-coding 443.
+
 ## 0.8.5-rc4.2 – 2026-09-20
 
 - Retry the **complete idempotent Neo4j schema upgrade** when the API recovers from a startup-time Neo4j outage before persisting Research Findings; do not mark Findings schema readiness after applying only the ResearchFinding subset.

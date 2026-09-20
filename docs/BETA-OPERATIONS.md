@@ -1,6 +1,6 @@
 # Beta operations runbook
 
-**Reference:** `0.8.5-rc4.2`  
+**Reference:** `0.8.5-rc4.3`  
 **Target:** controlled beta deployment behind an administrator-managed network boundary
 
 This document is the short operational path for the current beta candidate. For
@@ -23,8 +23,7 @@ Super-Light is one configuration of the same middleware, not a fork. Nextcloud,
 its FullTextSearch Elasticsearch and the LLM endpoint are administrator-managed
 dependencies outside the RAG stack; they may be on separate systems or, where
 ports/resources permit, on the same host. Locally the RAG stack runs API, provider,
-Neo4j Graph-Lite and Playwright; bundled nginx is optional. Qdrant and the local
-reranker are disabled.
+Neo4j Graph-Lite and Playwright; bundled nginx is optional. Playwright is part of the Super-Light stack by default and requires no `--with-playwright` switch. Qdrant and the local reranker are disabled.
 
 ## 2. Super-Light installation
 
@@ -41,10 +40,14 @@ sudo ./install/install.sh \
   --plan
 ```
 
-For an internal PKI, add one `--ca-certificate FILE` for each root/intermediate
-PEM certificate. If the chain is trusted but Python 3.13 rejects an older
-certificate only because strict RFC-5280 checks require an Authority Key
-Identifier, additionally use `--no-x509-strict`:
+For an internal PKI, both supported profiles accept one
+`--ca-certificate FILE` for each root/intermediate PEM certificate. The
+installer builds a Nextcloud-specific CA bundle and configures
+`nextcloud.ca_file`; the native profile does not replace the global Python CA
+bundle, so public OpenAI/Hugging Face trust remains unchanged. If the chain is
+trusted but Python 3.13 rejects an older certificate only because strict
+RFC-5280 checks require an Authority Key Identifier, additionally use
+`--no-x509-strict`:
 
 ```bash
 sudo ./install/install.sh \
@@ -61,6 +64,11 @@ sudo ./install/install.sh \
 
 `--no-x509-strict` does **not** disable normal CA-chain, hostname/SAN, signature
 or validity checks. Do not replace it with `verify_tls:false` in normal operation.
+
+The CA option covers AKI -> Nextcloud traffic. For the reverse direction
+(Nextcloud AKI Recherche app -> AKI HTTPS endpoint), an internal AKI server CA
+must also be imported into Nextcloud's own certificate store; a successful
+host-shell `curl` is not sufficient evidence for Nextcloud's HTTP client.
 
 ### Same host as Nextcloud/Apache
 
@@ -232,7 +240,7 @@ different ACLs.
 12. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
 13. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
 
-The Leap 15.3 beta host exercised document retrieval, CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Findings/Admin hardening is regression-tested; rerun this acceptance checklist before production rollout.
+The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and RAG Admin checks with Playwright active by default. Standard/native passed installation, document search and RAG Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout.
 
 ## 9. Resource reference
 
@@ -252,7 +260,7 @@ will be used. Nextcloud, Elasticsearch and the LLM are external in this figure.
 
 ## 10. Beta freeze
 
-0.8.5-rc4.2 is the consolidated deployment/operations baseline for the current beta hotfix.
+0.8.5-rc4.3 is the consolidated deployment/operations baseline for the current release candidate.
 Expected follow-up work before broader feature expansion is security/curation
 hardening, documentation consistency and adversarial code-vs-docs tests (ACL,
 aliases, Findings, archive boundaries and untrusted content). A change that alters

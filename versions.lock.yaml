@@ -1,4 +1,4 @@
-release: 0.8.5-rc4.2
+release: 0.8.5-rc4.3
 python:
   torch: 2.13.0+cpu
   transformers: 4.57.6
@@ -28,8 +28,9 @@ models:
   optional_graph_helper: gemma3:4b
   reranker: BAAI/bge-reranker-v2-m3 local, or external TEI
 notes:
-- Docker services shipped by the installer are digest-pinned; Compose tags are retained
-  only for readability.
+- Registry images listed in the Compose lock set are digest-pinned; Compose tags are retained
+  only for readability. The locally built Playwright renderer currently uses the tag-pinned
+  Microsoft Playwright base image v1.62.0-noble; base-image digest pinning is deferred hardening.
 - Ollama is no longer installed or managed by the middleware. LLM and embedding backends
   are administrator-managed external services.
 - SearXNG/Valkey are not bundled; public web search providers are external administrator-managed

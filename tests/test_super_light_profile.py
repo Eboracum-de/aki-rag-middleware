@@ -310,3 +310,52 @@ def test_super_light_installer_rejects_invalid_proxy_ports():
     )
     assert result.returncode == 2
     assert "--proxy-http-port must be an integer from 1 to 65535" in result.stderr
+
+
+def test_super_light_rerun_preserves_optional_services_unless_explicitly_disabled(tmp_path):
+    prefix = tmp_path / "aki"
+    (prefix / "install").mkdir(parents=True)
+    (prefix / "rag").mkdir()
+    (prefix / "config.yaml").write_text("{}\n")
+    (prefix / ".aki-rag-installation").write_text(
+        "AKI_RAG_INSTALLATION=1\nDEPLOYMENT_PROFILE=super-light\nDEPLOYMENT_MODE=dockerized\n"
+    )
+    (prefix / "install/install-state.env").write_text(
+        "DEPLOYMENT_PROFILE=super-light\n"
+        "LOCAL_OPENWEBUI=1\n"
+        "LOCAL_PROXY=1\n"
+        "PROXY_HTTP_PORT=81\n"
+        "PROXY_HTTPS_PORT=444\n"
+    )
+
+    inherited = subprocess.run(
+        [
+            "bash", str(ROOT / "install/install.sh"), "--profile", "super-light",
+            "--plan", "--prefix", str(prefix),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert inherited.returncode == 0, inherited.stderr
+    assert (
+        "OpenWebUI:               pull/start "
+        "(retained from existing install; use --no-openwebui to disable)"
+    ) in inherited.stdout
+    assert (
+        "Reverse proxy:           bundled/start on 81/444 "
+        "(retained from existing install; use --no-proxy to disable)"
+    ) in inherited.stdout
+
+    disabled = subprocess.run(
+        [
+            "bash", str(ROOT / "install/install.sh"), "--profile", "super-light",
+            "--plan", "--prefix", str(prefix), "--no-openwebui", "--no-proxy",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert disabled.returncode == 0, disabled.stderr
+    assert "OpenWebUI:               not pulled/not started" in disabled.stdout
+    assert "Reverse proxy:           disabled" in disabled.stdout

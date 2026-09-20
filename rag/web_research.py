@@ -38,6 +38,7 @@ from rag.acl import NextcloudLiveAcl, NextcloudCredential
 from rag.credential_store import CredentialStore, UserWebSettings
 from rag.llm_backend import build_llm_backend
 from rag.logging_utils import get_logger
+from rag.nextcloud_tls import nextcloud_verify_value
 from rag.source_registry import register_document
 
 log = get_logger("web")
@@ -884,8 +885,7 @@ class NextcloudWebArchive:
         self._render_gate = asyncio.Semaphore(self.render_background_runs)
         self._render_tasks: set[asyncio.Task[Any]] = set()
         self.timeout = float(archive.get("timeout") or 30)
-        self.verify_tls = _truthy(archive.get("verify_tls"), cfg_get(app_cfg, "acl.verify_tls", default=True))
-        self.ca_file = str(cfg_get(app_cfg, "acl.ca_file", default="") or "").strip() or None
+        self.nextcloud_verify = nextcloud_verify_value(app_cfg, archive, "acl")
         self.acl = NextcloudLiveAcl(app_cfg)
         store_path = str(
             cfg_get(app_cfg, "auth.credential_store", default=cfg_get(app_cfg, "acl.credential_store", default="runtime/users.sqlite"))
@@ -1005,7 +1005,7 @@ class NextcloudWebArchive:
             return None
         credential = self._credential(rag_user_id)
         url = self._url(credential, clean)
-        verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+        verify = self.nextcloud_verify
         async with httpx.AsyncClient(timeout=self.timeout, verify=verify) as client:
             response = await client.get(
                 url,
@@ -1360,7 +1360,7 @@ class NextcloudWebArchive:
             completed = 0
             failed = 0
             credential = self._credential(rag_user_id)
-            verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+            verify = self.nextcloud_verify
             async with httpx.AsyncClient(timeout=self.timeout, verify=verify) as client:
                 for query, source, score, reason, base_record, target_pdf in jobs:
                     record = dict(base_record)
@@ -1442,7 +1442,7 @@ class NextcloudWebArchive:
         fetch_log_path = ""
         render_jobs: list[tuple[str, FetchedSource, float, str, dict[str, str], str]] = []
 
-        verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+        verify = self.nextcloud_verify
         async with httpx.AsyncClient(timeout=self.timeout, verify=verify) as client:
             await self._ensure_dir(client, credential, directory)
 
@@ -1587,7 +1587,7 @@ class NextcloudWebArchive:
             raise RuntimeError("nextcloud.base_url missing for web archive")
         credential = self._credential(rag_user_id)
         target = f"{clean}/recherche.md"
-        verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+        verify = self.nextcloud_verify
         async with httpx.AsyncClient(timeout=self.timeout, verify=verify) as client:
             response = await client.get(
                 self._url(credential, target),

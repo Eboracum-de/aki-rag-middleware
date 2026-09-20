@@ -52,6 +52,7 @@ import httpx
 import yaml
 
 from rag.logging_utils import get_logger
+from rag.nextcloud_tls import nextcloud_verify_value
 from rag.credential_store import CredentialStore, MailAccount
 from rag.source_registry import register_document
 
@@ -1477,10 +1478,7 @@ def main() -> int:
     total_imported = 0
     had_error = False
     all_fts_ok = True
-    verify_nextcloud: bool | str = bool(acl_cfg.get("verify_tls", True))
-    ca_file = str(acl_cfg.get("ca_file") or "").strip()
-    if ca_file:
-        verify_nextcloud = ca_file
+    verify_nextcloud = nextcloud_verify_value(cfg, "acl")
 
     try:
         for account in accounts:

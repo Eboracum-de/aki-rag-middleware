@@ -9,6 +9,7 @@ set +a
 RUN_DIR="$BASE_DIR/run"
 LOCAL_PROXY=0
 LOCAL_OPENWEBUI=0
+LOCAL_PLAYWRIGHT=0
 [[ -f install/install-state.env ]] && source install/install-state.env
 
 proc_status() {
@@ -36,7 +37,9 @@ api_probe_host="${RAG_API_HOST:-127.0.0.1}"
 provider_probe_host="${PROVIDER_HOST:-127.0.0.1}"
 [[ "$provider_probe_host" == "0.0.0.0" || "$provider_probe_host" == "::" ]] && provider_probe_host="127.0.0.1"
 
-if curl -fsS --max-time 3 "http://${api_probe_host}:${RAG_API_PORT:-8765}/health" >/dev/null 2>&1; then
+api_auth_args=()
+[[ -n "${RAG_INTERNAL_API_KEY:-}" ]] && api_auth_args=(-H "X-AKI-Internal-Key: ${RAG_INTERNAL_API_KEY}")
+if curl -fsS --max-time 3 "${api_auth_args[@]}" "http://${api_probe_host}:${RAG_API_PORT:-8765}/health" >/dev/null 2>&1; then
   printf '%-14s OK http://%s:%s/health\n' api "$api_probe_host" "${RAG_API_PORT:-8765}"
 else
   printf '%-14s DOWN http://%s:%s/health\n' api "$api_probe_host" "${RAG_API_PORT:-8765}"
@@ -47,6 +50,14 @@ else
   printf '%-14s DOWN http://%s:%s/live\n' provider "$provider_probe_host" "${PROVIDER_PORT:-8766}"
 fi
 
+
+if [[ ${LOCAL_PLAYWRIGHT:-0} -eq 1 ]]; then
+  if curl -fsS --max-time 3 "http://127.0.0.1:${PLAYWRIGHT_PORT:-8090}/live" >/dev/null 2>&1; then
+    printf '%-14s OK http://127.0.0.1:%s/live\n' playwright "${PLAYWRIGHT_PORT:-8090}"
+  else
+    printf '%-14s DOWN http://127.0.0.1:%s/live\n' playwright "${PLAYWRIGHT_PORT:-8090}"
+  fi
+fi
 
 if [[ ${LOCAL_OPENWEBUI:-0} -eq 1 ]]; then
   if curl -fsS --max-time 3 "http://127.0.0.1:${OPENWEBUI_PORT:-3000}/health" >/dev/null 2>&1; then

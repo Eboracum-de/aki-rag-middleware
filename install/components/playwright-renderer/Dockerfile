@@ -2,7 +2,9 @@ FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN pip install --no-cache-dir \
       playwright==1.62.0 \

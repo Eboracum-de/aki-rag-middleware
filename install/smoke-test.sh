@@ -215,7 +215,9 @@ api_probe_host="${RAG_API_HOST:-127.0.0.1}"
 provider_probe_host="${PROVIDER_HOST:-0.0.0.0}"
 [[ "$provider_probe_host" == "0.0.0.0" || "$provider_probe_host" == "::" ]] && provider_probe_host="127.0.0.1"
 
-if curl -fsS "http://${api_probe_host}:${RAG_API_PORT:-8765}/health" >/dev/null 2>&1; then
+api_auth_args=()
+[[ -n "${RAG_INTERNAL_API_KEY:-}" ]] && api_auth_args=(-H "X-AKI-Internal-Key: ${RAG_INTERNAL_API_KEY}")
+if curl -fsS "${api_auth_args[@]}" "http://${api_probe_host}:${RAG_API_PORT:-8765}/health" >/dev/null 2>&1; then
   ok "RAG API health"
 else
   echo "[INFO] RAG API not running yet."

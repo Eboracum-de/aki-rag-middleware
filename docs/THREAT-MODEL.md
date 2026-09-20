@@ -1,6 +1,6 @@
 # Threat model and security boundaries
 
-**Reference:** `0.8.5-rc4.2`
+**Reference:** `0.8.5-rc4.3`
 
 This document states the security assumptions of AKI RAG Middleware as they exist in the current release-candidate line. It separates **retrieval knowledge**, **authorization**, and **answer evidence** because these have deliberately different sharing rules.
 

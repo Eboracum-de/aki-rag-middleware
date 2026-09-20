@@ -107,7 +107,7 @@ EMBEDDING_MODEL = str(
 QDRANT_ENABLED = bool((config.get("qdrant") or {}).get("enabled", True))
 NEO4J_ENABLED = bool((config.get("neo4j") or {}).get("enabled", True))
 RERANKER_CONFIG = config.get("reranker", {}) or {}
-RERANKER_ENABLED = str(RERANKER_CONFIG.get("backend", "local") or "local").strip().lower() not in {"none", "off", "disabled"}
+RERANKER_ENABLED = str(RERANKER_CONFIG.get("backend", "none") or "none").strip().lower() not in {"none", "off", "disabled"}
 QDRANT_URL = (
     config["qdrant"]["url"]
 )

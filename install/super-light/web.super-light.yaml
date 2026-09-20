@@ -54,4 +54,3 @@ archive:
       dismiss_overlays: true
       remove_overlays: false
   timeout: 30
-  verify_tls: true

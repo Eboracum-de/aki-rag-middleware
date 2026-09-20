@@ -33,6 +33,7 @@ import xml.etree.ElementTree as ET
 import httpx
 
 from rag.credential_store import CredentialStore
+from rag.nextcloud_tls import nextcloud_verify_value
 
 
 DAV_NS = "DAV:"
@@ -189,8 +190,9 @@ class NextcloudLiveAcl:
         self.identity_mode = str(_cfg_get(cfg, "acl.identity_mode", default="single_user") or "single_user").strip().lower()
         self.timeout = float(_cfg_get(cfg, "acl.timeout", default=15.0) or 15.0)
         self.batch_size = max(1, min(500, int(_cfg_get(cfg, "acl.batch_size", default=100) or 100)))
-        self.verify_tls = _truthy(_cfg_get(cfg, "acl.verify_tls", default=_cfg_get(cfg, "carddav.verify_tls", default=True)), True)
-        self.ca_file = str(_cfg_get(cfg, "acl.ca_file", default="") or "").strip() or None
+        verify = nextcloud_verify_value(cfg, "acl", "carddav")
+        self.verify_tls = verify if isinstance(verify, bool) else True
+        self.ca_file = verify if isinstance(verify, str) else None
         explicit_url = str(_cfg_get(cfg, "acl.webdav_url", default="") or "").strip()
         if explicit_url:
             self.webdav_url = explicit_url.rstrip("/") + "/"

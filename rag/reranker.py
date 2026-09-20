@@ -35,7 +35,7 @@ MODEL_NAME = str(
     reranker_config.get("model", "BAAI/bge-reranker-v2-m3")
 ).strip()
 
-BACKEND = str(reranker_config.get("backend", "local") or "local").strip().lower()
+BACKEND = str(reranker_config.get("backend", "none") or "none").strip().lower()
 DEVICE = str(reranker_config.get("device", "cpu") or "cpu").strip()
 MAX_LENGTH = int(reranker_config.get("max_length", 512) or 512)
 BATCH_SIZE = int(reranker_config.get("batch_size", 4) or 4)
@@ -189,7 +189,7 @@ class Reranker:
         self.device_name = str(device).strip() or "cpu"
         self.max_length = max(32, int(max_length))
         self.batch_size = max(1, int(batch_size))
-        self.backend = str(backend or "local").strip().lower()
+        self.backend = str(backend or "none").strip().lower()
         self.tei_url = str(tei_url or "").strip().rstrip("/")
         self.timeout_seconds = max(1.0, float(timeout_seconds))
         self.tei_batch_size = max(1, int(tei_batch_size))

@@ -116,6 +116,9 @@ def test_optional_relationship_reads_do_not_require_preexisting_type_tokens():
         GraphStore.list_merges: {"MERGED_INTO"},
         GraphStore.entity_relation_observations: {"SUBJECT", "OBJECT", "HAS_RELATION_OBSERVATION"},
         GraphStore.list_relation_observations: {"SUBJECT", "OBJECT", "HAS_RELATION_OBSERVATION"},
+        GraphStore.entity_observations: {"HAS_ENTITY_OBSERVATION"},
+        GraphStore.list_observations: {"HAS_ENTITY_OBSERVATION"},
+        GraphStore._observation_curation_summary: {"HAS_ENTITY_OBSERVATION"},
         GraphStore.entity_detail: {"MERGED_INTO"},
         GraphStore.list_merge_candidates: {"POSSIBLE_SAME_AS"},
         GraphStore.stats: {
