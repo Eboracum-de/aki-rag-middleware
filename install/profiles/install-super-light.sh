@@ -12,6 +12,8 @@ PLAN_ONLY=0
 START_STACK=1
 WITH_OPENWEBUI=0
 WITH_PROXY=0
+PROXY_HTTP_PORT=80
+PROXY_HTTPS_PORT=443
 CA_CERTIFICATES=()
 X509_STRICT=0
 
@@ -32,7 +34,9 @@ Options:
   --skip-system-packages    Do not install Docker/curl/jq/openssl
   --no-start                Prepare files/images but do not start the stack
   --with-openwebui          Also start bundled OpenWebUI (default: off)
-  --with-proxy              Also start bundled nginx on host 80/443 (default: off)
+  --with-proxy              Also start bundled nginx (default: off)
+  --proxy-http-port PORT     nginx HTTP listen port (default: 80)
+  --proxy-https-port PORT    nginx HTTPS listen port (default: 443)
   --ca-certificate FILE     Trust one private CA certificate inside API/provider containers; repeatable
   --x509-strict             Enable Python/OpenSSL VERIFY_X509_STRICT (default: off)
   --no-x509-strict          Compatibility alias; keep strict mode disabled
@@ -58,6 +62,8 @@ while [[ $# -gt 0 ]]; do
     --no-start) START_STACK=0; shift ;;
     --with-openwebui) WITH_OPENWEBUI=1; shift ;;
     --with-proxy) WITH_PROXY=1; shift ;;
+    --proxy-http-port) [[ $# -ge 2 ]] || { echo "--proxy-http-port requires a port" >&2; exit 2; }; PROXY_HTTP_PORT="$2"; shift 2 ;;
+    --proxy-https-port) [[ $# -ge 2 ]] || { echo "--proxy-https-port requires a port" >&2; exit 2; }; PROXY_HTTPS_PORT="$2"; shift 2 ;;
     --ca-certificate) [[ $# -ge 2 ]] || { echo "--ca-certificate requires a file" >&2; exit 2; }; CA_CERTIFICATES+=("$2"); shift 2 ;;
     --x509-strict) X509_STRICT=1; shift ;;
     --no-x509-strict) X509_STRICT=0; shift ;;
@@ -69,6 +75,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { printf '\n==> %s\n' "$*"; }
+
+validate_port() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 || 10#$value > 65535 )); then
+    echo "$name must be an integer from 1 to 65535: $value" >&2
+    exit 2
+  fi
+}
+validate_port --proxy-http-port "$PROXY_HTTP_PORT"
+validate_port --proxy-https-port "$PROXY_HTTPS_PORT"
+if [[ "$PROXY_HTTP_PORT" == "$PROXY_HTTPS_PORT" ]]; then
+  echo "--proxy-http-port and --proxy-https-port must be different" >&2
+  exit 2
+fi
 
 print_plan() {
   # Conservative image/layer estimate only. Neo4j data, web archive and other
@@ -82,7 +103,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-AKI RAG Middleware 0.8.5-rc4 - super-light installation profile
+AKI RAG Middleware 0.8.5-rc4.1 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized
@@ -95,7 +116,7 @@ Qdrant/embeddings:       disabled / not installed
 Reranker/TEI:            disabled / not installed
 Playwright archive:      local renderer enabled
 OpenWebUI:               $([[ $WITH_OPENWEBUI -eq 1 ]] && echo pull/start || echo not pulled/not started)
-Reverse proxy:           $([[ $WITH_PROXY -eq 1 ]] && echo bundled/start || echo disabled)
+Reverse proxy:           $([[ $WITH_PROXY -eq 1 ]] && echo "bundled/start on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}" || echo disabled)
 Nextcloud URL:           ${NEXTCLOUD_URL:-<required before start>}
 Elasticsearch URL:       ${ELASTICSEARCH_URL:-<required before start>}
 Elasticsearch index:     $ELASTICSEARCH_INDEX
@@ -321,22 +342,35 @@ fi
 idx="$(sed_repl "$ELASTICSEARCH_INDEX")"
 sed -i "/^elasticsearch:/,/^[^[:space:]]/ s|^  index:.*|  index: ${idx}|" "$PREFIX/config.yaml"
 
+set_runtime_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$PREFIX/runtime.env"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$PREFIX/runtime.env"
+  else
+    printf '%s=%s\\n' "$key" "$value" >> "$PREFIX/runtime.env"
+  fi
+}
+
 NEO4J_PASSWORD="$(sed -n 's/^NEO4J_PASSWORD=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$NEO4J_PASSWORD" || "$NEO4J_PASSWORD" == "replace-me" ]]; then
   NEO4J_PASSWORD="$(random_secret)"
-  sed -i "s|^NEO4J_PASSWORD=.*|NEO4J_PASSWORD=${NEO4J_PASSWORD}|" "$PREFIX/runtime.env"
+  set_runtime_env_value NEO4J_PASSWORD "$NEO4J_PASSWORD"
 fi
 PROVIDER_API_KEY="$(sed -n 's/^PROVIDER_API_KEY=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$PROVIDER_API_KEY" || "$PROVIDER_API_KEY" == "replace-me" ]]; then
   PROVIDER_API_KEY="$(random_secret)"
-  sed -i "s|^PROVIDER_API_KEY=.*|PROVIDER_API_KEY=${PROVIDER_API_KEY}|" "$PREFIX/runtime.env"
+  set_runtime_env_value PROVIDER_API_KEY "$PROVIDER_API_KEY"
 fi
 ADMIN_USER="$(sed -n 's/^RAG_ADMIN_USER=//p' "$PREFIX/runtime.env" | head -1)"
-[[ -n "$ADMIN_USER" ]] || ADMIN_USER="admin"
+if [[ -z "$ADMIN_USER" || "$ADMIN_USER" == "replace-me" ]]; then
+  ADMIN_USER="admin"
+  set_runtime_env_value RAG_ADMIN_USER "$ADMIN_USER"
+fi
 ADMIN_PASSWORD="$(sed -n 's/^RAG_ADMIN_PASSWORD=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$ADMIN_PASSWORD" || "$ADMIN_PASSWORD" == "replace-me" ]]; then
   ADMIN_PASSWORD="$(random_secret)"
-  sed -i "s|^RAG_ADMIN_PASSWORD=.*|RAG_ADMIN_PASSWORD=${ADMIN_PASSWORD}|" "$PREFIX/runtime.env"
+  set_runtime_env_value RAG_ADMIN_PASSWORD "$ADMIN_PASSWORD"
 fi
 chmod 600 "$PREFIX/runtime.env" "$PREFIX/provider.env"
 
@@ -423,12 +457,20 @@ EOFSSL
   fi
   chmod 600 "$TLS_DIR/server.key"
   chmod 644 "$TLS_DIR/server.crt"
-  printf 'admin:%s\n' "$(openssl passwd -apr1 "$ADMIN_PASSWORD")" > "$PREFIX/install/nginx/htpasswd"
+  printf '%s:%s\n' "${ADMIN_USER:-admin}" "$(openssl passwd -apr1 "$ADMIN_PASSWORD")" > "$PREFIX/install/nginx/htpasswd"
   chmod 644 "$PREFIX/install/nginx/htpasswd"
   if [[ $WITH_OPENWEBUI -eq 1 ]]; then
     cp "$PREFIX/install/nginx/nginx-openwebui.conf" "$PREFIX/install/nginx/generated.conf"
   else
     cp "$PREFIX/install/nginx/nginx.conf" "$PREFIX/install/nginx/generated.conf"
+  fi
+  sed -i \
+    -e "s/listen 80 default_server;/listen ${PROXY_HTTP_PORT} default_server;/" \
+    -e "s/listen 443 ssl default_server;/listen ${PROXY_HTTPS_PORT} ssl default_server;/" \
+    "$PREFIX/install/nginx/generated.conf"
+  if [[ "$PROXY_HTTPS_PORT" != "443" ]]; then
+    sed -i 's|return 308 https://$host$request_uri;|return 308 https://$host:'"${PROXY_HTTPS_PORT}"'$request_uri;|' \
+      "$PREFIX/install/nginx/generated.conf"
   fi
 
 fi
@@ -543,6 +585,26 @@ curl -fsS http://127.0.0.1:8765/live >/dev/null || { echo "RAG API did not becom
 curl -fsS http://127.0.0.1:8766/live >/dev/null || { echo "Provider did not become live" >&2; compose logs --tail=100 provider; exit 1; }
 curl -fsS http://127.0.0.1:8090/live >/dev/null || { echo "Playwright renderer did not become live" >&2; compose logs --tail=100 playwright-renderer; exit 1; }
 
+log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"
+NEO4J_SCHEMA_READY=0
+for attempt in $(seq 1 90); do
+  if compose exec -T api python -m rag.graph --config /app/config.yaml init >/dev/null 2>&1; then
+    NEO4J_SCHEMA_READY=1
+    break
+  fi
+  if [[ $attempt -eq 1 || $((attempt % 10)) -eq 0 ]]; then
+    printf '  Neo4j/schema: waiting (attempt %d/90)\n' "$attempt"
+  fi
+  sleep 2
+done
+if [[ $NEO4J_SCHEMA_READY -ne 1 ]]; then
+  echo "Neo4j did not become ready or the AKI schema upgrade failed." >&2
+  compose exec -T api python -m rag.graph --config /app/config.yaml init >&2 || true
+  compose logs --tail=120 neo4j api >&2 || true
+  exit 1
+fi
+printf '  Neo4j/schema: ready\n'
+
 cat <<DONE
 
 Super-light installation profile installed.
@@ -553,7 +615,7 @@ Local services:
   Neo4j:      bolt://127.0.0.1:7687 (Browser via SSH tunnel to 7474)
   Playwright: http://127.0.0.1:8090
   OpenWebUI:  $([[ $WITH_OPENWEBUI -eq 1 ]] && echo http://127.0.0.1:3000 || echo disabled)
-  nginx:      $([[ $WITH_PROXY -eq 1 ]] && echo enabled || echo disabled)
+  nginx:      $([[ $WITH_PROXY -eq 1 ]] && echo "enabled on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}" || echo disabled)
   CA trust:   $([[ -d "$PREFIX/runtime/ca" ]] && find "$PREFIX/runtime/ca" -maxdepth 1 -name "*.crt" -type f 2>/dev/null | wc -l || echo 0) private certificate(s) baked into API/provider image
   X509 strict: $([[ $X509_STRICT -eq 1 ]] && echo enabled || echo disabled-compatibility-mode)
 

@@ -804,6 +804,8 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         decision = curation_acl.authorize_with_credential(
             candidates, username=credential.username, password=credential.secret
         )
+        if not decision.enabled:
+            return [], "Live ACL ist deaktiviert; nutzerbezogene Findings werden nicht angezeigt."
         allowed = {str(item.get("_finding_id") or "") for item in decision.results}
         return [item for item in findings if str(item.get("finding_id") or "") in allowed], ""
 
@@ -838,18 +840,39 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         allowed = {str(item.get("_scope_row_id") or "") for item in decision.results}
         return [item for index, item in enumerate(rows) if str(index) in allowed], ""
 
-    def _require_admin_finding_context(canonical_user_id: str, finding_id: str) -> None:
+    def _require_admin_findings_context(
+        canonical_user_id: str,
+        finding_ids: list[str],
+    ) -> list[dict[str, Any]]:
         if not admin_user_context_enabled:
             raise HTTPException(status_code=403, detail="Admin user-context curation is disabled")
+        ids = list(dict.fromkeys(
+            str(value or "").strip() for value in finding_ids if str(value or "").strip()
+        ))
+        rows: list[dict[str, Any]] = []
         with GraphCurator.from_config(cfg) as curator:
-            if not curator.research_finding_observed_by_user(canonical_user_id, finding_id):
-                raise HTTPException(status_code=404, detail="Finding was not observed by the selected user")
-            rows = [row for row in curator.list_research_findings(limit=2000) if str(row.get("finding_id") or "") == finding_id]
+            for finding_id in ids:
+                if not curator.research_finding_observed_by_user(canonical_user_id, finding_id):
+                    raise HTTPException(status_code=404, detail="Finding was not observed by the selected user")
+                detail = curator.get_research_finding(finding_id)
+                if detail is None:
+                    raise HTTPException(status_code=404, detail="Finding not found")
+                finding = dict(detail.get("finding") or {})
+                document = dict(detail.get("document") or {})
+                rows.append({
+                    "finding_id": str(finding.get("finding_id") or finding_id),
+                    "document_id": str(document.get("document_id") or ""),
+                })
         visible, error = _acl_filter_findings_for_canonical_user(canonical_user_id, rows)
         if error:
             raise HTTPException(status_code=403, detail=error)
-        if not visible:
+        visible_ids = {str(item.get("finding_id") or "") for item in visible}
+        if any(finding_id not in visible_ids for finding_id in ids):
             raise HTTPException(status_code=404, detail="Finding is not visible in the selected Nextcloud user context")
+        return visible
+
+    def _require_admin_finding_context(canonical_user_id: str, finding_id: str) -> None:
+        _require_admin_findings_context(canonical_user_id, [finding_id])
 
     def _require_admin_research_run_context(canonical_user_id: str, run_id: str) -> dict[str, Any]:
         if not admin_user_context_enabled:
@@ -1057,8 +1080,10 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         canonical_user_id = (values.get("canonical_user_id", [""])[-1] or "").strip()
         finding_ids = [x.strip() for x in values.get("finding_id", []) if x.strip()]
         try:
-            for finding_id in finding_ids:
-                _require_admin_finding_context(canonical_user_id, finding_id)
+            run = _require_admin_research_run_context(canonical_user_id, run_id)
+            visible_ids = {str(item.get("finding_id") or "") for item in (run.get("findings") or [])}
+            if any(finding_id not in visible_ids for finding_id in finding_ids):
+                raise HTTPException(status_code=404, detail="Finding is not visible in this research run")
             with GraphCurator.from_config(cfg) as curator:
                 result = curator.set_research_run_finding_disposition(
                     run_id, finding_ids, disposition="dismissed",
@@ -1079,8 +1104,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             canonical_user_id = (values.get("canonical_user_id", [""])[-1] or "").strip()
             if not canonical_user_id:
                 raise ValueError("Nextcloud-Benutzerkontext fehlt")
-            for finding_id in finding_ids:
-                _require_admin_finding_context(canonical_user_id, finding_id)
+            _require_admin_findings_context(canonical_user_id, finding_ids)
             entity_text = (values.get("entity_text", [""])[-1] or "").strip()
             action = (values.get("action", [""])[-1] or "").strip().casefold()
             target_entity_id = (values.get("target_entity_id", [""])[-1] or "").strip()

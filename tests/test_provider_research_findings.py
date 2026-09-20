@@ -97,3 +97,28 @@ async def test_research_finding_scope_guard_rejects_unselected_chatarchive(monke
     )
 
     assert _Client.payload is None
+
+
+@pytest.mark.asyncio
+async def test_graph_evidence_hook_does_not_depend_on_undefined_source_scopes(monkeypatch):
+    monkeypatch.setattr(provider, "GRAPH_EVIDENCE_HOOK_ENABLED", True)
+    monkeypatch.setattr(provider.httpx, "AsyncClient", _Client)
+    _Client.payload = None
+    result = provider.SearchResult(
+        index=1,
+        title="evidence.pdf",
+        text="Relevant evidence",
+        raw={"document_id": "files:42", "path": "/evidence.pdf"},
+    )
+
+    await provider._graph_enqueue_evidence(
+        query_id="q-graph",
+        user_query="question",
+        retrieval_query="question",
+        evidence_action="answer",
+        results=[result],
+        rag_user_id="alice",
+    )
+
+    assert _Client.payload is not None
+    assert _Client.payload["documents"][0]["document_id"] == "files:42"

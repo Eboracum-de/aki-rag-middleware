@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.8.5-rc4.1 – 2026-09-20
+
+- Document the complete Super-Light installer CLI and support reproducible alternate nginx listen ports (`--proxy-http-port` / `--proxy-https-port`) for same-host Nextcloud/Apache deployments; add a path-scoped Apache reverse-proxy example that leaves the Nextcloud root untouched.
+- Preserve Super-Light admin credentials across reruns, persist regenerated runtime secret keys when legacy entries are missing, use the configured admin username consistently for nginx Basic Auth, and report successful Neo4j schema readiness explicitly.
+- Make sparse/optional Neo4j relationship reads warning-safe in admin diagnostics, entity/merge lookup, relation views and legacy backfills, avoiding `UnknownRelationshipTypeWarning` when types such as `MENTIONS_NAME` or `MERGED_INTO` have never yet been created.
+- Consolidate the Neo4j application schema: document the complete node/relationship/property contract, replace synthetic property-token markers with warning-safe optional reads, add missing indexes and idempotent legacy backfills, and run the full schema upgrade from standard/Super-Light installers plus a nonfatal API-startup fallback.
+- Fail closed in self-service Finding curation when live Nextcloud ACL is disabled or an ACL decision is unavailable instead of exposing the unfiltered Finding set.
+- Treat `install-state.env` strictly as allowlisted data after validating the installation prefix; never execute state-file contents as shell code.
+- Remove global 2,000-Finding lookup windows from single-Finding guards and ResearchRun reconstruction; load the exact produced/selected Findings and batch ACL checks for bulk actions.
+- Keep API startup available when an ephemeral curation-session row cannot be decrypted; discard the unusable local row while continuing cleanup of valid sessions.
+- Move blocking Nextcloud Login Flow, revocation and self-service ACL work off the FastAPI event loop.
+- Repair the optional graph-evidence enqueue hook so enabling it cannot fail on an undefined `source_scopes` variable.
+- Make Super-Light wait for Neo4j schema readiness and retry the idempotent schema initialization during first start, avoiding an early Bolt-handshake race while the database is still coming up.
+- Correct the RC4 validation baseline and public release-candidate lineage in the technical/install documentation.
 
 Planned follow-up work is tracked in `docs/ROADMAP.md`.
 

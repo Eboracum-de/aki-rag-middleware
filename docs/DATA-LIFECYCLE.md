@@ -1,6 +1,6 @@
 # Data lifecycle, deletion, backup and restore
 
-**Reference:** `0.8.5-rc4`
+**Reference:** `0.8.5-rc4.1`
 
 AKI deliberately reuses Nextcloud and its FullTextSearch infrastructure, but it also creates derived state. Operators therefore need to distinguish **authoritative source data**, **rebuildable indexes** and **state that contains manual work or credentials**.
 
@@ -91,7 +91,7 @@ Elasticsearch recovery is primarily a Nextcloud/FullTextSearch operational conce
 
 ## 6. Restore order
 
-There is no automated cross-service consistent-restore command in 0.8.5-rc4. A conservative manual order is:
+There is no automated cross-service consistent-restore command in 0.8.5-rc4.1. A conservative manual order is:
 
 1. restore Nextcloud and its authoritative files/shares;
 2. restore AKI configuration, `runtime/users.sqlite` and the matching credential master key;
@@ -105,7 +105,7 @@ A snapshot that mixes an old `users.sqlite` with a newer master key, or vice ver
 
 ## 7. Key rotation
 
-The current credential format is versioned and authenticated, but 0.8.5-rc4 does not provide a documented zero-downtime master-key rotation workflow for all encrypted rows.
+The current credential format is versioned and authenticated, but 0.8.5-rc4.1 does not provide a documented zero-downtime master-key rotation workflow for all encrypted rows.
 
 Until a dedicated rotation command exists, operators should not replace the master key independently of the encrypted store. Back up the existing key and database before any credential migration.
 

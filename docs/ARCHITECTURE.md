@@ -1,9 +1,9 @@
 # AKI RAG Middleware
-## Architecture and design baseline 0.8.5-rc4
+## Architecture and design baseline 0.8.5-rc4.1
 
 **Updated:** 19 September 2026  
 **Status:** Release Candidate  
-**Reference version:** `0.8.5-rc4`
+**Reference version:** `0.8.5-rc4.1`
 
 ---
 
@@ -676,7 +676,7 @@ The middleware uses explicit states for incomplete or uncertain processing:
 
 ## 18. Current release-candidate boundaries
 
-`0.8.5-rc4` is the current public beta baseline.
+`0.8.5-rc4.1` is the current public beta hotfix baseline.
 
 Known limits include:
 

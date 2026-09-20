@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from starlette.templating import Jinja2Templates
 
 from rag.acl import NextcloudLiveAcl
@@ -60,6 +61,45 @@ def _verify_tls(cfg: dict[str, Any]) -> bool | str:
         cfg_get(cfg, "auth.verify_tls", default=cfg_get(cfg, "acl.verify_tls", default=True)),
         True,
     )
+
+
+def _filter_findings_with_acl(
+    acl: NextcloudLiveAcl,
+    session: CurationSession,
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Filter self-service Findings through the current Nextcloud ACL, fail closed."""
+    if not acl.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Live ACL is disabled; self-service Finding curation is unavailable",
+        )
+    candidates = [
+        {
+            "document_id": str(item.get("document_id") or ""),
+            "_finding_id": str(item.get("finding_id") or ""),
+        }
+        for item in findings
+        if str(item.get("document_id") or "").strip()
+    ]
+    if not candidates:
+        return []
+    decision = acl.authorize_with_credential(
+        candidates,
+        username=session.nextcloud_login,
+        password=session.app_password,
+    )
+    if not decision.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Live ACL is disabled; self-service Finding curation is unavailable",
+        )
+    allowed = {str(item.get("_finding_id") or "") for item in decision.results}
+    return [
+        item
+        for item in findings
+        if str(item.get("finding_id") or "") in allowed
+    ]
 
 
 def _revoke_app_password(session: CurationSession, cfg: dict[str, Any]) -> bool:
@@ -108,7 +148,16 @@ def invalidate_curation_session(
 def cleanup_stale_curation_sessions(cfg: dict[str, Any]) -> dict[str, int]:
     """Invalidate and revoke every curation token left by an earlier API process."""
     store = _store(cfg)
-    sessions = store.list_curation_sessions()
+    sessions, undecryptable = store.list_curation_sessions_for_cleanup()
+    for session_id_hash in undecryptable:
+        store.delete_curation_session_by_hash(session_id_hash)
+    if undecryptable:
+        log.warning(
+            "Discarded %d undecryptable local curation session(s); their Nextcloud "
+            "app passwords could not be revoked automatically.",
+            len(undecryptable),
+        )
+
     revoked = 0
     pending = 0
     for session in sessions:
@@ -118,12 +167,13 @@ def cleanup_stale_curation_sessions(cfg: dict[str, Any]) -> dict[str, int]:
             revoked += 1
         else:
             pending += 1
-    if sessions:
+    found = len(sessions) + len(undecryptable)
+    if found:
         log.info(
             "Startup curation-session cleanup: found=%d revoked=%d pending=%d",
-            len(sessions), revoked, pending,
+            found, revoked, pending,
         )
-    return {"found": len(sessions), "revoked": revoked, "pending": pending}
+    return {"found": found, "revoked": revoked, "pending": pending}
 
 
 def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
@@ -192,7 +242,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         values = await form_values(request)
         return {key: (vals[-1] if vals else "") for key, vals in values.items()}
 
-    def session_from_request(request: Request) -> tuple[str, CurationSession]:
+    async def session_from_request(request: Request) -> tuple[str, CurationSession]:
         if not globally_enabled():
             raise HTTPException(status_code=404, detail="Self-service Finding curation is disabled")
         token = str(request.cookies.get(COOKIE_NAME) or "").strip()
@@ -202,11 +252,11 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         if session is None:
             stale = store.get_curation_session_any(token)
             if stale is not None:
-                invalidate_curation_session(store, stale, cfg)
+                await run_in_threadpool(invalidate_curation_session, store, stale, cfg)
             raise HTTPException(status_code=401, detail="Curation session expired")
         user = store.get_canonical_user(session.canonical_user_id)
         if user is None or not user.enabled or not user.findings_curation_enabled:
-            invalidate_curation_session(store, session, cfg)
+            await run_in_threadpool(invalidate_curation_session, store, session, cfg)
             raise HTTPException(status_code=403, detail="Finding curation is not enabled for this user")
         return token, session
 
@@ -214,31 +264,31 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         if not supplied or not secrets.compare_digest(session.csrf_token, str(supplied)):
             raise HTTPException(status_code=403, detail="Invalid curation CSRF token")
 
-    def filter_findings(session: CurationSession, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        candidates = [
-            {"document_id": str(item.get("document_id") or ""), "_finding_id": str(item.get("finding_id") or "")}
-            for item in findings
-            if str(item.get("document_id") or "").strip()
-        ]
-        if not candidates:
-            return []
-        decision = acl.authorize_with_credential(
-            candidates,
-            username=session.nextcloud_login,
-            password=session.app_password,
+    async def filter_findings(
+        session: CurationSession,
+        findings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return await run_in_threadpool(
+            _filter_findings_with_acl,
+            acl,
+            session,
+            findings,
         )
-        allowed = {str(item.get("_finding_id") or "") for item in decision.results}
-        return [item for item in findings if str(item.get("finding_id") or "") in allowed]
 
-    def require_finding(session: CurationSession, finding_id: str) -> dict[str, Any]:
+    async def require_finding(session: CurationSession, finding_id: str) -> dict[str, Any]:
         with GraphCurator.from_config(cfg) as curator:
             if not curator.research_finding_observed_by_user(session.canonical_user_id, finding_id):
                 raise HTTPException(status_code=404, detail="Finding not observed by current user")
-            rows = [
-                row for row in curator.list_research_findings(limit=2000)
-                if str(row.get("finding_id") or "") == finding_id
-            ]
-        visible = filter_findings(session, rows)
+            detail = curator.get_research_finding(finding_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        finding = dict(detail.get("finding") or {})
+        document = dict(detail.get("document") or {})
+        row = {
+            "finding_id": str(finding.get("finding_id") or finding_id),
+            "document_id": str(document.get("document_id") or ""),
+        }
+        visible = await filter_findings(session, [row])
         if not visible:
             raise HTTPException(status_code=404, detail="Finding is not visible under current Nextcloud ACL")
         return visible[0]
@@ -253,7 +303,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
     async def home(request: Request, state: str = "open", q: str = ""):
         message = request.query_params.get("msg", "")
         try:
-            _token, session = session_from_request(request)
+            _token, session = await session_from_request(request)
         except HTTPException:
             return render(
                 request,
@@ -275,7 +325,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         all_findings: list[dict[str, Any]] = []
         for run in runs:
             all_findings.extend(list(run.get("findings") or []))
-        visible = filter_findings(session, all_findings)
+        visible = await filter_findings(session, all_findings)
         allowed_ids = {str(x.get("finding_id") or "") for x in visible}
 
         shown: list[dict[str, Any]] = []
@@ -322,13 +372,12 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
             raise HTTPException(status_code=404, detail="Self-service Finding curation is disabled")
         if not nextcloud_base:
             raise HTTPException(status_code=503, detail="nextcloud.base_url is not configured")
-        response = httpx.request(
-            "POST",
-            nextcloud_base + "/index.php/login/v2",
+        async with httpx.AsyncClient(
             timeout=15.0,
             verify=_verify_tls(cfg),
             headers={"User-Agent": f"AKI-RAG/{VERSION}", "Accept": "application/json"},
-        )
+        ) as client:
+            response = await client.post(nextcloud_base + "/index.php/login/v2")
         response.raise_for_status()
         payload = response.json()
         poll = payload.get("poll") or {}
@@ -360,14 +409,15 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
             store.delete_nextcloud_flow(flow_id)
             raise HTTPException(status_code=410, detail="Curation login flow expired")
 
-        response = httpx.request(
-            "POST",
-            str(flow["poll_endpoint"]),
-            data={"token": str(flow["poll_token"])},
+        async with httpx.AsyncClient(
             timeout=15.0,
             verify=_verify_tls(cfg),
             headers={"User-Agent": f"AKI-RAG/{VERSION}", "Accept": "application/json"},
-        )
+        ) as client:
+            response = await client.post(
+                str(flow["poll_endpoint"]),
+                data={"token": str(flow["poll_token"])},
+            )
         if response.status_code in {404, 425}:
             return render(
                 request,
@@ -402,7 +452,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
                 expires_at=time.time(),
                 last_seen_at=time.time(),
             )
-            _revoke_app_password(temporary, cfg)
+            await run_in_threadpool(_revoke_app_password, temporary, cfg)
             store.delete_nextcloud_flow(flow_id)
             raise HTTPException(status_code=403, detail="Finding curation is not enabled for this Nextcloud user")
 
@@ -428,27 +478,27 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.post("/logout", name="curation_logout")
     async def logout(request: Request):
-        token, session = session_from_request(request)
+        token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
-        invalidate_curation_session(store, session, cfg)
+        await run_in_threadpool(invalidate_curation_session, store, session, cfg)
         response = redirect(str(request.app.url_path_for("curation_home")), "Kurationssitzung beendet.")
         response.delete_cookie(COOKIE_NAME, path="/curation/")
         return response
 
     @router.get("/run/{run_id}", response_class=HTMLResponse, name="curation_run")
     async def run_detail(request: Request, run_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         with GraphCurator.from_config(cfg) as curator:
             run = curator.get_research_run(run_id)
         if run is None or str(run.get("canonical_user_id") or "") != session.canonical_user_id:
             raise HTTPException(status_code=404, detail="Research run not found")
-        run["findings"] = filter_findings(session, list(run.get("findings") or []))
+        run["findings"] = await filter_findings(session, list(run.get("findings") or []))
         return render(request, "run.html", session=session, run=run, csrf_token=session.csrf_token)
 
     @router.post("/run/{run_id}/dismiss", name="curation_run_dismiss")
     async def run_dismiss(request: Request, run_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
         with GraphCurator.from_config(cfg) as curator:
@@ -464,7 +514,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.post("/run/{run_id}/dismiss-findings", name="curation_run_dismiss_findings")
     async def run_dismiss_findings(request: Request, run_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         values = await form_values(request)
         csrf(session, (values.get("csrf_token", [""])[-1] or ""))
         finding_ids = [x.strip() for x in values.get("finding_id", []) if x.strip()]
@@ -475,8 +525,15 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
             produced = {str(x.get("finding_id") or "") for x in (run.get("findings") or [])}
             if any(fid not in produced for fid in finding_ids):
                 raise HTTPException(status_code=404, detail="Finding is not part of this research run")
-            for fid in finding_ids:
-                require_finding(session, fid)
+            selected = [
+                dict(item)
+                for item in (run.get("findings") or [])
+                if str(item.get("finding_id") or "") in set(finding_ids)
+            ]
+            visible = await filter_findings(session, selected)
+            visible_ids = {str(item.get("finding_id") or "") for item in visible}
+            if any(fid not in visible_ids for fid in finding_ids):
+                raise HTTPException(status_code=404, detail="Finding is not visible under current Nextcloud ACL")
             curator.set_research_run_finding_disposition(
                 run_id,
                 finding_ids,
@@ -487,8 +544,8 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.get("/finding/{finding_id}", response_class=HTMLResponse, name="curation_finding")
     async def finding_detail(request: Request, finding_id: str):
-        _token, session = session_from_request(request)
-        require_finding(session, finding_id)
+        _token, session = await session_from_request(request)
+        await require_finding(session, finding_id)
         with GraphCurator.from_config(cfg) as curator:
             detail = curator.get_research_finding(finding_id)
             entity_options = curator.research_finding_entity_options(finding_id) if detail else []
@@ -520,10 +577,10 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.post("/finding/{finding_id}/entity", name="curation_finding_entity")
     async def finding_entity(request: Request, finding_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
-        require_finding(session, finding_id)
+        await require_finding(session, finding_id)
         with GraphCurator.from_config(cfg) as curator:
             curator.curate_research_finding_entity(
                 finding_id,
@@ -540,10 +597,10 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.post("/finding/{finding_id}/claim", name="curation_finding_claim")
     async def finding_claim(request: Request, finding_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
-        require_finding(session, finding_id)
+        await require_finding(session, finding_id)
         with GraphCurator.from_config(cfg) as curator:
             curator.curate_research_finding_claim(
                 finding_id,
@@ -561,10 +618,10 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         name="curation_finding_claim_review",
     )
     async def finding_claim_review(request: Request, finding_id: str, relation_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
-        require_finding(session, finding_id)
+        await require_finding(session, finding_id)
         action = data.get("action", "").strip().casefold()
         if action not in {"confirm", "dismiss"}:
             raise HTTPException(status_code=400, detail="Invalid claim review action")
@@ -583,10 +640,10 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
 
     @router.post("/finding/{finding_id}/status", name="curation_finding_status")
     async def finding_status(request: Request, finding_id: str):
-        _token, session = session_from_request(request)
+        _token, session = await session_from_request(request)
         data = await form_data(request)
         csrf(session, data.get("csrf_token", ""))
-        require_finding(session, finding_id)
+        await require_finding(session, finding_id)
         status = data.get("status", "")
         if status not in {"", "mentions_only"}:
             raise HTTPException(status_code=400, detail="Self-service may only complete/reopen a Finding; use run dismissal to hide it.")

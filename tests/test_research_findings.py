@@ -173,7 +173,7 @@ def test_store_reuses_existing_finding_by_curation_hash_even_when_intent_differs
         calls.append((query, params))
         if "RETURN DISTINCT e.entity_id AS entity_id" in query:
             return []
-        if "properties(f)['curation_hash']" in query and "ORDER BY f.created_at ASC" in query:
+        if "properties(f)['curation_hash']" in query and "ORDER BY properties(f)['created_at'] ASC" in query:
             return [{"finding_id": prior_id}]
         return []
 

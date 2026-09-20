@@ -13,7 +13,7 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc4` — public-beta release candidate. RC4 consolidates user-scoped Findings/Graph-Lite hardening, self-service curation, installer rerun safeguards and the latest field-test fixes. The Super-Light deployment path remains the primary field-tested profile; see `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5-rc4.1` — public-beta hotfix candidate. RC4.1 retains the RC4 feature set and adds authorization, installer-state, Finding-queue and Neo4j schema hardening. The Super-Light deployment path remains the primary field-tested profile; see `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
@@ -189,7 +189,8 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `CONTRIBUTING.md` — contribution and licensing policy
 - `CLA.md` / `docs/CLA-PROCESS.md` — contributor rights without copyright assignment
 - `CODE_OF_CONDUCT.md` — community conduct expectations
-- `RELEASE-NOTES-0.8.5-rc4.md` — current release notes
+- `RELEASE-NOTES-0.8.5-rc4.1.md` — current hotfix release notes
+- `RELEASE-NOTES-0.8.5-rc4.md` — previous release-candidate notes
 - `RELEASE-NOTES-0.8.5-rc3.md` — first public release notes
 
 ## Development and tests

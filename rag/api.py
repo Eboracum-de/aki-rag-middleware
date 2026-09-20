@@ -119,6 +119,25 @@ def _raise_retrieval_exception(exc: Exception, *, fallback: str) -> None:
 # Lebenszyklus des API-Servers
 # ------------------------------------------------------------
 
+def _initialize_neo4j_schema() -> bool:
+    """Apply the idempotent Neo4j schema upgrade without making API startup fail-open/closed."""
+    global _research_finding_schema_ready
+    if not bool(cfg_get(app_config, "neo4j.enabled", default=True)):
+        return False
+    try:
+        with GraphStore.from_config(app_config) as graph:
+            graph.verify_connectivity()
+            graph.ensure_schema()
+        _research_finding_schema_ready = True
+        return True
+    except Exception as exc:
+        # Neo4j is an optional/degradable backend. The installer treats a failed
+        # selected local Neo4j as fatal; an independent API start only defers the
+        # migration until Neo4j becomes reachable.
+        log.warning("Neo4j schema initialization deferred: %s", exc)
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -133,6 +152,7 @@ async def lifespan(app: FastAPI):
 
     require_secure_runtime_config(app_config)
     cleanup_stale_curation_sessions(app_config)
+    _initialize_neo4j_schema()
     yield
 
 

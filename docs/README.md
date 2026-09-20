@@ -8,6 +8,7 @@
 - [Technical reference](TECHNICAL-REFERENCE.md)
 - [Administration](ADMINISTRATION.md)
 - [Graph-Lite Findings curation](GRAPHLIGHT-FINDINGS.md)
+- [Neo4j application schema](NEO4J-SCHEMA.md)
 - [Beta operations](BETA-OPERATIONS.md)
 - [Known limitations](KNOWN-LIMITATIONS.md)
 - [Roadmap / deferred RC5 and 0.8.6 work](ROADMAP.md)

@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc4`
+**Reference:** `0.8.5-rc4.1`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
@@ -82,7 +82,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## AKI Recherche
 
-- AKI 0.2.3 targets Nextcloud 23+. Saved chats live in the user-owned `AKI-Chats/` Nextcloud folder. They are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
+- AKI 0.2.4 targets Nextcloud 23+. Saved chats live in the user-owned `AKI-Chats/` Nextcloud folder. They are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
 - The app is deliberately thin. Advanced provider diagnostics and administration
   remain in RAG Admin rather than being duplicated in AKI.
 

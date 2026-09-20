@@ -1,6 +1,6 @@
 # Beta operations runbook
 
-**Reference:** `0.8.5-rc4`  
+**Reference:** `0.8.5-rc4.1`  
 **Target:** controlled beta deployment behind an administrator-managed network boundary
 
 This document is the short operational path for the current beta candidate. For
@@ -19,10 +19,12 @@ combinations are regression-tested and accepted for the beta:
 | `standard` | `dockerized` | not a 0.8.5 supported mapping |
 | `super-light` | `native` | not a 0.8.5 supported mapping |
 
-Super-Light is one configuration of the same middleware, not a fork. It expects
-Nextcloud, its FullTextSearch Elasticsearch and the LLM endpoint to be external.
-Locally it runs API, provider, Neo4j Graph-Lite and Playwright; bundled nginx is
-optional. Qdrant and the local reranker are disabled.
+Super-Light is one configuration of the same middleware, not a fork. Nextcloud,
+its FullTextSearch Elasticsearch and the LLM endpoint are administrator-managed
+dependencies outside the RAG stack; they may be on separate systems or, where
+ports/resources permit, on the same host. Locally the RAG stack runs API, provider,
+Neo4j Graph-Lite and Playwright; bundled nginx is optional. Qdrant and the local
+reranker are disabled.
 
 ## 2. Super-Light installation
 
@@ -59,6 +61,26 @@ sudo ./install/install.sh \
 
 `--no-x509-strict` does **not** disable normal CA-chain, hostname/SAN, signature
 or validity checks. Do not replace it with `verify_tls:false` in normal operation.
+
+### Same host as Nextcloud/Apache
+
+When Super-Light runs on the same host as Nextcloud and Apache already owns 80/443, keep Apache public and move the bundled RAG nginx to internal ports such as 81/444:
+
+```bash
+sudo ./install/install.sh \
+  --profile super-light \
+  --deployment dockerized \
+  --nextcloud-url https://cloud.example/nextcloud \
+  --elasticsearch-url http://127.0.0.1:9200 \
+  --elasticsearch-index my_index \
+  --with-proxy \
+  --proxy-http-port 81 \
+  --proxy-https-port 444 \
+  -y
+```
+
+Apache should then proxy only `/v1/`, `/auth/nextcloud/`, `/rag-admin/`, `/rag-api/` and `/curation/` to `https://127.0.0.1:444`. Leave `/` with Nextcloud. Keep the internal RAG ports blocked from untrusted networks; the installer-generated nginx certificate is self-signed unless replaced. A complete Apache `ProxyPass` example and the backend-TLS notes are in `install/INSTALL.md`.
+
 
 ### Reruns and recorded installation command
 
@@ -99,7 +121,7 @@ docker-compose logs -f mail-worker
 Do not edit credential rows in `runtime/users.sqlite` with ad-hoc SQL. Use the
 Admin UI or supplied CLIs.
 
-## 4. AKI Recherche 0.2.3
+## 4. AKI Recherche 0.2.4
 
 AKI is the preferred slim Nextcloud UI for this beta. It targets Nextcloud 23+.
 Install the `akirag` app in Nextcloud, enable it, then configure **Middleware URL**
@@ -230,7 +252,7 @@ will be used. Nextcloud, Elasticsearch and the LLM are external in this figure.
 
 ## 10. Beta freeze
 
-0.8.5-rc4 is the consolidated deployment/operations baseline for the next beta iteration.
+0.8.5-rc4.1 is the consolidated deployment/operations baseline for the current beta hotfix.
 Expected follow-up work before broader feature expansion is security/curation
 hardening, documentation consistency and adversarial code-vs-docs tests (ACL,
 aliases, Findings, archive boundaries and untrusted content). A change that alters

@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from rag.credential_store import CredentialStore
-from rag.curation_ui import cleanup_stale_curation_sessions
+from fastapi import HTTPException
+
+from rag.acl import AclDecision
+from rag.credential_store import CurationSession
+from rag.curation_ui import _filter_findings_with_acl, cleanup_stale_curation_sessions
 from rag.secret_crypto import generate_master_key
 
 
@@ -132,3 +136,106 @@ def test_failed_startup_revocation_leaves_only_pending_nonusable_session(
     stale = store.get_curation_session_any(token)
     assert stale is not None
     assert stale.state == "revocation_pending"
+
+
+def _session() -> CurationSession:
+    now = time.time()
+    return CurationSession(
+        session_id_hash="hash",
+        canonical_user_id="user-id",
+        nextcloud_server="https://cloud.example",
+        nextcloud_login="alice",
+        app_password="temporary-app-password",
+        csrf_token="csrf",
+        state="active",
+        created_at=now,
+        expires_at=now + 3600,
+        last_seen_at=now,
+    )
+
+
+def test_self_service_finding_acl_fails_closed_when_live_acl_is_disabled():
+    class DisabledAcl:
+        enabled = False
+
+        def authorize_with_credential(self, *args, **kwargs):
+            raise AssertionError("disabled ACL must not authorize findings")
+
+    with pytest.raises(HTTPException) as exc:
+        _filter_findings_with_acl(
+            DisabledAcl(),  # type: ignore[arg-type]
+            _session(),
+            [{"finding_id": "f1", "document_id": "files:1", "evidence": "secret"}],
+        )
+    assert exc.value.status_code == 503
+
+
+def test_self_service_finding_acl_rejects_disabled_decision():
+    class DisabledDecisionAcl:
+        enabled = True
+
+        def authorize_with_credential(self, results, **kwargs):
+            return AclDecision(False, list(results), len(results), len(results))
+
+    with pytest.raises(HTTPException) as exc:
+        _filter_findings_with_acl(
+            DisabledDecisionAcl(),  # type: ignore[arg-type]
+            _session(),
+            [{"finding_id": "f1", "document_id": "files:1", "evidence": "secret"}],
+        )
+    assert exc.value.status_code == 503
+
+
+def test_self_service_finding_acl_returns_only_authorized_findings():
+    class EnabledAcl:
+        enabled = True
+
+        def authorize_with_credential(self, results, **kwargs):
+            allowed = [item for item in results if item["document_id"] == "files:2"]
+            return AclDecision(True, allowed, len(results), len(allowed))
+
+    rows = [
+        {"finding_id": "f1", "document_id": "files:1"},
+        {"finding_id": "f2", "document_id": "files:2"},
+    ]
+    assert _filter_findings_with_acl(EnabledAcl(), _session(), rows) == [rows[1]]  # type: ignore[arg-type]
+
+
+def test_startup_cleanup_discards_undecryptable_session_but_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = _encrypted_store(tmp_path, monkeypatch)
+    user = _enabled_user(store)
+    _bad_token, bad = store.create_curation_session(
+        canonical_user_id=user.canonical_user_id,
+        nextcloud_server=user.nextcloud_server,
+        nextcloud_login=user.nextcloud_login,
+        app_password="bad-session-secret",
+        lifetime_seconds=7200,
+    )
+    _good_token, good = store.create_curation_session(
+        canonical_user_id=user.canonical_user_id,
+        nextcloud_server=user.nextcloud_server,
+        nextcloud_login=user.nextcloud_login,
+        app_password="good-session-secret",
+        lifetime_seconds=7200,
+    )
+    with sqlite3.connect(store.path) as con:
+        con.execute(
+            "UPDATE curation_sessions SET app_password=? WHERE session_id_hash=?",
+            ("enc:v1:not-valid-ciphertext", bad.session_id_hash),
+        )
+        con.commit()
+
+    calls = []
+    monkeypatch.setattr(
+        "rag.curation_ui._revoke_app_password",
+        lambda current, cfg: calls.append(current.app_password) or True,
+    )
+    result = cleanup_stale_curation_sessions(
+        {"auth": {"credential_store": str(store.path)}}
+    )
+
+    assert result == {"found": 2, "revoked": 1, "pending": 0}
+    assert calls == ["good-session-secret"]
+    assert store.list_curation_sessions() == []

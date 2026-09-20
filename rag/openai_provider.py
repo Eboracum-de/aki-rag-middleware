@@ -3504,16 +3504,6 @@ async def _graph_enqueue_evidence(
 
     documents: list[dict[str, Any]] = []
     seen: set[str] = set()
-    allowed_special_origins = {
-        "mailarchive": "mail_archive",
-        "webarchive": "web_archive",
-        "chatarchive": "chat_archive",
-    }
-    selected_special_origins = {
-        origin
-        for scope, origin in allowed_special_origins.items()
-        if source_scopes and scope in source_scopes
-    }
     for result in results:
         raw = result.raw or {}
         document_id = str(raw.get("document_id") or "").strip()

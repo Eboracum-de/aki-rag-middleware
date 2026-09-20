@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import yaml
 
@@ -284,7 +285,7 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 def test_public_baseline_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4"'
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.1"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
@@ -310,3 +311,62 @@ def test_admin_navigation_uses_four_primary_areas_and_graph_subnav():
     assert ">Kontaktquellen</a>" in base
     assert ">Graph-Import / Queue</a>" in base
     assert ">/health</a>" not in base
+
+
+def test_installer_never_executes_state_from_unrecognized_prefix(tmp_path):
+    prefix = tmp_path / "foreign"
+    state_dir = prefix / "install"
+    state_dir.mkdir(parents=True)
+    sentinel = tmp_path / "executed"
+    (state_dir / "install-state.env").write_text(
+        "DEPLOYMENT_PROFILE=standard\n"
+        f"LOCAL_NEO4J=$(touch {sentinel})\n"
+    )
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install/profiles/install-standard.sh"), "--plan", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "not recognized as an AKI RAG installation" in result.stderr
+    assert not sentinel.exists()
+
+
+def test_installer_parses_recognized_state_as_data_on_rerun(tmp_path):
+    prefix = tmp_path / "aki"
+    (prefix / "install").mkdir(parents=True)
+    (prefix / "rag").mkdir()
+    (prefix / "config.yaml").write_text("{}\n")
+    (prefix / ".aki-rag-installation").write_text(
+        "AKI_RAG_INSTALLATION=1\nDEPLOYMENT_PROFILE=standard\nDEPLOYMENT_MODE=native\n"
+    )
+    (prefix / "install/install-state.env").write_text(
+        "LOCAL_QDRANT=0\n"
+        "LOCAL_NEO4J=1\n"
+        "LOCAL_OPENWEBUI=0\n"
+        "LOCAL_PROXY=1\n"
+        "PROXY_BASIC_AUTH_STATE=1\n"
+        "MALICIOUS=$(touch /tmp/aki-rag-state-must-not-run)\n"
+    )
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install/profiles/install-standard.sh"), "--plan", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Neo4j:                   install/start" in result.stdout
+    assert 'source "$PREFIX/install/install-state.env"' not in _standard_installer_text()
+
+
+def test_super_light_rerun_preserves_admin_credentials_and_proxy_identity():
+    script = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    assert 'ADMIN_PASSWORD="$(sed -n \'s/^RAG_ADMIN_PASSWORD=//p\'' in script
+    assert 'if [[ -z "$ADMIN_PASSWORD" || "$ADMIN_PASSWORD" == "replace-me" ]]' in script
+    assert 'printf \'%s:%s\\n\' "${ADMIN_USER:-admin}"' in script
+    assert "printf 'admin:%s\\n'" not in script

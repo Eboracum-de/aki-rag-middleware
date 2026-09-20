@@ -263,3 +263,50 @@ def test_super_light_rerun_aborts_for_running_stack_but_accepts_stopped_stack():
     block = installer[installer.index(running):installer.index(stopped)]
     assert "no installation changes were made" in block
     assert "exit 2" in block
+
+
+def test_super_light_installer_supports_alternate_proxy_ports():
+    installer = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
+    assert "--proxy-http-port" in installer
+    assert "--proxy-https-port" in installer
+    assert 'listen ${PROXY_HTTP_PORT} default_server' in installer
+    assert 'listen ${PROXY_HTTPS_PORT} ssl default_server' in installer
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install/install.sh"),
+            "--profile",
+            "super-light",
+            "--plan",
+            "--with-proxy",
+            "--proxy-http-port",
+            "81",
+            "--proxy-https-port",
+            "444",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "Reverse proxy:           bundled/start on 81/444" in result.stdout
+
+
+def test_super_light_installer_rejects_invalid_proxy_ports():
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install/install.sh"),
+            "--profile",
+            "super-light",
+            "--plan",
+            "--proxy-http-port",
+            "0",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "--proxy-http-port must be an integer from 1 to 65535" in result.stderr

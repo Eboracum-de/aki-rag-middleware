@@ -1001,6 +1001,24 @@ class CredentialStore:
             ).fetchall()
         return [x for x in (self._curation_session_from_row(row) for row in rows) if x is not None]
 
+    def list_curation_sessions_for_cleanup(self) -> tuple[list[CurationSession], list[str]]:
+        """Read startup-cleanup sessions without letting one corrupt secret abort startup."""
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT * FROM curation_sessions ORDER BY created_at"
+            ).fetchall()
+        sessions: list[CurationSession] = []
+        undecryptable: list[str] = []
+        for row in rows:
+            try:
+                session = self._curation_session_from_row(row)
+            except Exception:
+                undecryptable.append(str(row["session_id_hash"]))
+                continue
+            if session is not None:
+                sessions.append(session)
+        return sessions, undecryptable
+
     def list_bindings(self, canonical_user_id: str) -> list[IdentityBinding]:
         with self._connect() as con:
             rows = con.execute(

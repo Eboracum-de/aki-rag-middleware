@@ -89,23 +89,85 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Reruns are additive: previously installed local components stay selected unless
-# an explicit removal mechanism is added in a later release.
-if [[ -f "$PREFIX/install/install-state.env" ]]; then
-  REQUEST_MULTI_USER=$MULTI_USER
-  REQUEST_ACL_OFF=$ACL_OFF
-  REQUEST_ACL_MODE_EXPLICIT=$ACL_MODE_EXPLICIT
-  # shellcheck disable=SC1090
-  source "$PREFIX/install/install-state.env"
-  MULTI_USER=$REQUEST_MULTI_USER
-  ACL_OFF=$REQUEST_ACL_OFF
-  ACL_MODE_EXPLICIT=$REQUEST_ACL_MODE_EXPLICIT
-  [[ $WITH_QDRANT -eq 0 && ${LOCAL_QDRANT:-0} -eq 1 ]] && WITH_QDRANT=1
-  [[ $WITH_NEO4J -eq 0 && ${LOCAL_NEO4J:-0} -eq 1 ]] && WITH_NEO4J=1
-  [[ $WITH_OPENWEBUI -eq 0 && ${LOCAL_OPENWEBUI:-0} -eq 1 ]] && WITH_OPENWEBUI=1
-  [[ $WITH_PROXY -eq 1 && ${LOCAL_PROXY:-1} -eq 0 ]] && WITH_PROXY=0
-  [[ $PROXY_BASIC_AUTH -eq 1 && ${PROXY_BASIC_AUTH_STATE:-1} -eq 0 ]] && PROXY_BASIC_AUTH=0
-fi
+# Validate an existing prefix before reading any state from it. The state file is
+# data written by AKI, never shell code: an operator may pass --prefix while
+# running this installer as root.
+PREFIX_RECOGNIZED_AKI=0
+validate_install_prefix() {
+  if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
+    echo "Install prefix exists but is not a directory: $PREFIX" >&2
+    exit 2
+  fi
+  if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    local source_is_prefix=0
+    local recognized_aki=0
+    [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
+    [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
+    if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
+      recognized_aki=1
+    fi
+    if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
+      echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
+      echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
+      exit 2
+    fi
+    PREFIX_RECOGNIZED_AKI=1
+  fi
+}
+
+read_state_bool() {
+  local key="$1"
+  local value="$2"
+  case "$value" in
+    0|1) printf '%s' "$value" ;;
+    *)
+      echo "Invalid boolean value in install-state.env for $key: $value" >&2
+      exit 2
+      ;;
+  esac
+}
+
+load_install_state() {
+  local state_file="$PREFIX/install/install-state.env"
+  [[ $PREFIX_RECOGNIZED_AKI -eq 1 && -f "$state_file" ]] || return 0
+
+  local state_local_qdrant=0
+  local state_local_neo4j=0
+  local state_local_openwebui=0
+  local state_local_proxy=1
+  local state_proxy_basic_auth=1
+  local key value
+
+  while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    case "$key" in
+      LOCAL_QDRANT) state_local_qdrant="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_NEO4J) state_local_neo4j="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_OPENWEBUI) state_local_openwebui="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_PROXY) state_local_proxy="$(read_state_bool "$key" "$value")" ;;
+      PROXY_BASIC_AUTH_STATE) state_proxy_basic_auth="$(read_state_bool "$key" "$value")" ;;
+      DEPLOYMENT_PROFILE)
+        case "$value" in standard|super-light) ;; *)
+          echo "Invalid DEPLOYMENT_PROFILE in install-state.env: $value" >&2
+          exit 2
+        esac
+        ;;
+      *) : ;; # Ignore unknown keys for forward compatibility; never evaluate them.
+    esac
+  done < "$state_file"
+
+  # Reruns are additive: previously installed local components stay selected
+  # unless an explicit removal mechanism is added in a later release.
+  [[ $WITH_QDRANT -eq 0 && $state_local_qdrant -eq 1 ]] && WITH_QDRANT=1
+  [[ $WITH_NEO4J -eq 0 && $state_local_neo4j -eq 1 ]] && WITH_NEO4J=1
+  [[ $WITH_OPENWEBUI -eq 0 && $state_local_openwebui -eq 1 ]] && WITH_OPENWEBUI=1
+  [[ $WITH_PROXY -eq 1 && $state_local_proxy -eq 0 ]] && WITH_PROXY=0
+  [[ $PROXY_BASIC_AUTH -eq 1 && $state_proxy_basic_auth -eq 0 ]] && PROXY_BASIC_AUTH=0
+  return 0
+}
+
+validate_install_prefix
+load_install_state
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -187,31 +249,6 @@ fi
 if [[ ${EUID} -ne 0 ]]; then
   echo "This bootstrap currently expects root (use sudo)." >&2
   exit 1
-fi
-
-# Safety boundary for --prefix: this installer refreshes selected top-level
-# paths with rm -rf/cp. Never treat an unrelated non-empty directory as an
-# installation target merely because root can write to it.
-if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
-  echo "Install prefix exists but is not a directory: $PREFIX" >&2
-  exit 2
-fi
-if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-  source_is_prefix=0
-  [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
-  recognized_aki=0
-  [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
-  if [[ -f "$PREFIX/install/install-state.env" ]] && grep -Eq '^DEPLOYMENT_PROFILE=(standard|super-light)$' "$PREFIX/install/install-state.env"; then
-    recognized_aki=1
-  fi
-  if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
-    recognized_aki=1
-  fi
-  if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
-    echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
-    echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
-    exit 2
-  fi
 fi
 
 confirm_plan
@@ -742,6 +779,28 @@ if [[ ${#LOCAL_SERVICES[@]} -gt 0 ]]; then
   log "Starting local data services: ${LOCAL_SERVICES[*]}"
   compose_cmd -f docker-compose.yml --env-file .env "${LOCAL_PROFILE_ARGS[@]}" up -d "${LOCAL_SERVICES[@]}"
 fi
+
+if [[ $WITH_NEO4J -eq 1 ]]; then
+  log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"
+  NEO4J_SCHEMA_READY=0
+  for _ in $(seq 1 90); do
+    if run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+      "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init \
+      >/dev/null 2>&1; then
+      NEO4J_SCHEMA_READY=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ $NEO4J_SCHEMA_READY -ne 1 ]]; then
+    echo "Neo4j did not become ready or the AKI schema upgrade failed." >&2
+    run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+      "$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init >&2 || true
+    compose_cmd -f docker-compose.yml --env-file .env --profile neo4j logs --tail=120 neo4j >&2 || true
+    exit 1
+  fi
+fi
+
 
 
 if [[ $WITH_OPENWEBUI -eq 1 ]]; then

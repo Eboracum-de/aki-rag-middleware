@@ -602,7 +602,7 @@ retrieval arm. A super-light system can therefore use Neo4j aliases and AKI
 research findings while `retrieval_policy.internal.graph: disabled` and
 `graph_retrieval.enabled: false`.
 
-## AKI Recherche 0.2.3
+## AKI Recherche 0.2.4
 
 The Nextcloud client is under `clients/nextcloud/akirag`. It is intentionally a
 thin search frontend: Nextcloud session → server-side proxy → OpenAI-compatible

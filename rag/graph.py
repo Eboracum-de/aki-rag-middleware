@@ -407,6 +407,60 @@ class Neo4jSettings:
         return cls(uri=uri, username=username, password=password, database=database)
 
 
+NEO4J_BASE_CONSTRAINTS = (
+    "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (n:Entity) REQUIRE n.entity_id IS UNIQUE",
+    "CREATE CONSTRAINT contact_id IF NOT EXISTS FOR (n:ContactRecord) REQUIRE n.contact_id IS UNIQUE",
+    "CREATE CONSTRAINT contact_import_run_id IF NOT EXISTS FOR (n:ContactImportRun) REQUIRE n.run_id IS UNIQUE",
+    "CREATE CONSTRAINT entity_name_normalized IF NOT EXISTS FOR (n:EntityName) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT search_alias_normalized IF NOT EXISTS FOR (n:SearchAlias) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT entity_form_decision_normalized IF NOT EXISTS FOR (n:EntityFormDecision) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT email_normalized IF NOT EXISTS FOR (n:EmailAddress) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT phone_normalized IF NOT EXISTS FOR (n:PhoneNumber) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT address_normalized IF NOT EXISTS FOR (n:PostalAddress) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT org_unit_key IF NOT EXISTS FOR (n:OrganizationalUnit) REQUIRE n.unit_key IS UNIQUE",
+    "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (n:Document) REQUIRE n.document_id IS UNIQUE",
+    "CREATE CONSTRAINT mention_name_normalized IF NOT EXISTS FOR (n:MentionName) REQUIRE n.normalized IS UNIQUE",
+    "CREATE CONSTRAINT entity_observation_id IF NOT EXISTS FOR (n:EntityObservation) REQUIRE n.observation_id IS UNIQUE",
+    "CREATE CONSTRAINT relation_observation_id IF NOT EXISTS FOR (n:RelationObservation) REQUIRE n.relation_id IS UNIQUE",
+    "CREATE CONSTRAINT mail_message_key IF NOT EXISTS FOR (n:MailMessage) REQUIRE n.mail_key IS UNIQUE",
+)
+NEO4J_RESEARCH_CONSTRAINTS = (
+    "CREATE CONSTRAINT research_finding_id IF NOT EXISTS FOR (n:ResearchFinding) REQUIRE n.finding_id IS UNIQUE",
+    "CREATE CONSTRAINT research_run_id IF NOT EXISTS FOR (n:ResearchRun) REQUIRE n.run_id IS UNIQUE",
+    "CREATE CONSTRAINT canonical_user_id IF NOT EXISTS FOR (n:CanonicalUser) REQUIRE n.canonical_user_id IS UNIQUE",
+)
+NEO4J_SCHEMA_CONSTRAINTS = NEO4J_BASE_CONSTRAINTS + NEO4J_RESEARCH_CONSTRAINTS
+
+NEO4J_BASE_INDEXES = (
+    "CREATE INDEX entity_display_name IF NOT EXISTS FOR (n:Entity) ON (n.display_name)",
+    "CREATE INDEX entity_identity_key IF NOT EXISTS FOR (n:Entity) ON (n.identity_key)",
+    "CREATE INDEX org_unit_display_name IF NOT EXISTS FOR (n:OrganizationalUnit) ON (n.display_name)",
+    "CREATE INDEX contact_uid IF NOT EXISTS FOR (n:ContactRecord) ON (n.vcard_uid)",
+    "CREATE INDEX contact_cloud IF NOT EXISTS FOR (n:ContactRecord) ON (n.cloud_id)",
+    "CREATE INDEX contact_source_user IF NOT EXISTS FOR (n:ContactRecord) ON (n.source_user_id)",
+    "CREATE INDEX contact_addressbook_name IF NOT EXISTS FOR (n:ContactRecord) ON (n.addressbook_name)",
+    "CREATE INDEX contact_addressbook_slug IF NOT EXISTS FOR (n:ContactRecord) ON (n.addressbook_slug)",
+    "CREATE INDEX contact_created_import_run IF NOT EXISTS FOR (n:ContactRecord) ON (n.created_import_run_id)",
+    "CREATE INDEX contact_last_import_run IF NOT EXISTS FOR (n:ContactRecord) ON (n.last_import_run_id)",
+    "CREATE INDEX entity_observation_document IF NOT EXISTS FOR (n:EntityObservation) ON (n.document_id)",
+    "CREATE INDEX entity_observation_normalized IF NOT EXISTS FOR (n:EntityObservation) ON (n.normalized)",
+    "CREATE INDEX entity_observation_status IF NOT EXISTS FOR (n:EntityObservation) ON (n.status)",
+    "CREATE INDEX entity_observation_curator_status IF NOT EXISTS FOR (n:EntityObservation) ON (n.curator_status)",
+    "CREATE INDEX relation_observation_document IF NOT EXISTS FOR (n:RelationObservation) ON (n.document_id)",
+    "CREATE INDEX relation_observation_predicate IF NOT EXISTS FOR (n:RelationObservation) ON (n.predicate)",
+    "CREATE INDEX relation_observation_stance IF NOT EXISTS FOR (n:RelationObservation) ON (n.stance)",
+    "CREATE INDEX relation_observation_curator_status IF NOT EXISTS FOR (n:RelationObservation) ON (n.curator_status)",
+)
+NEO4J_RESEARCH_INDEXES = (
+    "CREATE INDEX research_finding_frame_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.frame_hash)",
+    "CREATE INDEX research_finding_curation_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.curation_hash)",
+    "CREATE INDEX research_finding_provenance IF NOT EXISTS FOR (n:ResearchFinding) ON (n.provenance_code)",
+    "CREATE INDEX research_run_user IF NOT EXISTS FOR (n:ResearchRun) ON (n.canonical_user_id)",
+    "CREATE INDEX research_run_status IF NOT EXISTS FOR (n:ResearchRun) ON (n.curation_status)",
+)
+NEO4J_SCHEMA_INDEXES = NEO4J_BASE_INDEXES + NEO4J_RESEARCH_INDEXES
+
+
 class GraphStore:
     def __init__(self, settings: Neo4jSettings):
         if GraphDatabase is None:
@@ -439,152 +493,39 @@ class GraphStore:
             return [record.data() for record in result]
 
     def ensure_schema(self) -> None:
-        statements = [
-            "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (n:Entity) REQUIRE n.entity_id IS UNIQUE",
-            "CREATE CONSTRAINT contact_id IF NOT EXISTS FOR (n:ContactRecord) REQUIRE n.contact_id IS UNIQUE",
-            "CREATE CONSTRAINT contact_import_run_id IF NOT EXISTS FOR (n:ContactImportRun) REQUIRE n.run_id IS UNIQUE",
-            "CREATE CONSTRAINT entity_name_normalized IF NOT EXISTS FOR (n:EntityName) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT search_alias_normalized IF NOT EXISTS FOR (n:SearchAlias) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT entity_form_decision_normalized IF NOT EXISTS FOR (n:EntityFormDecision) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT email_normalized IF NOT EXISTS FOR (n:EmailAddress) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT phone_normalized IF NOT EXISTS FOR (n:PhoneNumber) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT address_normalized IF NOT EXISTS FOR (n:PostalAddress) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT org_unit_key IF NOT EXISTS FOR (n:OrganizationalUnit) REQUIRE n.unit_key IS UNIQUE",
-            "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (n:Document) REQUIRE n.document_id IS UNIQUE",
-            "CREATE CONSTRAINT mention_name_normalized IF NOT EXISTS FOR (n:MentionName) REQUIRE n.normalized IS UNIQUE",
-            "CREATE CONSTRAINT entity_observation_id IF NOT EXISTS FOR (n:EntityObservation) REQUIRE n.observation_id IS UNIQUE",
-            "CREATE CONSTRAINT relation_observation_id IF NOT EXISTS FOR (n:RelationObservation) REQUIRE n.relation_id IS UNIQUE",
-            "CREATE CONSTRAINT mail_message_key IF NOT EXISTS FOR (n:MailMessage) REQUIRE n.mail_key IS UNIQUE",
-            "CREATE CONSTRAINT research_finding_id IF NOT EXISTS FOR (n:ResearchFinding) REQUIRE n.finding_id IS UNIQUE",
-            "CREATE INDEX entity_display_name IF NOT EXISTS FOR (n:Entity) ON (n.display_name)",
-            "CREATE INDEX entity_identity_key IF NOT EXISTS FOR (n:Entity) ON (n.identity_key)",
-            "CREATE INDEX org_unit_display_name IF NOT EXISTS FOR (n:OrganizationalUnit) ON (n.display_name)",
-            "CREATE INDEX contact_uid IF NOT EXISTS FOR (n:ContactRecord) ON (n.vcard_uid)",
-            "CREATE INDEX contact_cloud IF NOT EXISTS FOR (n:ContactRecord) ON (n.cloud_id)",
-            "CREATE INDEX contact_source_user IF NOT EXISTS FOR (n:ContactRecord) ON (n.source_user_id)",
-            "CREATE INDEX contact_addressbook_name IF NOT EXISTS FOR (n:ContactRecord) ON (n.addressbook_name)",
-            "CREATE INDEX contact_addressbook_slug IF NOT EXISTS FOR (n:ContactRecord) ON (n.addressbook_slug)",
-            "CREATE INDEX contact_created_import_run IF NOT EXISTS FOR (n:ContactRecord) ON (n.created_import_run_id)",
-            "CREATE INDEX entity_observation_normalized IF NOT EXISTS FOR (n:EntityObservation) ON (n.normalized)",
-            "CREATE INDEX entity_observation_status IF NOT EXISTS FOR (n:EntityObservation) ON (n.status)",
-            "CREATE INDEX relation_observation_document IF NOT EXISTS FOR (n:RelationObservation) ON (n.document_id)",
-            "CREATE INDEX relation_observation_predicate IF NOT EXISTS FOR (n:RelationObservation) ON (n.predicate)",
-            "CREATE INDEX relation_observation_stance IF NOT EXISTS FOR (n:RelationObservation) ON (n.stance)",
-            "CREATE INDEX research_finding_frame_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.frame_hash)",
-            "CREATE INDEX research_finding_curation_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.curation_hash)",
-            "CREATE INDEX research_finding_provenance IF NOT EXISTS FOR (n:ResearchFinding) ON (n.provenance_code)",
-        ]
-        for statement in statements:
+        """Create and non-destructively upgrade the complete AKI Neo4j schema.
+
+        Constraints and indexes use IF NOT EXISTS, so this is safe for fresh,
+        complete, and partially initialized databases. Optional properties are
+        read through properties(node_or_relationship)[key]; no synthetic nodes
+        or dummy properties are created merely to register property tokens.
+        """
+        for statement in NEO4J_BASE_CONSTRAINTS + NEO4J_BASE_INDEXES:
             self._run(statement)
-
-        # Neo4j warns on optional property reads when a property key has never
-        # existed anywhere in the store. Create the curator property tokens once
-        # without rewriting every historic observation. Existing observations
-        # may still omit the properties; coalesce() then behaves as intended.
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'entity_observation_curator_v1'})
-            SET m.curator_status='',
-                m.curator_target_entity_id='',
-                m.curator_reason='',
-                m.updated_at=datetime()
-            """
-        )
-
-        # Super-light deployments may never run document graph extraction, so
-        # optional EntityObservation property keys can otherwise be absent from
-        # the entire store. The admin read queries still reference these keys
-        # and Neo4j then emits UnknownPropertyKeyWarning on every page load.
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'entity_observation_fields_v1'})
-            SET m.document_id='',
-                m.canonical_name='',
-                m.observed_text='',
-                m.context_text='',
-                m.normalized='',
-                m.suggested_type='',
-                m.entity_kind='',
-                m.confidence=0.0,
-                m.relevant_actor=false,
-                m.mention_context='',
-                m.eligible=false,
-                m.allow_create=false,
-                m.admission_reason='',
-                m.extractor='',
-                m.status='',
-                m.rejection_reason='',
-                m.updated_at=datetime()
-            """
-        )
-
-        # RelationObservation is also used by the lightweight Findings curator.
-        # A Super-Light store may not contain a relation yet, while read queries
-        # still reference the complete observation contract. Register every
-        # property token once to prevent UnknownPropertyKeyWarning log noise.
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'relation_observation_fields_v1'})
-            SET m.relation_id='',
-                m.document_id='',
-                m.predicate='',
-                m.predicate_text='',
-                m.relation_text='',
-                m.evidence_text='',
-                m.confidence=0.0,
-                m.stance='',
-                m.chunk_index=0,
-                m.extractor='',
-                m.valid_from='',
-                m.valid_to='',
-                m.evidence_date='',
-                m.evidence_date_precision='',
-                m.evidence_date_confidence=0.0,
-                m.evidence_date_basis='',
-                m.curator_note='',
-                m.curator_status='',
-                m.curator_reason='',
-                m.curator_actor='',
-                m.review_reason='',
-                m.review_required_at=datetime(),
-                m.source_finding_id='',
-                m.ontology_name='',
-                m.ontology_version=0,
-                m.ontology_hash='',
-                m.updated_at=datetime()
-            """
-        )
-
-        # Merge candidates may not yet have been carried across a manual merge.
-        # Register the optional property key once so Neo4j does not emit an
-        # UnknownPropertyKeyWarning when the admin UI lists ordinary candidates.
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'possible_same_as_fields_v1'})
-            SET m.carried_from_merge_entity_id='', m.updated_at=datetime()
-            """
-        )
 
         # Preserve the latest historic manual decision for a normalized form.
         # ON CREATE keeps subsequent explicit global decisions authoritative.
         self._run(
             """
             MATCH (o:EntityObservation)
-            WHERE coalesce(o.curator_status,'') IN
+            WHERE coalesce(properties(o)['curator_status'],'') IN
                   ['manual_not_entity','corrected_observation','research_finding_entity']
-              AND coalesce(o.normalized,'') <> ''
-            WITH o.normalized AS normalized, o
-            ORDER BY o.curator_decided_at DESC, o.updated_at DESC
+              AND coalesce(properties(o)['normalized'],'') <> ''
+            WITH properties(o)['normalized'] AS normalized, o
+            ORDER BY properties(o)['curator_decided_at'] DESC,
+                     properties(o)['updated_at'] DESC
             WITH normalized, collect(o)[0] AS latest
             MERGE (d:EntityFormDecision {normalized:normalized})
             ON CREATE SET
-                d.value=coalesce(latest.observed_text,latest.canonical_name,normalized),
-                d.status=CASE WHEN latest.curator_status='manual_not_entity'
+                d.value=coalesce(properties(latest)['observed_text'],
+                                 properties(latest)['canonical_name'],normalized),
+                d.status=CASE WHEN properties(latest)['curator_status']='manual_not_entity'
                               THEN 'not_entity' ELSE 'entity' END,
-                d.target_entity_id=coalesce(latest.curator_target_entity_id,''),
+                d.target_entity_id=coalesce(properties(latest)['curator_target_entity_id'],''),
                 d.decision_kind='historic_observation',
                 d.reason='historic_observation_backfill',
-                d.decided_at=coalesce(latest.curator_decided_at,latest.updated_at,datetime()),
+                d.decided_at=coalesce(properties(latest)['curator_decided_at'],
+                                      properties(latest)['updated_at'],datetime()),
                 d.created_at=datetime(),
                 d.updated_at=datetime()
             """
@@ -594,29 +535,7 @@ class GraphStore:
         self.ensure_research_finding_schema()
 
     def ensure_entity_kind_schema(self) -> int:
-        """Ensure the stable Entity.entity_kind contract without reclassifying.
-
-        Old CardDAV seeds did not carry this property.  Keep known values,
-        initialize Persons deterministically, and use the empty string for
-        entities whose specialized organization kind is not yet known.
-        """
-        # The marker also creates the property token on an otherwise empty
-        # store so later read queries do not trigger UnknownPropertyKeyWarning.
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'entity_kind_v1'})
-            SET m.entity_kind='', m.updated_at=datetime()
-            """
-        )
-
-        # `entity_kind` is part of the Entity data contract.  Older CardDAV
-        # seeds predate that property, which makes Neo4j emit an
-        # UnknownPropertyKeyWarning every time query expansion reads it.  Keep
-        # established document-derived classifications, initialize known
-        # persons deterministically, and leave everything else deliberately
-        # blank so the existing inference fallback may refine it later.
-        # `properties(e)[...]` avoids the very warning this migration repairs
-        # on stores where the property token did not previously exist.
+        """Backfill the stable Entity.entity_kind contract without reclassifying."""
         rows = self._run(
             """
             MATCH (e:Entity)
@@ -628,68 +547,9 @@ class GraphStore:
         return int(rows[0].get("updated") or 0) if rows else 0
 
     def ensure_research_finding_schema(self) -> None:
-        """Create only the lightweight research-finding schema objects.
-
-        Kept separate from document graph extraction so Super-Light can
-        persist and inspect verified query findings on its own.
-        """
-        for statement in (
-            "CREATE CONSTRAINT research_finding_id IF NOT EXISTS FOR (n:ResearchFinding) REQUIRE n.finding_id IS UNIQUE",
-            "CREATE CONSTRAINT research_run_id IF NOT EXISTS FOR (n:ResearchRun) REQUIRE n.run_id IS UNIQUE",
-            "CREATE CONSTRAINT canonical_user_id IF NOT EXISTS FOR (n:CanonicalUser) REQUIRE n.canonical_user_id IS UNIQUE",
-            "CREATE INDEX research_finding_frame_hash IF NOT EXISTS FOR (n:ResearchFinding) ON (n.frame_hash)",
-            "CREATE INDEX research_run_user IF NOT EXISTS FOR (n:ResearchRun) ON (n.canonical_user_id)",
-            "CREATE INDEX research_run_status IF NOT EXISTS FOR (n:ResearchRun) ON (n.curation_status)",
-            "CREATE INDEX research_finding_provenance IF NOT EXISTS FOR (n:ResearchFinding) ON (n.provenance_code)",
-        ):
+        """Create and upgrade the lightweight Research Finding schema."""
+        for statement in NEO4J_RESEARCH_CONSTRAINTS + NEO4J_RESEARCH_INDEXES:
             self._run(statement)
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'research_run_fields_v1'})
-            SET m.user_query='',
-                m.retrieval_query='',
-                m.canonical_user_id='',
-                m.nextcloud_login='',
-                m.nextcloud_server='',
-                m.curation_status='open',
-                m.dismissed_at=datetime(),
-                m.dismissed_by='',
-                m.updated_at=datetime()
-            """
-        )
-        self._run(
-            """
-            MERGE (m:RAGSchemaMarker {key:'research_finding_fields_v1'})
-            SET m.intent='',
-                m.entity_texts=[],
-                m.entity_roles=[],
-                m.relation_texts=[],
-                m.constraints_json='',
-                m.concepts=[],
-                m.verification_status='',
-                m.relation_binding='',
-                m.planner_model='',
-                m.verifier_model='',
-                m.software_version='',
-                m.curator_status='',
-                m.curator_reason='',
-                m.curator_decided_at=datetime(),
-                m.graph_disposition='',
-                m.suppressed_entity_texts=[],
-                m.frame_hash='',
-                m.curation_hash='',
-                m.provenance_code='',
-                m.query_frame_json='',
-                m.evidence_frame_json='',
-                m.source_url='',
-                m.document_date='',
-                m.title='',
-                m.path='',
-                m.observation_count=0,
-                m.last_seen_at=datetime(),
-                m.updated_at=datetime()
-            """
-        )
 
         # Backfill the structured curation fingerprint without changing existing
         # Finding IDs. This preserves upgrade compatibility while allowing later
@@ -699,8 +559,9 @@ class GraphStore:
             """
             MATCH (f:ResearchFinding)
             WHERE coalesce(properties(f)['curation_hash'],'')=''
-              AND coalesce(f.query_frame_json,'') <> ''
-            RETURN f.finding_id AS finding_id, f.query_frame_json AS query_frame_json
+              AND coalesce(properties(f)['query_frame_json'],'') <> ''
+            RETURN f.finding_id AS finding_id,
+                   properties(f)['query_frame_json'] AS query_frame_json
             """
         )
         for row in legacy_rows:
@@ -724,7 +585,7 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity:Organization)
-            RETURN e.entity_id AS entity_id, e.display_name AS display_name
+            RETURN properties(e)['entity_id'] AS entity_id, properties(e)['display_name'] AS display_name
             """
         )
         changed = 0
@@ -745,12 +606,13 @@ class GraphStore:
         """Confirm survivors of manual merges created by pre-0.6.4 curation."""
         rows = self._run(
             """
-            MATCH (old:Entity)-[r:MERGED_INTO]->(keep:Entity)
-            WHERE coalesce(r.method,'')='manual_curator'
-              AND coalesce(keep.identity_status,'') <> 'merged' AND coalesce(keep.identity_status,'') <> 'orphaned'
+            MATCH (old:Entity)-[r]->(keep:Entity)
+            WHERE type(r)='MERGED_INTO'
+              AND coalesce(properties(r)['method'],'')='manual_curator'
+              AND coalesce(properties(keep)['identity_status'],'') <> 'merged' AND coalesce(properties(keep)['identity_status'],'') <> 'orphaned'
             SET keep.identity_status='confirmed',
-                keep.confirmation_method=coalesce(keep.confirmation_method,'manual_curator_merge'),
-                keep.confirmed_at=coalesce(keep.confirmed_at,datetime()),
+                keep.confirmation_method=coalesce(properties(keep)['confirmation_method'],'manual_curator_merge'),
+                keep.confirmed_at=coalesce(properties(keep)['confirmed_at'],datetime()),
                 keep.updated_at=datetime()
             RETURN count(DISTINCT keep) AS count
             """
@@ -770,10 +632,11 @@ class GraphStore:
         """
         name_rows = self._run(
             """
-            MATCH (:Entity)-[r:HAS_NAME]->(:EntityName)
-            WHERE r.resolution_policy IS NULL OR trim(r.resolution_policy)=''
+            MATCH (:Entity)-[r]->(:EntityName)
+            WHERE type(r)='HAS_NAME'
+              AND (properties(r)['resolution_policy'] IS NULL OR trim(properties(r)['resolution_policy'])='')
             SET r.resolution_policy=CASE
-                WHEN coalesce(r.kind,'') IN ['merged_name'] THEN 'contextual'
+                WHEN coalesce(properties(r)['kind'],'') IN ['merged_name'] THEN 'contextual'
                 ELSE 'exclusive' END,
                 r.updated_at=datetime()
             RETURN count(r) AS count
@@ -781,10 +644,11 @@ class GraphStore:
         )
         alias_rows = self._run(
             """
-            MATCH (:Entity)-[r:HAS_SEARCH_ALIAS]->(:SearchAlias)
-            WHERE r.resolution_policy IS NULL OR trim(r.resolution_policy)=''
+            MATCH (:Entity)-[r]->(:SearchAlias)
+            WHERE type(r)='HAS_SEARCH_ALIAS'
+              AND (properties(r)['resolution_policy'] IS NULL OR trim(properties(r)['resolution_policy'])='')
             SET r.resolution_policy=CASE
-                WHEN coalesce(r.kind,'') IN ['merged_alias','merged_display_name'] THEN 'contextual'
+                WHEN coalesce(properties(r)['kind'],'') IN ['merged_alias','merged_display_name'] THEN 'contextual'
                 ELSE 'contextual' END,
                 r.updated_at=datetime()
             RETURN count(r) AS count
@@ -800,19 +664,21 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})
-            OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName)
+            OPTIONAL MATCH (e)-[rn]->(n:EntityName)
+            WHERE type(rn)='HAS_NAME'
             WITH e, collect(CASE WHEN n IS NULL THEN null ELSE {
-                form_kind:'name', value:coalesce(n.last_seen_value,n.value),
-                normalized:n.normalized, relation_kind:coalesce(rn.kind,'name'),
-                active:coalesce(rn.active,true), preferred:coalesce(rn.preferred,false),
-                resolution_policy:coalesce(rn.resolution_policy,'exclusive')
+                form_kind:'name', value:coalesce(properties(n)['last_seen_value'],properties(n)['value']),
+                normalized:n.normalized, relation_kind:coalesce(properties(rn)['kind'],'name'),
+                active:coalesce(properties(rn)['active'],true), preferred:coalesce(properties(rn)['preferred'],false),
+                resolution_policy:coalesce(properties(rn)['resolution_policy'],'exclusive')
             } END) AS names
-            OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias)
+            OPTIONAL MATCH (e)-[ra]->(a:SearchAlias)
+            WHERE type(ra)='HAS_SEARCH_ALIAS'
             WITH e, names, collect(CASE WHEN a IS NULL THEN null ELSE {
-                form_kind:'alias', value:coalesce(a.last_seen_value,a.value),
-                normalized:a.normalized, relation_kind:coalesce(ra.kind,'alias'),
-                active:coalesce(ra.active,true), preferred:false,
-                resolution_policy:coalesce(ra.resolution_policy,'contextual')
+                form_kind:'alias', value:coalesce(properties(a)['last_seen_value'],properties(a)['value']),
+                normalized:a.normalized, relation_kind:coalesce(properties(ra)['kind'],'alias'),
+                active:coalesce(properties(ra)['active'],true), preferred:false,
+                resolution_policy:coalesce(properties(ra)['resolution_policy'],'contextual')
             } END) AS aliases
             RETURN e.display_name AS display_name, labels(e) AS labels,
                    [x IN names + aliases WHERE x IS NOT NULL] AS forms
@@ -838,16 +704,16 @@ class GraphStore:
             OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias {normalized:$normalized})
             RETURN
               [x IN collect(DISTINCT CASE WHEN rn IS NULL THEN null ELSE {
-                  form_kind:'name', value:coalesce(n.last_seen_value,n.value),
-                  relation_kind:coalesce(rn.kind,'name'),
-                  current_policy:coalesce(rn.resolution_policy,'exclusive'),
-                  active:coalesce(rn.active,true)
+                  form_kind:'name', value:coalesce(properties(n)['last_seen_value'],properties(n)['value']),
+                  relation_kind:coalesce(properties(rn)['kind'],'name'),
+                  current_policy:coalesce(properties(rn)['resolution_policy'],'exclusive'),
+                  active:coalesce(properties(rn)['active'],true)
               } END) WHERE x IS NOT NULL] +
               [x IN collect(DISTINCT CASE WHEN ra IS NULL THEN null ELSE {
-                  form_kind:'alias', value:coalesce(a.last_seen_value,a.value),
-                  relation_kind:coalesce(ra.kind,'alias'),
-                  current_policy:coalesce(ra.resolution_policy,'contextual'),
-                  active:coalesce(ra.active,true)
+                  form_kind:'alias', value:coalesce(properties(a)['last_seen_value'],properties(a)['value']),
+                  relation_kind:coalesce(properties(ra)['kind'],'alias'),
+                  current_policy:coalesce(properties(ra)['resolution_policy'],'contextual'),
+                  active:coalesce(properties(ra)['active'],true)
               } END) WHERE x IS NOT NULL] AS matches
             """,
             entity_id=entity_id, normalized=norm,
@@ -957,36 +823,39 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity)
-            OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName)
+            OPTIONAL MATCH (e)-[rn]->(n:EntityName)
+            WHERE type(rn)='HAS_NAME'
             WITH e, collect(DISTINCT CASE WHEN n IS NULL THEN null ELSE {
-                kind:'name', value:coalesce(n.last_seen_value,n.value),
+                kind:'name', value:coalesce(properties(n)['last_seen_value'],properties(n)['value']),
                 normalized:n.normalized,
-                active:coalesce(rn.active,true),
-                resolution_policy:coalesce(rn.resolution_policy,'exclusive')
+                active:coalesce(properties(rn)['active'],true),
+                resolution_policy:coalesce(properties(rn)['resolution_policy'],'exclusive')
             } END) AS names
-            OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias)
+            OPTIONAL MATCH (e)-[ra]->(a:SearchAlias)
+            WHERE type(ra)='HAS_SEARCH_ALIAS'
             WITH e, names,
                  collect(DISTINCT CASE WHEN a IS NULL THEN null ELSE {
-                    kind:'alias', value:coalesce(a.last_seen_value,a.value),
+                    kind:'alias', value:coalesce(properties(a)['last_seen_value'],properties(a)['value']),
                     normalized:a.normalized,
-                    active:coalesce(ra.active,true),
-                    resolution_policy:coalesce(ra.resolution_policy,'contextual')
+                    active:coalesce(properties(ra)['active'],true),
+                    resolution_policy:coalesce(properties(ra)['resolution_policy'],'contextual')
                  } END) AS aliases
             WITH e, [x IN names + aliases WHERE x IS NOT NULL] AS forms
             WHERE toLower(coalesce(e.display_name,'')) CONTAINS $needle
                OR any(x IN forms WHERE
                     toLower(coalesce(x.value,'')) CONTAINS $needle
                     OR ($normalized <> '' AND coalesce(x.normalized,'') CONTAINS $normalized))
-            OPTIONAL MATCH (e)-[:MERGED_INTO]->(keep:Entity)
+            OPTIONAL MATCH (e)-[merge_rel]->(keep:Entity)
+            WHERE type(merge_rel)='MERGED_INTO'
             RETURN e.entity_id AS entity_id,
                    e.display_name AS display_name,
                    labels(e) AS labels,
-                   coalesce(e.origin,'') AS origin,
-                   coalesce(e.identity_status,'') AS identity_status,
-                   e.merged_into_entity_id AS merged_into_entity_id,
+                   coalesce(properties(e)['origin'],'') AS origin,
+                   coalesce(properties(e)['identity_status'],'') AS identity_status,
+                   properties(e)['merged_into_entity_id'] AS merged_into_entity_id,
                    keep.display_name AS merged_into_display_name,
-                   size([(d:Document)-[:MENTIONS]->(e) | d]) AS document_mentions,
-                   size([(o:EntityObservation)-[:RESOLVED_TO]->(e) | o]) AS observations,
+                   size([(d:Document)-[mention_rel]->(e) WHERE type(mention_rel)='MENTIONS' | d]) AS document_mentions,
+                   size([(o:EntityObservation)-[resolved_rel]->(e) WHERE type(resolved_rel)='RESOLVED_TO' | o]) AS observations,
                    forms
             ORDER BY
               CASE WHEN toLower(coalesce(e.display_name,''))=$needle THEN 0 ELSE 1 END,
@@ -1004,19 +873,20 @@ class GraphStore:
         needle = str(query or "").strip().casefold()
         rows = self._run(
             """
-            MATCH (old:Entity)-[r:MERGED_INTO]->(keep:Entity)
-            WHERE $needle=''
+            MATCH (old:Entity)-[r]->(keep:Entity)
+            WHERE type(r)='MERGED_INTO'
+              AND ($needle=''
                OR toLower(coalesce(old.display_name,'')) CONTAINS $needle
-               OR toLower(coalesce(keep.display_name,'')) CONTAINS $needle
+               OR toLower(coalesce(keep.display_name,'')) CONTAINS $needle)
             RETURN old.entity_id AS merged_entity_id,
                    old.display_name AS merged_display_name,
-                   coalesce(old.identity_status,'') AS merged_status,
+                   coalesce(properties(old)['identity_status'],'') AS merged_status,
                    keep.entity_id AS survivor_entity_id,
                    keep.display_name AS survivor_display_name,
-                   coalesce(keep.identity_status,'') AS survivor_status,
-                   coalesce(r.method,'') AS method,
-                   toString(r.merged_at) AS merged_at
-            ORDER BY r.merged_at DESC, old.display_name
+                   coalesce(properties(keep)['identity_status'],'') AS survivor_status,
+                   coalesce(properties(r)['method'],'') AS method,
+                   toString(properties(r)['merged_at']) AS merged_at
+            ORDER BY properties(r)['merged_at'] DESC, old.display_name
             LIMIT $limit
             """,
             needle=needle,
@@ -1028,33 +898,36 @@ class GraphStore:
         """Read-only relation observations involving one entity."""
         return self._run(
             """
-            MATCH (c:RelationObservation)-[:SUBJECT]->(s:Entity)
-            MATCH (c)-[:OBJECT]->(o:Entity)
-            MATCH (d:Document)-[:HAS_RELATION_OBSERVATION]->(c)
-            WHERE s.entity_id=$entity_id OR o.entity_id=$entity_id
+            MATCH (c:RelationObservation)-[subject_rel]->(s:Entity)
+            WHERE type(subject_rel)='SUBJECT'
+            MATCH (c)-[object_rel]->(o:Entity)
+            WHERE type(object_rel)='OBJECT'
+            MATCH (d:Document)-[document_rel]->(c)
+            WHERE type(document_rel)='HAS_RELATION_OBSERVATION'
+              AND (s.entity_id=$entity_id OR o.entity_id=$entity_id)
             RETURN c.relation_id AS relation_id,
                    CASE WHEN s.entity_id=$entity_id THEN 'subject' ELSE 'object' END AS entity_role,
                    s.entity_id AS subject_entity_id,
                    s.display_name AS subject_display_name,
                    c.predicate AS predicate,
-                   c.predicate_text AS predicate_text,
-                   c.relation_text AS relation_text,
+                   properties(c)['predicate_text'] AS predicate_text,
+                   properties(c)['relation_text'] AS relation_text,
                    o.entity_id AS object_entity_id,
                    o.display_name AS object_display_name,
-                   c.evidence_text AS evidence_text,
-                   c.confidence AS confidence,
+                   properties(c)['evidence_text'] AS evidence_text,
+                   properties(c)['confidence'] AS confidence,
                    c.stance AS stance,
-                   c.valid_from AS valid_from,
-                   c.valid_to AS valid_to,
+                   properties(c)['valid_from'] AS valid_from,
+                   properties(c)['valid_to'] AS valid_to,
                    properties(c)['evidence_date'] AS evidence_date,
                    properties(c)['evidence_date_precision'] AS evidence_date_precision,
                    properties(c)['evidence_date_confidence'] AS evidence_date_confidence,
                    properties(c)['evidence_date_basis'] AS evidence_date_basis,
                    d.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
-                   d.source_url AS source_url
-            ORDER BY coalesce(c.confidence,0) DESC, d.document_date DESC, c.predicate
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
+                   properties(d)['source_url'] AS source_url
+            ORDER BY coalesce(properties(c)['confidence'],0) DESC, properties(d)['document_date'] DESC, c.predicate
             LIMIT $limit
             """,
             entity_id=entity_id,
@@ -1066,40 +939,43 @@ class GraphStore:
         needle = str(query or "").strip().casefold()
         return self._run(
             """
-            MATCH (c:RelationObservation)-[:SUBJECT]->(s:Entity)
-            MATCH (c)-[:OBJECT]->(o:Entity)
-            MATCH (d:Document)-[:HAS_RELATION_OBSERVATION]->(c)
-            WHERE $needle=''
+            MATCH (c:RelationObservation)-[subject_rel]->(s:Entity)
+            WHERE type(subject_rel)='SUBJECT'
+            MATCH (c)-[object_rel]->(o:Entity)
+            WHERE type(object_rel)='OBJECT'
+            MATCH (d:Document)-[document_rel]->(c)
+            WHERE type(document_rel)='HAS_RELATION_OBSERVATION'
+              AND ($needle=''
                OR toLower(coalesce(s.display_name,'')) CONTAINS $needle
                OR toLower(coalesce(o.display_name,'')) CONTAINS $needle
                OR toLower(coalesce(c.predicate,'')) CONTAINS $needle
-               OR toLower(coalesce(c.predicate_text,'')) CONTAINS $needle
-               OR toLower(coalesce(c.relation_text,'')) CONTAINS $needle
-               OR toLower(coalesce(c.evidence_text,'')) CONTAINS $needle
-               OR toLower(coalesce(d.title,'')) CONTAINS $needle
+               OR toLower(coalesce(properties(c)['predicate_text'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(c)['relation_text'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(c)['evidence_text'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(d)['title'],'')) CONTAINS $needle)
             RETURN c.relation_id AS relation_id,
                    s.entity_id AS subject_entity_id,
                    s.display_name AS subject_display_name,
                    c.predicate AS predicate,
-                   c.predicate_text AS predicate_text,
-                   c.relation_text AS relation_text,
+                   properties(c)['predicate_text'] AS predicate_text,
+                   properties(c)['relation_text'] AS relation_text,
                    o.entity_id AS object_entity_id,
                    o.display_name AS object_display_name,
-                   c.evidence_text AS evidence_text,
-                   c.confidence AS confidence,
+                   properties(c)['evidence_text'] AS evidence_text,
+                   properties(c)['confidence'] AS confidence,
                    c.stance AS stance,
-                   c.valid_from AS valid_from,
-                   c.valid_to AS valid_to,
+                   properties(c)['valid_from'] AS valid_from,
+                   properties(c)['valid_to'] AS valid_to,
                    properties(c)['evidence_date'] AS evidence_date,
                    properties(c)['evidence_date_precision'] AS evidence_date_precision,
                    properties(c)['evidence_date_confidence'] AS evidence_date_confidence,
                    properties(c)['evidence_date_basis'] AS evidence_date_basis,
                    d.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
-                   d.source_url AS source_url,
-                   toString(c.updated_at) AS updated_at
-            ORDER BY coalesce(c.updated_at,c.created_at) DESC, coalesce(c.confidence,0) DESC
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
+                   properties(d)['source_url'] AS source_url,
+                   toString(properties(c)['updated_at']) AS updated_at
+            ORDER BY coalesce(properties(c)['updated_at'],properties(c)['created_at']) DESC, coalesce(properties(c)['confidence'],0) DESC
             LIMIT $limit
             """,
             needle=needle,
@@ -1114,19 +990,21 @@ class GraphStore:
         merge_target = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})
-            OPTIONAL MATCH (e)-[r:MERGED_INTO]->(keep:Entity)
+            OPTIONAL MATCH (e)-[r]->(keep:Entity)
+            WHERE type(r)='MERGED_INTO'
             RETURN keep.entity_id AS entity_id, keep.display_name AS display_name,
-                   coalesce(r.method,'') AS method, toString(r.merged_at) AS merged_at
+                   coalesce(properties(r)['method'],'') AS method, toString(properties(r)['merged_at']) AS merged_at
             LIMIT 1
             """,
             entity_id=entity_id,
         )
         merged_from = self._run(
             """
-            MATCH (old:Entity)-[r:MERGED_INTO]->(e:Entity {entity_id:$entity_id})
+            MATCH (old:Entity)-[r]->(e:Entity {entity_id:$entity_id})
+            WHERE type(r)='MERGED_INTO'
             RETURN old.entity_id AS entity_id, old.display_name AS display_name,
-                   coalesce(r.method,'') AS method, toString(r.merged_at) AS merged_at
-            ORDER BY r.merged_at DESC, old.display_name
+                   coalesce(properties(r)['method'],'') AS method, toString(properties(r)['merged_at']) AS merged_at
+            ORDER BY properties(r)['merged_at'] DESC, old.display_name
             """,
             entity_id=entity_id,
         )
@@ -1156,15 +1034,15 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias {normalized:$normalized})
-            RETURN coalesce(a.last_seen_value,a.value) AS value,
+            RETURN coalesce(properties(a)['last_seen_value'],properties(a)['value']) AS value,
                    a.normalized AS normalized,
-                   coalesce(r.kind,'alias') AS relation_kind,
-                   coalesce(r.resolution_policy,'contextual') AS resolution_policy,
-                   coalesce(r.active,true) AS active,
-                   r.source_curator AS source_curator,
-                   r.source_merge_entity_id AS source_merge_entity_id,
-                   r.source_document_id AS source_document_id,
-                   r.source_contact_id AS source_contact_id
+                   coalesce(properties(r)['kind'],'alias') AS relation_kind,
+                   coalesce(properties(r)['resolution_policy'],'contextual') AS resolution_policy,
+                   coalesce(properties(r)['active'],true) AS active,
+                   properties(r)['source_curator'] AS source_curator,
+                   properties(r)['source_merge_entity_id'] AS source_merge_entity_id,
+                   properties(r)['source_document_id'] AS source_document_id,
+                   properties(r)['source_contact_id'] AS source_contact_id
             """,
             entity_id=entity_id,
             normalized=normalized,
@@ -1232,7 +1110,7 @@ class GraphStore:
             """
             MATCH (e:Entity)-[r:HAS_EMAIL]->(:EmailAddress {normalized:$normalized})
             WHERE r.active = true AND $entity_type IN labels(e)
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN DISTINCT e.entity_id AS entity_id
             """,
             normalized=normalized,
@@ -1247,7 +1125,7 @@ class GraphStore:
             """
             MATCH (e:Entity)-[r:HAS_PHONE]->(:PhoneNumber {normalized:$normalized})
             WHERE r.active = true AND $entity_type IN labels(e)
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN DISTINCT e.entity_id AS entity_id
             """,
             normalized=normalized,
@@ -1262,7 +1140,7 @@ class GraphStore:
             """
             MATCH (e:Entity)-[:HAS_NAME]->(:EntityName {normalized:$normalized})
             WHERE $entity_type IN labels(e)
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN DISTINCT e.entity_id AS entity_id
             """,
             normalized=normalized,
@@ -1276,9 +1154,9 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity:Organization {identity_key:$identity_key})
-            WHERE coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
-            RETURN DISTINCT e.entity_id AS entity_id
-            ORDER BY e.entity_id
+            WHERE coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
+            RETURN DISTINCT properties(e)['entity_id'] AS entity_id
+            ORDER BY properties(e)['entity_id']
             """,
             identity_key=identity_key,
         )
@@ -1340,8 +1218,8 @@ class GraphStore:
                 rows = self._run(
                     """
                     MATCH (e:Entity:Organization {entity_id:$entity_id})
-                    RETURN coalesce(e.origin,'') AS origin,
-                           coalesce(e.identity_status,'') AS identity_status
+                    RETURN coalesce(properties(e)['origin'],'') AS origin,
+                           coalesce(properties(e)['identity_status'],'') AS identity_status
                     """,
                     entity_id=candidate_id,
                 )
@@ -1364,8 +1242,8 @@ class GraphStore:
                     """
                     MATCH (e:Entity:Person)-[:HAS_NAME]->(:EntityName {normalized:$name_norm})
                     MATCH (e)-[rw:WORKS_AT]->(o:Entity:Organization)-[:HAS_NAME]->(:EntityName {normalized:$org_norm})
-                    WHERE coalesce(rw.active,true)=true
-                    RETURN DISTINCT e.entity_id AS entity_id
+                    WHERE coalesce(properties(rw)['active'],true)=true
+                    RETURN DISTINCT properties(e)['entity_id'] AS entity_id
                     """,
                     name_norm=name_norm,
                     org_norm=org_norm,
@@ -1465,10 +1343,10 @@ class GraphStore:
                     u.short_name=$unit_name,
                     u.qualified_name=$qualified_name,
                     u.organization_entity_id=$organization_entity_id,
-                    u.entity_kind=coalesce(u.entity_kind,''),
+                    u.entity_kind=coalesce(properties(u)['entity_kind'],''),
                     u.level=$level,
                     u.updated_at=datetime()
-                RETURN u.entity_id AS entity_id
+                RETURN properties(u)['entity_id'] AS entity_id
                 """,
                 organization_entity_id=organization_entity_id,
                 unit_key=unit_key,
@@ -1590,7 +1468,7 @@ class GraphStore:
             """
             MATCH (e:Entity {entity_id:$entity_id})
             RETURN e.display_name AS display_name, labels(e) AS labels,
-                   coalesce(e.identity_status,'') AS identity_status,
+                   coalesce(properties(e)['identity_status'],'') AS identity_status,
                    coalesce(e.identity_key,'') AS identity_key
             """,
             entity_id=entity_id,
@@ -1615,8 +1493,8 @@ class GraphStore:
         self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})-[r:POSSIBLE_SAME_AS]-()
-            WHERE coalesce(r.status,'candidate')='candidate'
-              AND coalesce(r.suggested_by,'')='identity_similarity_v1'
+            WHERE coalesce(properties(r)['status'],'candidate')='candidate'
+              AND coalesce(properties(r)['suggested_by'],'')='identity_similarity_v1'
             DELETE r
             """,
             entity_id=entity_id,
@@ -1761,9 +1639,9 @@ class GraphStore:
             MATCH (e:Entity)
             WHERE (e:Person OR e:Organization)
               AND NOT e:OrganizationalUnit
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
-            RETURN e.entity_id AS entity_id
-            ORDER BY e.entity_id
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
+            RETURN properties(e)['entity_id'] AS entity_id
+            ORDER BY properties(e)['entity_id']
             """
         )
         refreshed = 0
@@ -1776,7 +1654,7 @@ class GraphStore:
         count_rows = self._run(
             """
             MATCH ()-[r:POSSIBLE_SAME_AS]->()
-            WHERE coalesce(r.status,'candidate')='candidate'
+            WHERE coalesce(properties(r)['status'],'candidate')='candidate'
             RETURN count(r) AS count
             """
         )
@@ -1821,7 +1699,7 @@ class GraphStore:
             MATCH (c:ContactRecord {contact_id:$contact_id})
             RETURN coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
-                   coalesce(c.addressbook_href,'') AS addressbook_href
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href
             LIMIT 1
             """,
             contact_id=contact_id,
@@ -1866,7 +1744,7 @@ class GraphStore:
                 c.addressbook_slug=$addressbook_slug,
                 c.cloud_id=$cloud_id,
                 c.source_user_id=$source_user_id,
-                c.last_import_run_id=CASE WHEN $import_run_id <> '' THEN $import_run_id ELSE c.last_import_run_id END,
+                c.last_import_run_id=CASE WHEN $import_run_id <> '' THEN $import_run_id ELSE properties(c)['last_import_run_id'] END,
                 c.organization_units=$organization_units,
                 c.updated_at=datetime(),
                 c.last_seen_at=datetime()
@@ -1880,12 +1758,12 @@ class GraphStore:
                 ELSE e.display_name
             END,
                 e.origin = CASE
-                    WHEN e.origin IS NULL OR e.origin = '' THEN 'carddav'
+                    WHEN properties(e)['origin'] IS NULL OR e.origin = '' THEN 'carddav'
                     WHEN e.origin = 'document' THEN 'carddav+document'
-                    ELSE e.origin
+                    ELSE properties(e)['origin']
                 END,
-                e.identity_status=CASE WHEN coalesce(e.identity_status,'')='confirmed' THEN 'confirmed' ELSE 'seeded' END,
-                e.display_name_source_contact_id=CASE WHEN $display_name <> '' THEN $contact_id ELSE e.display_name_source_contact_id END,
+                e.identity_status=CASE WHEN coalesce(properties(e)['identity_status'],'')='confirmed' THEN 'confirmed' ELSE 'seeded' END,
+                e.display_name_source_contact_id=CASE WHEN $display_name <> '' THEN $contact_id ELSE properties(e)['display_name_source_contact_id'] END,
                 e.identity_key=CASE WHEN $entity_type='Organization' THEN $identity_key ELSE e.identity_key END,
                 e.updated_at=datetime()
             """,
@@ -2296,7 +2174,7 @@ class GraphStore:
             """
             MATCH (c:ContactRecord)
             RETURN c.contact_id AS contact_id,
-                   coalesce(c.addressbook_href,'') AS addressbook_href,
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href,
                    coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
                    coalesce(c.addressbook_slug,'') AS addressbook_slug
@@ -2345,17 +2223,17 @@ class GraphStore:
             WHERE other.contact_id <> c.contact_id
               AND (coalesce(other.cloud_id,'') <> coalesce(c.cloud_id,'')
                    OR coalesce(other.source_user_id,'') <> coalesce(c.source_user_id,'')
-                   OR coalesce(other.addressbook_href,'') <> coalesce(c.addressbook_href,''))
+                   OR coalesce(properties(other)['addressbook_href'],'') <> coalesce(properties(c)['addressbook_href'],''))
             WITH c, e, count(other) > 0 AS has_other_source
             RETURN coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
                    coalesce(c.addressbook_name,'') AS addressbook_name,
                    coalesce(c.addressbook_slug,'') AS addressbook_slug,
-                   coalesce(c.addressbook_href,'') AS addressbook_href,
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href,
                    count(DISTINCT c) AS contact_records,
                    count(DISTINCT e) AS entities,
                    count(DISTINCT CASE WHEN has_other_source THEN c.contact_id ELSE null END) AS overlap_contact_records,
-                   max(toString(c.last_seen_at)) AS last_seen_at
+                   max(toString(properties(c)['last_seen_at'])) AS last_seen_at
             ORDER BY cloud_id, source_user_id, addressbook_name
             """
         )
@@ -2368,18 +2246,18 @@ class GraphStore:
             OPTIONAL MATCH (run)-[:TOUCHED]->(c:ContactRecord)
             WITH run, count(DISTINCT c) AS touched_current
             RETURN run.run_id AS run_id,
-                   coalesce(run.cloud_id,'') AS cloud_id,
-                   coalesce(run.source_user_id,'') AS source_user_id,
-                   coalesce(run.status,'') AS status,
-                   coalesce(run.contacts_seen,0) AS contacts_seen,
-                   coalesce(run.contacts_written,0) AS contacts_written,
-                   coalesce(run.error_count,0) AS error_count,
+                   coalesce(properties(run)['cloud_id'],'') AS cloud_id,
+                   coalesce(properties(run)['source_user_id'],'') AS source_user_id,
+                   coalesce(properties(run)['status'],'') AS status,
+                   coalesce(properties(run)['contacts_seen'],0) AS contacts_seen,
+                   coalesce(properties(run)['contacts_written'],0) AS contacts_written,
+                   coalesce(properties(run)['error_count'],0) AS error_count,
                    touched_current,
-                   toString(run.started_at) AS started_at,
-                   toString(run.finished_at) AS finished_at,
-                   toString(run.rolled_back_at) AS rolled_back_at,
-                   coalesce(run.rollback_deleted_contacts,0) AS rollback_deleted_contacts
-            ORDER BY run.started_at DESC
+                   toString(properties(run)['started_at']) AS started_at,
+                   toString(properties(run)['finished_at']) AS finished_at,
+                   toString(properties(run)['rolled_back_at']) AS rolled_back_at,
+                   coalesce(properties(run)['rollback_deleted_contacts'],0) AS rollback_deleted_contacts
+            ORDER BY properties(run)['started_at'] DESC
             LIMIT $limit
             """,
             limit=max(1, min(int(limit), 1000)),
@@ -2404,21 +2282,21 @@ class GraphStore:
             OPTIONAL MATCH (c)-[d:DESCRIBES]->(e:Entity)
             RETURN c.contact_id AS contact_id,
                    c.vcard_uid AS vcard_uid,
-                   c.href AS href,
-                   c.etag AS etag,
+                   properties(c)['href'] AS href,
+                   properties(c)['etag'] AS etag,
                    coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
                    coalesce(c.addressbook_name,'') AS addressbook_name,
                    coalesce(c.addressbook_slug,'') AS addressbook_slug,
-                   coalesce(c.addressbook_href,'') AS addressbook_href,
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href,
                    coalesce(c.created_import_run_id,'') AS created_import_run_id,
-                   coalesce(c.last_import_run_id,'') AS last_import_run_id,
+                   coalesce(properties(c)['last_import_run_id'],'') AS last_import_run_id,
                    e.entity_id AS entity_id,
                    e.display_name AS entity_display_name,
                    labels(e) AS entity_labels,
-                   coalesce(d.resolved_by,'') AS resolved_by,
-                   toString(c.created_at) AS created_at,
-                   toString(c.last_seen_at) AS last_seen_at
+                   coalesce(properties(d)['resolved_by'],'') AS resolved_by,
+                   toString(properties(c)['created_at']) AS created_at,
+                   toString(properties(c)['last_seen_at']) AS last_seen_at
             ORDER BY source_user_id, addressbook_name, entity_display_name, contact_id
         """
         params = {
@@ -2438,17 +2316,17 @@ class GraphStore:
             MATCH (c:ContactRecord)-[r:DESCRIBES]->(e:Entity {entity_id:$entity_id})
             RETURN c.contact_id AS contact_id,
                    c.vcard_uid AS vcard_uid,
-                   c.href AS href,
-                   c.etag AS etag,
+                   properties(c)['href'] AS href,
+                   properties(c)['etag'] AS etag,
                    coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
                    coalesce(c.addressbook_name,'') AS addressbook_name,
                    coalesce(c.addressbook_slug,'') AS addressbook_slug,
-                   coalesce(c.addressbook_href,'') AS addressbook_href,
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href,
                    coalesce(c.created_import_run_id,'') AS created_import_run_id,
-                   coalesce(c.last_import_run_id,'') AS last_import_run_id,
-                   coalesce(r.resolved_by,'') AS resolved_by,
-                   toString(c.last_seen_at) AS last_seen_at
+                   coalesce(properties(c)['last_import_run_id'],'') AS last_import_run_id,
+                   coalesce(properties(r)['resolved_by'],'') AS resolved_by,
+                   toString(properties(c)['last_seen_at']) AS last_seen_at
             ORDER BY source_user_id, addressbook_name, contact_id
             """,
             entity_id=entity_id,
@@ -2462,21 +2340,21 @@ class GraphStore:
             OPTIONAL MATCH (c)-[r:DESCRIBES]->(e:Entity)
             RETURN c.contact_id AS contact_id,
                    c.vcard_uid AS vcard_uid,
-                   c.href AS href,
-                   c.etag AS etag,
+                   properties(c)['href'] AS href,
+                   properties(c)['etag'] AS etag,
                    coalesce(c.cloud_id,'') AS cloud_id,
                    coalesce(c.source_user_id,'') AS source_user_id,
                    coalesce(c.addressbook_name,'') AS addressbook_name,
                    coalesce(c.addressbook_slug,'') AS addressbook_slug,
-                   coalesce(c.addressbook_href,'') AS addressbook_href,
+                   coalesce(properties(c)['addressbook_href'],'') AS addressbook_href,
                    coalesce(c.created_import_run_id,'') AS created_import_run_id,
-                   coalesce(c.last_import_run_id,'') AS last_import_run_id,
+                   coalesce(properties(c)['last_import_run_id'],'') AS last_import_run_id,
                    e.entity_id AS entity_id,
                    e.display_name AS entity_display_name,
                    labels(e) AS entity_labels,
-                   coalesce(r.resolved_by,'') AS resolved_by,
-                   toString(c.created_at) AS created_at,
-                   toString(c.last_seen_at) AS last_seen_at
+                   coalesce(properties(r)['resolved_by'],'') AS resolved_by,
+                   toString(properties(c)['created_at']) AS created_at,
+                   toString(properties(c)['last_seen_at']) AS last_seen_at
             LIMIT 1
             """,
             contact_id=str(contact_id or '').strip(),
@@ -2516,7 +2394,7 @@ class GraphStore:
         queries = [
             """MATCH (d:Document)-[:MENTIONS]->(e:Entity) WHERE e.entity_id IN $entity_ids RETURN DISTINCT d.document_id AS document_id""",
             """MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o:EntityObservation)-[:RESOLVED_TO]->(e:Entity) WHERE e.entity_id IN $entity_ids RETURN DISTINCT d.document_id AS document_id""",
-            """MATCH (d:Document)-[r:MENTIONS_NAME]->(:MentionName) WHERE any(x IN coalesce(r.candidate_entity_ids,[]) WHERE x IN $entity_ids) RETURN DISTINCT d.document_id AS document_id""",
+            """MATCH (d:Document)-[r:MENTIONS_NAME]->(:MentionName) WHERE any(x IN coalesce(properties(r)['candidate_entity_ids'],[]) WHERE x IN $entity_ids) RETURN DISTINCT d.document_id AS document_id""",
         ]
         for query in queries:
             for row in self._run(query, entity_ids=entity_ids):
@@ -2626,8 +2504,8 @@ class GraphStore:
             MATCH (c:ContactRecord)
             WHERE coalesce(c.cloud_id,'')=$cloud_id
               AND coalesce(c.source_user_id,'')=$source_user_id
-              AND coalesce(c.addressbook_href,'')=$addressbook_href
-            RETURN c.contact_id AS contact_id, coalesce(c.href,'') AS href
+              AND coalesce(properties(c)['addressbook_href'],'')=$addressbook_href
+            RETURN c.contact_id AS contact_id, coalesce(properties(c)['href'],'') AS href
             """,
             cloud_id=str(cloud_id or ""),
             source_user_id=str(source_user_id or ""),
@@ -2704,8 +2582,8 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})
-            RETURN coalesce(e.identity_status,'') AS identity_status,
-                   coalesce(e.display_name_source_contact_id,'') AS source_contact_id
+            RETURN coalesce(properties(e)['identity_status'],'') AS identity_status,
+                   coalesce(properties(e)['display_name_source_contact_id'],'') AS source_contact_id
             """,
             entity_id=entity_id,
         )
@@ -2718,9 +2596,9 @@ class GraphStore:
         names = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})-[r:HAS_NAME]->(n:EntityName)
-            WHERE coalesce(r.active,true)=true
-            RETURN coalesce(n.last_seen_value,n.value) AS value,
-                   coalesce(r.preferred,false) AS preferred,
+            WHERE coalesce(properties(r)['active'],true)=true
+            RETURN coalesce(properties(n)['last_seen_value'],properties(n)['value']) AS value,
+                   coalesce(properties(r)['preferred'],false) AS preferred,
                    CASE WHEN properties(r)['source_curator']='manual' THEN 0
                         WHEN properties(r)['source_document_id'] IS NOT NULL THEN 1 ELSE 2 END AS source_rank,
                    coalesce(properties(r)['source_contact_id'],'') AS source_contact_id
@@ -2748,13 +2626,13 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})
-            RETURN coalesce(e.origin,'') AS origin,
-                   coalesce(e.identity_status,'') AS identity_status,
+            RETURN coalesce(properties(e)['origin'],'') AS origin,
+                   coalesce(properties(e)['identity_status'],'') AS identity_status,
                    size([(c:ContactRecord)-[:DESCRIBES]->(e) | c]) AS contact_records,
                    size([(o:EntityObservation)-[:RESOLVED_TO]->(e) | o]) AS document_observations,
-                   size([(e)-[r]-() WHERE r.source_contact_id IS NOT NULL | r]) AS contact_source_relations,
-                   size([(e)-[r:HAS_NAME]->() WHERE r.source_document_id IS NOT NULL | r]) AS document_name_relations,
-                   size([(e)-[r:HAS_SEARCH_ALIAS]->() WHERE r.source_document_id IS NOT NULL | r]) AS document_alias_relations
+                   size([(e)-[r]-() WHERE properties(r)['source_contact_id'] IS NOT NULL | r]) AS contact_source_relations,
+                   size([(e)-[r:HAS_NAME]->() WHERE properties(r)['source_document_id'] IS NOT NULL | r]) AS document_name_relations,
+                   size([(e)-[r:HAS_SEARCH_ALIAS]->() WHERE properties(r)['source_document_id'] IS NOT NULL | r]) AS document_alias_relations
             """,
             entity_id=entity_id,
         )
@@ -2824,7 +2702,7 @@ class GraphStore:
             RETURN old.entity_id AS old_entity_id, old.display_name AS old_display_name,
                    labels(old) AS old_labels, target.display_name AS target_display_name,
                    labels(target) AS target_labels,
-                   coalesce(target.identity_status,'') AS target_status
+                   coalesce(properties(target)['identity_status'],'') AS target_status
             """,
             contact_id=str(contact_id),
             target_entity_id=str(target_entity_id),
@@ -2977,36 +2855,36 @@ class GraphStore:
             f"""
             MATCH (e:Entity)-[r:HAS_NAME]->(n:EntityName)
             WHERE n.normalized <> '' {active_clause} {policy_clause_name}
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN n.normalized AS normalized,
-                   coalesce(n.last_seen_value, n.value) AS value,
+                   coalesce(properties(n)['last_seen_value'], properties(n)['value']) AS value,
                    e.entity_id AS entity_id,
                    labels(e) AS labels,
                    e.display_name AS display_name,
-                   coalesce(e.entity_kind,'') AS entity_kind,
-                   coalesce(r.preferred,false) AS preferred,
-                   coalesce(r.active,true) AS active,
+                   coalesce(properties(e)['entity_kind'],'') AS entity_kind,
+                   coalesce(properties(r)['preferred'],false) AS preferred,
+                   coalesce(properties(r)['active'],true) AS active,
                    1.0 AS weight,
                    'name' AS form_type,
-                   coalesce(r.resolution_policy,'exclusive') AS resolution_policy
+                   coalesce(properties(r)['resolution_policy'],'exclusive') AS resolution_policy
             """
         )
         aliases = self._run(
             f"""
             MATCH (e:Entity)-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias)
-            WHERE coalesce(r.active,true)=true AND a.normalized <> '' {policy_clause_alias}
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+            WHERE coalesce(properties(r)['active'],true)=true AND a.normalized <> '' {policy_clause_alias}
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN a.normalized AS normalized,
-                   coalesce(a.last_seen_value, a.value) AS value,
+                   coalesce(properties(a)['last_seen_value'], properties(a)['value']) AS value,
                    e.entity_id AS entity_id,
                    labels(e) AS labels,
                    e.display_name AS display_name,
-                   coalesce(e.entity_kind,'') AS entity_kind,
+                   coalesce(properties(e)['entity_kind'],'') AS entity_kind,
                    false AS preferred,
                    true AS active,
-                   coalesce(r.weight,0.5) AS weight,
+                   coalesce(properties(r)['weight'],0.5) AS weight,
                    'alias' AS form_type,
-                   coalesce(r.resolution_policy,'contextual') AS resolution_policy
+                   coalesce(properties(r)['resolution_policy'],'contextual') AS resolution_policy
             """
         )
 
@@ -3052,17 +2930,17 @@ class GraphStore:
             MATCH (e:Entity {entity_id:$entity_id})
             OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName)
             WITH e, collect(CASE WHEN n IS NULL THEN null ELSE {
-                value:coalesce(n.last_seen_value,n.value), normalized:n.normalized,
-                weight:CASE WHEN coalesce(rn.preferred,false) THEN 1.0 ELSE 0.92 END,
-                kind:coalesce(rn.kind,'name'), active:coalesce(rn.active,true), source:'name',
-                resolution_policy:coalesce(rn.resolution_policy,'exclusive')
+                value:coalesce(properties(n)['last_seen_value'],properties(n)['value']), normalized:n.normalized,
+                weight:CASE WHEN coalesce(properties(rn)['preferred'],false) THEN 1.0 ELSE 0.92 END,
+                kind:coalesce(properties(rn)['kind'],'name'), active:coalesce(properties(rn)['active'],true), source:'name',
+                resolution_policy:coalesce(properties(rn)['resolution_policy'],'exclusive')
             } END) AS names
             OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias)
             WITH e, names, collect(CASE WHEN a IS NULL THEN null ELSE {
-                value:coalesce(a.last_seen_value,a.value), normalized:a.normalized,
-                weight:coalesce(ra.weight,0.5), kind:coalesce(ra.kind,'alias'),
-                active:coalesce(ra.active,true), source:'alias',
-                resolution_policy:coalesce(ra.resolution_policy,'contextual')
+                value:coalesce(properties(a)['last_seen_value'],properties(a)['value']), normalized:a.normalized,
+                weight:coalesce(properties(ra)['weight'],0.5), kind:coalesce(properties(ra)['kind'],'alias'),
+                active:coalesce(properties(ra)['active'],true), source:'alias',
+                resolution_policy:coalesce(properties(ra)['resolution_policy'],'contextual')
             } END) AS aliases
             RETURN e.display_name AS display_name, labels(e) AS labels,
                    [x IN names + aliases WHERE x IS NOT NULL AND coalesce(x.resolution_policy,'contextual') <> 'document_only'] AS forms
@@ -3093,38 +2971,38 @@ class GraphStore:
             f"""
             MATCH (e:Entity)
             WHERE (e:Person OR e:Organization) {type_clause}
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN
-                e.entity_id AS entity_id,
+                properties(e)['entity_id'] AS entity_id,
                 labels(e) AS labels,
-                e.display_name AS display_name,
+                properties(e)['display_name'] AS display_name,
                 [(e)-[r:HAS_NAME]->(n:EntityName)
-                    WHERE coalesce(r.active,true)=true | {{
-                        value:coalesce(n.last_seen_value,n.value),
+                    WHERE coalesce(properties(r)['active'],true)=true | {{
+                        value:coalesce(properties(n)['last_seen_value'],properties(n)['value']),
                         normalized:n.normalized,
-                        preferred:coalesce(r.preferred,false),
-                        kind:coalesce(r.kind,'name')
+                        preferred:coalesce(properties(r)['preferred'],false),
+                        kind:coalesce(properties(r)['kind'],'name')
                     }}] AS names,
                 [(e)-[r:HAS_EMAIL]->(v:EmailAddress)
-                    WHERE coalesce(r.active,true)=true | v.normalized] AS emails,
+                    WHERE coalesce(properties(r)['active'],true)=true | v.normalized] AS emails,
                 [(e)-[r:HAS_PHONE]->(v:PhoneNumber)
-                    WHERE coalesce(r.active,true)=true | v.normalized] AS phones,
+                    WHERE coalesce(properties(r)['active'],true)=true | v.normalized] AS phones,
                 [(e)-[r:HAS_ADDRESS]->(v:PostalAddress)
-                    WHERE coalesce(r.active,true)=true | v.normalized] AS addresses,
+                    WHERE coalesce(properties(r)['active'],true)=true | v.normalized] AS addresses,
                 [(e)-[r:WORKS_AT]->(o:Entity:Organization)
-                    WHERE coalesce(r.active,true)=true | {{
-                        entity_id:o.entity_id,
-                        display_name:o.display_name
+                    WHERE coalesce(properties(r)['active'],true)=true | {{
+                        entity_id:properties(o)['entity_id'],
+                        display_name:properties(o)['display_name']
                     }}] AS organizations,
                 [(c:ContactRecord)-[:DESCRIBES]->(e) | {{
                     contact_id:c.contact_id,
-                    href:c.href,
+                    href:properties(c)['href'],
                     cloud_id:coalesce(c.cloud_id,''),
                     source_user_id:coalesce(c.source_user_id,''),
                     addressbook_name:c.addressbook_name,
                     addressbook_slug:coalesce(c.addressbook_slug,'')
                 }}] AS contact_records
-            ORDER BY e.display_name
+            ORDER BY properties(e)['display_name']
             """
         )
 
@@ -3197,16 +3075,16 @@ class GraphStore:
             f"""
             MATCH (e:Entity)
             WHERE $entity_type IN labels(e)
-              AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName {{normalized:$normalized}})
             OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias {{normalized:$normalized}})
             WITH e, n, rn, a, ra
-            WHERE (n IS NOT NULL AND coalesce(rn.active,true)=true AND {name_policy})
-               OR (a IS NOT NULL AND coalesce(ra.active,true)=true AND {alias_policy})
+            WHERE (n IS NOT NULL AND coalesce(properties(rn)['active'],true)=true AND {name_policy})
+               OR (a IS NOT NULL AND coalesce(properties(ra)['active'],true)=true AND {alias_policy})
             RETURN DISTINCT e.entity_id AS entity_id,
                    e.display_name AS display_name, labels(e) AS labels,
-                   coalesce(e.origin,'') AS origin,
-                   coalesce(e.identity_status,'') AS identity_status
+                   coalesce(properties(e)['origin'],'') AS origin,
+                   coalesce(properties(e)['identity_status'],'') AS identity_status
             ORDER BY e.display_name, e.entity_id
             """,
             normalized=normalized, entity_type=entity_type,
@@ -3298,9 +3176,9 @@ class GraphStore:
         manual_rows = self._run(
             """
             MATCH (o:EntityObservation {observation_id:$id})
-            RETURN coalesce(o.curator_status,'') AS curator_status,
-                   coalesce(o.curator_target_entity_id,'') AS target_entity_id,
-                   coalesce(o.curator_reason,'') AS curator_reason
+            RETURN coalesce(properties(o)['curator_status'],'') AS curator_status,
+                   coalesce(properties(o)['curator_target_entity_id'],'') AS target_entity_id,
+                   coalesce(properties(o)['curator_reason'],'') AS curator_reason
             """,
             id=observation_id,
         )
@@ -3332,7 +3210,7 @@ class GraphStore:
             target_rows = self._run(
                 """
                 MATCH (e:Entity {entity_id:$entity_id})
-                WHERE coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+                WHERE coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
                 RETURN e.display_name AS display_name, labels(e) AS labels
                 """,
                 entity_id=target_id,
@@ -3602,7 +3480,7 @@ class GraphStore:
             """
             MATCH (e:Entity {entity_id:$entity_id})
             MATCH (o:EntityObservation {normalized:$normalized, suggested_type:$entity_type})
-            WHERE o.status='unresolved' AND coalesce(o.eligible,false)=true
+            WHERE o.status='unresolved' AND coalesce(properties(o)['eligible'],false)=true
             MERGE (o)-[r:RESOLVED_TO]->(e)
             SET r.resolved_by='later_exact_entity', r.updated_at=datetime(),
                 o.status='resolved_existing', o.candidate_entity_ids=[$entity_id],
@@ -3694,8 +3572,8 @@ class GraphStore:
                 d.first_evidence_at=datetime(),
                 d.evidence_count=0
             WITH d,
-                 d.graph_hash AS previous_hash,
-                 d.graph_extractor AS previous_extractor
+                 properties(d)['graph_hash'] AS previous_hash,
+                 properties(d)['graph_extractor'] AS previous_extractor
             SET d.title=$title,
                 d.path=$path,
                 d.source_url=$source_url,
@@ -3707,16 +3585,16 @@ class GraphStore:
                 d.source_date_evidence=$source_date_evidence,
                 d.last_seen_at=datetime(),
                 d.last_evidence_at=datetime(),
-                d.evidence_count=coalesce(d.evidence_count,0)+$evidence_increment,
+                d.evidence_count=coalesce(properties(d)['evidence_count'],0)+$evidence_increment,
                 d.last_query_id=$query_id,
                 d.last_user_query=$user_query,
                 d.last_retrieval_query=$retrieval_query,
                 d.last_evidence_action=$evidence_action,
                 d.updated_at=datetime()
             RETURN previous_hash, previous_extractor,
-                   d.evidence_count AS evidence_count,
-                   d.analysis_hash AS analysis_hash,
-                   d.analysis_extractor AS analysis_extractor
+                   properties(d)['evidence_count'] AS evidence_count,
+                   properties(d)['analysis_hash'] AS analysis_hash,
+                   properties(d)['analysis_extractor'] AS analysis_extractor
             """,
             document_id=document_id,
             title=title,
@@ -3832,7 +3710,7 @@ class GraphStore:
                 MATCH (m:MailMessage {mail_key:$mail_key})
                 MERGE (p:MailMessage {mail_key:$parent_key})
                 ON CREATE SET p.created_at=datetime(), p.placeholder=true
-                SET p.message_id=CASE WHEN coalesce(p.message_id,'')='' THEN $parent_id ELSE p.message_id END,
+                SET p.message_id=CASE WHEN coalesce(properties(p)['message_id'],'')='' THEN $parent_id ELSE properties(p)['message_id'] END,
                     p.updated_at=datetime()
                 MERGE (m)-[r:REPLIES_TO]->(p)
                 SET r.source='mail_header', r.updated_at=datetime()
@@ -3927,10 +3805,10 @@ class GraphStore:
         manual_rows = self._run(
             """
             MATCH (o:EntityObservation {document_id:$document_id})
-            WHERE coalesce(o.curator_status,'') IN ['manual_not_entity','corrected_observation','research_finding_entity']
+            WHERE coalesce(properties(o)['curator_status'],'') IN ['manual_not_entity','corrected_observation','research_finding_entity']
             RETURN o.observation_id AS observation_id,
-                   coalesce(o.curator_status,'') AS curator_status,
-                   coalesce(o.curator_target_entity_id,'') AS target_entity_id,
+                   coalesce(properties(o)['curator_status'],'') AS curator_status,
+                   coalesce(properties(o)['curator_target_entity_id'],'') AS target_entity_id,
                    coalesce(properties(o)['observed_text'],'') AS observed_text,
                    coalesce(o.normalized,'') AS normalized
             """,
@@ -3963,7 +3841,7 @@ class GraphStore:
                     target_rows = self._run(
                         """
                         MATCH (e:Entity {entity_id:$entity_id})
-                        WHERE coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
+                        WHERE coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
                         RETURN e.entity_id AS entity_id
                         """,
                         entity_id=target_id,
@@ -4076,8 +3954,8 @@ class GraphStore:
                     MATCH (e:Entity {entity_id:$entity_id})
                     MERGE (m)-[r:POSSIBLE_MATCH {extractor:$extractor}]->(e)
                     SET r.max_score = CASE
-                        WHEN r.max_score IS NULL OR r.max_score < $score THEN $score
-                        ELSE r.max_score
+                        WHEN properties(r)['max_score'] IS NULL OR properties(r)['max_score'] < $score THEN $score
+                        ELSE properties(r)['max_score']
                     END,
                         r.last_seen_at=datetime()
                     """,
@@ -4100,7 +3978,7 @@ class GraphStore:
                 """
                 MATCH (d:Document {document_id:$document_id})
                 MATCH (target:Entity {entity_id:$entity_id})
-                WHERE coalesce(target.identity_status,'') NOT IN ['merged','orphaned']
+                WHERE coalesce(properties(target)['identity_status'],'') NOT IN ['merged','orphaned']
                 MERGE (d)-[m:MENTIONS]->(target)
                 SET m.research_finding_curated=true,
                     m.last_seen_at=datetime(), m.updated_at=datetime()
@@ -4139,8 +4017,8 @@ class GraphStore:
         self._run(
             """
             MATCH (d:Document {document_id:$document_id})-[:HAS_RELATION_OBSERVATION]->(c:RelationObservation)
-            WHERE coalesce(c.curator_status,'') <> 'manual_claim'
-              AND coalesce(c.extractor,'') <> 'research_finding_curator'
+            WHERE coalesce(properties(c)['curator_status'],'') <> 'manual_claim'
+              AND coalesce(properties(c)['extractor'],'') <> 'research_finding_curator'
             DETACH DELETE c
             """,
             document_id=document_id,
@@ -4210,22 +4088,22 @@ class GraphStore:
                    s.entity_id AS subject_entity_id,
                    s.display_name AS subject_display_name,
                    c.predicate AS predicate,
-                   c.predicate_text AS predicate_text,
-                   c.relation_text AS relation_text,
+                   properties(c)['predicate_text'] AS predicate_text,
+                   properties(c)['relation_text'] AS relation_text,
                    o.entity_id AS object_entity_id,
                    o.display_name AS object_display_name,
-                   c.evidence_text AS evidence_text,
-                   c.confidence AS confidence,
+                   properties(c)['evidence_text'] AS evidence_text,
+                   properties(c)['confidence'] AS confidence,
                    c.stance AS stance,
-                   c.chunk_index AS chunk_index,
-                   c.valid_from AS valid_from,
-                   c.valid_to AS valid_to,
+                   properties(c)['chunk_index'] AS chunk_index,
+                   properties(c)['valid_from'] AS valid_from,
+                   properties(c)['valid_to'] AS valid_to,
                    properties(c)['evidence_date'] AS evidence_date,
                    properties(c)['evidence_date_precision'] AS evidence_date_precision,
                    properties(c)['evidence_date_confidence'] AS evidence_date_confidence,
                    properties(c)['evidence_date_basis'] AS evidence_date_basis,
-                   c.extractor AS extractor
-            ORDER BY coalesce(c.confidence,0) DESC, c.chunk_index, c.predicate
+                   properties(c)['extractor'] AS extractor
+            ORDER BY coalesce(properties(c)['confidence'],0) DESC, properties(c)['chunk_index'], c.predicate
             """,
             document_id=document_id,
         )
@@ -4303,26 +4181,26 @@ class GraphStore:
                 WHERE s.entity_id IN $entity_ids
                   AND o.entity_id IN $entity_ids
                   AND s.entity_id <> o.entity_id
-                  AND coalesce(c.extractor,'') <> 'research_finding_curator'
+                  AND coalesce(properties(c)['extractor'],'') <> 'research_finding_curator'
                 WITH d,
                      collect({
                        relation_id:c.relation_id,
                        subject_entity_id:s.entity_id,
                        subject_display_name:s.display_name,
                        predicate:c.predicate,
-                       predicate_text:c.predicate_text,
+                       predicate_text:properties(c)['predicate_text'],
                        object_entity_id:o.entity_id,
                        object_display_name:o.display_name,
-                       evidence_text:c.evidence_text,
-                       confidence:c.confidence,
+                       evidence_text:properties(c)['evidence_text'],
+                       confidence:properties(c)['confidence'],
                        stance:c.stance,
-                       chunk_index:c.chunk_index,
+                       chunk_index:properties(c)['chunk_index'],
                        evidence_date:properties(c)['evidence_date'],
                        evidence_date_precision:properties(c)['evidence_date_precision'],
                        evidence_date_confidence:properties(c)['evidence_date_confidence']
                      }) AS relation_observations,
                      collect(DISTINCT s.entity_id) + collect(DISTINCT o.entity_id) AS raw_entity_ids,
-                     max(coalesce(c.confidence,0.0)) AS max_confidence
+                     max(coalesce(properties(c)['confidence'],0.0)) AS max_confidence
                 UNWIND raw_entity_ids AS raw_entity_id
                 WITH d, relation_observations, max_confidence, collect(DISTINCT raw_entity_id) AS matched_entity_ids
                 RETURN properties(d) AS document,
@@ -4333,7 +4211,7 @@ class GraphStore:
                 ORDER BY matched_entity_count DESC,
                          max_confidence DESC,
                          size(relation_observations) DESC,
-                         coalesce(d.last_graph_indexed_at,d.last_seen_at,d.created_at) DESC
+                         coalesce(properties(d)['last_graph_indexed_at'],properties(d)['last_seen_at'],properties(d)['created_at']) DESC
                 LIMIT $limit
                 """,
                 entity_ids=ids,
@@ -4387,7 +4265,7 @@ class GraphStore:
                 WITH d,
                      collect(DISTINCT e.entity_id) AS matched_entity_ids,
                      collect(DISTINCT e.display_name) AS matched_entity_names,
-                     sum(coalesce(m.mention_count,1)) AS mention_total
+                     sum(coalesce(properties(m)['mention_count'],1)) AS mention_total
                 WHERE size(matched_entity_ids) = size($entity_ids)
                 RETURN properties(d) AS document,
                        matched_entity_ids,
@@ -4395,7 +4273,7 @@ class GraphStore:
                        size(matched_entity_ids) AS matched_entity_count,
                        mention_total
                 ORDER BY mention_total DESC,
-                         coalesce(d.last_graph_indexed_at,d.last_seen_at,d.created_at) DESC
+                         coalesce(properties(d)['last_graph_indexed_at'],properties(d)['last_seen_at'],properties(d)['created_at']) DESC
                 LIMIT $limit
                 """,
                 entity_ids=ids,
@@ -4437,7 +4315,7 @@ class GraphStore:
                     WITH d,
                          collect(DISTINCT e.entity_id) AS matched_entity_ids,
                          collect(DISTINCT e.display_name) AS matched_entity_names,
-                         sum(coalesce(m.mention_count,1)) AS mention_total
+                         sum(coalesce(properties(m)['mention_count'],1)) AS mention_total
                     RETURN properties(d) AS document,
                            matched_entity_ids,
                            matched_entity_names,
@@ -4445,7 +4323,7 @@ class GraphStore:
                            mention_total
                     ORDER BY matched_entity_count DESC,
                              mention_total DESC,
-                             coalesce(d.last_graph_indexed_at,d.last_seen_at,d.created_at) DESC
+                             coalesce(properties(d)['last_graph_indexed_at'],properties(d)['last_seen_at'],properties(d)['created_at']) DESC
                     LIMIT $limit
                     """,
                     entity_ids=ids,
@@ -4513,11 +4391,11 @@ class GraphStore:
                       subject_entity_id:s1.entity_id,
                       subject_display_name:s1.display_name,
                       predicate:r1.predicate,
-                      predicate_text:r1.predicate_text,
+                      predicate_text:properties(r1)['predicate_text'],
                       object_entity_id:o1.entity_id,
                       object_display_name:o1.display_name,
-                      evidence_text:r1.evidence_text,
-                      confidence:r1.confidence,
+                      evidence_text:properties(r1)['evidence_text'],
+                      confidence:properties(r1)['confidence'],
                       stance:r1.stance
                     } AS hop1,
                     {
@@ -4525,14 +4403,14 @@ class GraphStore:
                       subject_entity_id:s2.entity_id,
                       subject_display_name:s2.display_name,
                       predicate:r2.predicate,
-                      predicate_text:r2.predicate_text,
+                      predicate_text:properties(r2)['predicate_text'],
                       object_entity_id:o2.entity_id,
                       object_display_name:o2.display_name,
-                      evidence_text:r2.evidence_text,
-                      confidence:r2.confidence,
+                      evidence_text:properties(r2)['evidence_text'],
+                      confidence:properties(r2)['confidence'],
                       stance:r2.stance
                     } AS hop2
-                ORDER BY coalesce(r1.confidence,0.0) + coalesce(r2.confidence,0.0) DESC,
+                ORDER BY coalesce(properties(r1)['confidence'],0.0) + coalesce(properties(r2)['confidence'],0.0) DESC,
                          bridge_entity_name
                 LIMIT $chain_limit
                 """,
@@ -4618,12 +4496,12 @@ class GraphStore:
             """
             MATCH (d:EntityFormDecision {normalized:$normalized})
             RETURN d.normalized AS normalized,
-                   coalesce(d.value,'') AS value,
-                   coalesce(d.status,'') AS status,
-                   coalesce(d.target_entity_id,'') AS target_entity_id,
-                   coalesce(d.decision_kind,'') AS decision_kind,
-                   coalesce(d.reason,'') AS reason,
-                   toString(d.decided_at) AS decided_at
+                   coalesce(properties(d)['value'],'') AS value,
+                   coalesce(properties(d)['status'],'') AS status,
+                   coalesce(properties(d)['target_entity_id'],'') AS target_entity_id,
+                   coalesce(properties(d)['decision_kind'],'') AS decision_kind,
+                   coalesce(properties(d)['reason'],'') AS reason,
+                   toString(properties(d)['decided_at']) AS decided_at
             LIMIT 1
             """,
             normalized=normalized,
@@ -4731,7 +4609,7 @@ class GraphStore:
         self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias {normalized:$normalized})
-            WHERE coalesce(r.source_curator,'')='manual'
+            WHERE coalesce(properties(r)['source_curator'],'')='manual'
             DELETE r
             WITH a
             OPTIONAL MATCH (:Entity)-[remaining:HAS_SEARCH_ALIAS]->(a)
@@ -4762,8 +4640,8 @@ class GraphStore:
             target_rows = self._run(
                 """
                 MATCH (e:Entity {entity_id:$entity_id})
-                WHERE coalesce(e.identity_status,'') <> 'merged'
-                  AND coalesce(e.identity_status,'') <> 'orphaned'
+                WHERE coalesce(properties(e)['identity_status'],'') <> 'merged'
+                  AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
                 RETURN e.entity_id AS entity_id,
                        e.display_name AS display_name,
                        labels(e) AS labels,
@@ -4777,17 +4655,17 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (e:Entity)
-            WHERE coalesce(e.identity_status,'') <> 'merged'
-              AND coalesce(e.identity_status,'') <> 'orphaned'
+            WHERE coalesce(properties(e)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName {normalized:$normalized})
             OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias {normalized:$normalized})
             WITH e, n, rn, a, ra
             WHERE (n IS NOT NULL
-                   AND coalesce(rn.active,true)=true
-                   AND coalesce(rn.resolution_policy,'exclusive') <> 'document_only')
+                   AND coalesce(properties(rn)['active'],true)=true
+                   AND coalesce(properties(rn)['resolution_policy'],'exclusive') <> 'document_only')
                OR (a IS NOT NULL
-                   AND coalesce(ra.active,true)=true
-                   AND coalesce(ra.resolution_policy,'contextual') <> 'document_only')
+                   AND coalesce(properties(ra)['active'],true)=true
+                   AND coalesce(properties(ra)['resolution_policy'],'contextual') <> 'document_only')
             WITH e, max(CASE WHEN n IS NOT NULL THEN 2 ELSE 1 END) AS match_rank
             RETURN e.entity_id AS entity_id,
                    e.display_name AS display_name,
@@ -4874,7 +4752,7 @@ class GraphStore:
                 WHERE coalesce(properties(f)['curation_hash'],'')=$curation_hash
                    OR (coalesce(properties(f)['curation_hash'],'')='' AND f.frame_hash=$frame_hash)
                 RETURN f.finding_id AS finding_id
-                ORDER BY f.created_at ASC
+                ORDER BY properties(f)['created_at'] ASC
                 LIMIT 1
                 """,
                 document_id=document_id,
@@ -4985,7 +4863,7 @@ class GraphStore:
                 f.planner_model=$planner_model,
                 f.verifier_model=$verifier_model,
                 f.last_seen_at=datetime(),
-                f.observation_count=coalesce(f.observation_count,0)+1,
+                f.observation_count=coalesce(properties(f)['observation_count'],0)+1,
                 f.updated_at=datetime()
             MERGE (f)-[r:SUPPORTED_BY]->(d)
             ON CREATE SET r.created_at=datetime()
@@ -5074,19 +4952,28 @@ class GraphStore:
             """
             MATCH (run:ResearchRun)
             WHERE ($canonical_user_id='' OR run.canonical_user_id=$canonical_user_id)
-              AND ($needle='' OR toLower(coalesce(run.user_query,'')) CONTAINS $needle
-                               OR toLower(coalesce(run.retrieval_query,'')) CONTAINS $needle)
+              AND ($needle='' OR toLower(coalesce(properties(run)['user_query'],'')) CONTAINS $needle
+                               OR toLower(coalesce(properties(run)['retrieval_query'],'')) CONTAINS $needle)
             OPTIONAL MATCH (run)-[p:PRODUCED]->(f:ResearchFinding)
             RETURN properties(run) AS run,
-                   collect({finding_id:f.finding_id, disposition:coalesce(p.disposition,'pending')}) AS produced
-            ORDER BY run.created_at DESC
+                   collect({finding_id:f.finding_id, disposition:coalesce(properties(p)['disposition'],'pending')}) AS produced
+            ORDER BY properties(run)['created_at'] DESC
             LIMIT $limit
             """,
             canonical_user_id=str(canonical_user_id or ""),
             needle=str(query or "").strip().casefold(),
             limit=max(1, min(int(limit), 2000)),
         )
-        findings = {str(item.get("finding_id") or ""): item for item in self.list_research_findings(limit=2000)}
+        produced_ids = list(dict.fromkeys(
+            str(edge.get("finding_id") or "")
+            for row in rows
+            for edge in (row.get("produced") or [])
+            if str((edge or {}).get("finding_id") or "")
+        ))
+        findings = {
+            str(item.get("finding_id") or ""): item
+            for item in self.list_research_findings(finding_ids=produced_ids)
+        }
         out: list[dict[str, Any]] = []
         for row in rows:
             run = dict(row.get("run") or {})
@@ -5145,14 +5032,22 @@ class GraphStore:
             MATCH (run:ResearchRun {run_id:$run_id})
             OPTIONAL MATCH (run)-[p:PRODUCED]->(f:ResearchFinding)
             RETURN properties(run) AS run,
-                   collect({finding_id:f.finding_id, disposition:coalesce(p.disposition,'pending')}) AS produced
+                   collect({finding_id:f.finding_id, disposition:coalesce(properties(p)['disposition'],'pending')}) AS produced
             """,
             run_id=str(run_id or ""),
         )
         if not runs:
             return None
         run = dict(runs[0].get("run") or {})
-        finding_map = {str(item.get("finding_id") or ""): item for item in self.list_research_findings(limit=2000)}
+        produced_ids = [
+            str((edge or {}).get("finding_id") or "")
+            for edge in (runs[0].get("produced") or [])
+            if str((edge or {}).get("finding_id") or "")
+        ]
+        finding_map = {
+            str(item.get("finding_id") or ""): item
+            for item in self.list_research_findings(finding_ids=produced_ids)
+        }
         findings = []
         for edge in runs[0].get("produced") or []:
             fid = str((edge or {}).get("finding_id") or "")
@@ -5173,7 +5068,7 @@ class GraphStore:
                 run.updated_at=datetime()
             WITH run
             OPTIONAL MATCH (run)-[p:PRODUCED]->(:ResearchFinding)
-            WHERE coalesce(p.disposition,'pending')='pending'
+            WHERE coalesce(properties(p)['disposition'],'pending')='pending'
             SET p.disposition='dismissed', p.dismissed_at=datetime(), p.dismissed_by=$actor
             RETURN run.run_id AS run_id, count(p) AS findings_dismissed
             """,
@@ -5214,73 +5109,90 @@ class GraphStore:
         )
         return {"updated": int(rows[0].get("updated") or 0) if rows else 0, "requested": len(ids)}
 
-    def list_research_findings(self, *, query: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def list_research_findings(
+        self,
+        *,
+        query: str = "",
+        limit: int = 200,
+        finding_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """List persisted positive verifier findings for the admin UI.
 
-        Graph-Lite curation state is deliberately derived from explicit curator
-        relationships/properties.  Raw ResearchFinding provenance remains intact.
+        When finding_ids is supplied, fetch exactly that bounded caller-owned
+        set rather than applying the global newest-findings window.
         """
         needle = str(query or "").strip().casefold()
+        targeted = finding_ids is not None
+        ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in (finding_ids or [])
+            if str(value or "").strip()
+        ))
+        if targeted and not ids:
+            return []
+        row_limit = len(ids) if targeted else max(1, min(int(limit), 2000))
         rows = self._run(
             """
             MATCH (f:ResearchFinding)-[s:SUPPORTED_BY]->(d:Document)
             OPTIONAL MATCH (f)-[qe:QUERY_ENTITY]->(e:Entity)
             WITH f, s, d, collect({
-                text: qe.text, role: qe.role, entity_id: e.entity_id,
+                text: properties(qe)['text'], role: properties(qe)['role'], entity_id: e.entity_id,
                 display_name: e.display_name
             }) AS resolved_entities
             OPTIONAL MATCH (f)-[ce:CURATED_ENTITY]->(curated:Entity)
             WITH f, s, d, resolved_entities, collect({
-                text: ce.frame_text, role: ce.role, entity_id: curated.entity_id,
+                text: properties(ce)['frame_text'], role: properties(ce)['role'], entity_id: curated.entity_id,
                 display_name: curated.display_name, labels: labels(curated)
             }) AS curated_entities
             OPTIONAL MATCH (claim:RelationObservation)-[:DERIVED_FROM_FINDING]->(f)
             WITH f, s, d, resolved_entities, curated_entities,
-                 count(CASE WHEN coalesce(claim.curator_status,'') = 'manual_claim' THEN claim END) AS claim_count,
-                 count(CASE WHEN coalesce(claim.curator_status,'') = 'review_required' THEN claim END) AS review_count
-            WHERE $needle=''
-               OR toLower(coalesce(d.title,'')) CONTAINS $needle
-               OR toLower(coalesce(d.path,'')) CONTAINS $needle
-               OR toLower(coalesce(f.intent,'')) CONTAINS $needle
-               OR toLower(coalesce(f.constraints_json,'')) CONTAINS $needle
-               OR any(x IN coalesce(f.entity_texts,[]) WHERE toLower(x) CONTAINS $needle)
-               OR any(x IN coalesce(f.concepts,[]) WHERE toLower(x) CONTAINS $needle)
+                 count(CASE WHEN coalesce(properties(claim)['curator_status'],'') = 'manual_claim' THEN claim END) AS claim_count,
+                 count(CASE WHEN coalesce(properties(claim)['curator_status'],'') = 'review_required' THEN claim END) AS review_count
+            WHERE (size($finding_ids)=0 OR f.finding_id IN $finding_ids)
+              AND ($needle=''
+               OR toLower(coalesce(properties(d)['title'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(d)['path'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(f)['intent'],'')) CONTAINS $needle
+               OR toLower(coalesce(properties(f)['constraints_json'],'')) CONTAINS $needle
+               OR any(x IN coalesce(properties(f)['entity_texts'],[]) WHERE toLower(x) CONTAINS $needle)
+               OR any(x IN coalesce(properties(f)['concepts'],[]) WHERE toLower(x) CONTAINS $needle)
                OR any(x IN resolved_entities WHERE toLower(coalesce(x.display_name,'')) CONTAINS $needle)
-               OR any(x IN curated_entities WHERE toLower(coalesce(x.display_name,'')) CONTAINS $needle)
+               OR any(x IN curated_entities WHERE toLower(coalesce(x.display_name,'')) CONTAINS $needle))
             RETURN f.finding_id AS finding_id,
                    d.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
-                   d.source_url AS source_url,
-                   d.document_date AS document_date,
-                   f.intent AS intent,
-                   f.entity_texts AS entity_texts,
-                   f.entity_roles AS entity_roles,
-                   f.concepts AS concepts,
-                   f.constraints_json AS constraints_json,
-                   f.verification_status AS verification_status,
-                   f.relation_binding AS relation_binding,
-                   f.planner_model AS planner_model,
-                   f.verifier_model AS verifier_model,
-                   f.software_version AS software_version,
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
+                   properties(d)['source_url'] AS source_url,
+                   properties(d)['document_date'] AS document_date,
+                   properties(f)['intent'] AS intent,
+                   properties(f)['entity_texts'] AS entity_texts,
+                   properties(f)['entity_roles'] AS entity_roles,
+                   properties(f)['concepts'] AS concepts,
+                   properties(f)['constraints_json'] AS constraints_json,
+                   properties(f)['verification_status'] AS verification_status,
+                   properties(f)['relation_binding'] AS relation_binding,
+                   properties(f)['planner_model'] AS planner_model,
+                   properties(f)['verifier_model'] AS verifier_model,
+                   properties(f)['software_version'] AS software_version,
                    properties(f)['curator_status'] AS curator_status,
                    properties(f)['curator_reason'] AS curator_reason,
                    coalesce(properties(f)['suppressed_entity_texts'],[]) AS suppressed_entity_texts,
-                   f.observation_count AS observation_count,
-                   f.last_seen_at AS last_seen_at,
+                   properties(f)['observation_count'] AS observation_count,
+                   properties(f)['last_seen_at'] AS last_seen_at,
                    resolved_entities, curated_entities, claim_count, review_count
-            ORDER BY f.last_seen_at DESC
+            ORDER BY properties(f)['last_seen_at'] DESC
             LIMIT $limit
             """,
             needle=needle,
-            limit=max(1, min(int(limit), 2000)),
+            finding_ids=ids,
+            limit=row_limit,
         )
         global_rejections = {
             str(row.get("normalized") or "")
             for row in self._run(
                 """
                 MATCH (d:EntityFormDecision)
-                WHERE coalesce(d.status,'')='not_entity'
+                WHERE coalesce(properties(d)['status'],'')='not_entity'
                 RETURN d.normalized AS normalized
                 """
             )
@@ -5344,15 +5256,15 @@ class GraphStore:
             MATCH (f:ResearchFinding {finding_id:$finding_id})-[s:SUPPORTED_BY]->(d:Document)
             OPTIONAL MATCH (f)-[qe:QUERY_ENTITY]->(e:Entity)
             WITH f, s, d, collect({
-                frame_entity_id: qe.frame_entity_id, role: qe.role, text: qe.text,
+                frame_entity_id: properties(qe)['frame_entity_id'], role: properties(qe)['role'], text: properties(qe)['text'],
                 entity_id: e.entity_id, display_name: e.display_name, labels: labels(e)
             }) AS resolved_entities
             OPTIONAL MATCH (f)-[ce:CURATED_ENTITY]->(curated:Entity)
             WITH f, s, d, resolved_entities, collect({
-                text: ce.frame_text, role: ce.role, entity_id: curated.entity_id,
+                text: properties(ce)['frame_text'], role: properties(ce)['role'], entity_id: curated.entity_id,
                 display_name: curated.display_name, labels: labels(curated),
-                entity_kind: coalesce(curated.entity_kind,''),
-                curated_at: ce.curated_at
+                entity_kind: coalesce(properties(curated)['entity_kind'],''),
+                curated_at: properties(ce)['curated_at']
             }) AS curated_entities
             OPTIONAL MATCH (claim:RelationObservation)-[:DERIVED_FROM_FINDING]->(f)
             OPTIONAL MATCH (claim)-[:SUBJECT]->(subject:Entity)
@@ -5445,8 +5357,8 @@ class GraphStore:
                 f.curator_decided_at=datetime(),
                 f.updated_at=datetime()
             RETURN f.finding_id AS finding_id,
-                   f.curator_status AS curator_status,
-                   f.curator_reason AS curator_reason
+                   properties(f)['curator_status'] AS curator_status,
+                   properties(f)['curator_reason'] AS curator_reason
             """,
             finding_id=str(finding_id or "").strip(),
             status=clean_status,
@@ -5466,8 +5378,8 @@ class GraphStore:
         rows = self._run(
             """
             MATCH (f:ResearchFinding)
-            WHERE size(coalesce(f.entity_texts,[])) = 0
-              AND coalesce(f.curator_status,'') <> 'suppressed'
+            WHERE size(coalesce(properties(f)['entity_texts'],[])) = 0
+              AND coalesce(properties(f)['curator_status'],'') <> 'suppressed'
             SET f.curator_status='suppressed',
                 f.curator_reason='bulk_no_entity_cleanup',
                 f.curator_decided_at=datetime(),
@@ -5722,7 +5634,7 @@ class GraphStore:
             MATCH (e:Entity {entity_id:$entity_id})
             OPTIONAL MATCH (other:EntityObservation {document_id:$document_id})-[:RESOLVED_TO]->(e)
             WHERE other.observation_id <> $observation_id
-              AND coalesce(other.curator_status,'') <> 'manual_not_entity'
+              AND coalesce(properties(other)['curator_status'],'') <> 'manual_not_entity'
             RETURN count(other) AS support_count
             """,
             document_id=document_id,
@@ -5744,7 +5656,7 @@ class GraphStore:
         self._run(
             """
             MATCH (c:RelationObservation)-[:DERIVED_FROM_FINDING]->(f:ResearchFinding {finding_id:$finding_id})
-            WHERE coalesce(c.curator_status,'') = 'manual_claim'
+            WHERE coalesce(properties(c)['curator_status'],'') = 'manual_claim'
             SET c.curator_status='review_required',
                 c.review_reason=$reason,
                 c.review_required_at=datetime(),
@@ -5830,7 +5742,7 @@ class GraphStore:
                 OPTIONAL MATCH (f)-[ce:CURATED_ENTITY {frame_text:$entity_text}]->()
                 DELETE ce
                 SET f.suppressed_entity_texts =
-                    [x IN coalesce(f.suppressed_entity_texts,[]) WHERE toLower(x) <> toLower($entity_text)] + [$entity_text],
+                    [x IN coalesce(properties(f)['suppressed_entity_texts'],[]) WHERE toLower(x) <> toLower($entity_text)] + [$entity_text],
                     f.curator_status='',
                     f.curator_reason='',
                     f.updated_at=datetime()
@@ -5926,7 +5838,7 @@ class GraphStore:
                 ce.curated_by=$curator_actor,
                 ce.curated_at=datetime(),
                 ce.updated_at=datetime(),
-                f.suppressed_entity_texts = [x IN coalesce(f.suppressed_entity_texts,[]) WHERE toLower(x) <> toLower($entity_text)],
+                f.suppressed_entity_texts = [x IN coalesce(properties(f)['suppressed_entity_texts'],[]) WHERE toLower(x) <> toLower($entity_text)],
                 f.curator_status='',
                 f.curator_reason='',
                 f.updated_at=datetime()
@@ -6070,11 +5982,11 @@ class GraphStore:
             RETURN d.document_id AS document_id,
                    subject.display_name AS subject_name,
                    labels(subject) AS subject_labels,
-                   coalesce(subject.entity_kind,'') AS subject_kind,
+                   coalesce(properties(subject)['entity_kind'],'') AS subject_kind,
                    object.display_name AS object_name,
                    labels(object) AS object_labels,
-                   coalesce(object.entity_kind,'') AS object_kind,
-                   f.intent AS intent
+                   coalesce(properties(object)['entity_kind'],'') AS object_kind,
+                   properties(f)['intent'] AS intent
             LIMIT 1
             """,
             finding_id=finding_id,
@@ -6283,7 +6195,7 @@ class GraphStore:
                 c.review_required_at=null,
                 c.updated_at=datetime(),
                 f.updated_at=datetime()
-            RETURN c.relation_id AS relation_id, c.curator_status AS curator_status
+            RETURN c.relation_id AS relation_id, properties(c)['curator_status'] AS curator_status
             """,
             finding_id=finding_id,
             relation_id=str(relation_id or ""),
@@ -6306,16 +6218,16 @@ class GraphStore:
             MATCH (f:ResearchFinding)-[r:SUPPORTED_BY]->(d:Document {document_id:$document_id})
             OPTIONAL MATCH (f)-[qe:QUERY_ENTITY]->(e:Entity)
             WITH f, r, collect({
-                frame_entity_id: qe.frame_entity_id,
-                role: qe.role,
-                text: qe.text,
+                frame_entity_id: properties(qe)['frame_entity_id'],
+                role: properties(qe)['role'],
+                text: properties(qe)['text'],
                 entity_id: e.entity_id,
                 display_name: e.display_name
             }) AS resolved_entities
             RETURN properties(f) AS finding,
                    properties(r) AS support,
                    resolved_entities
-            ORDER BY f.last_seen_at DESC
+            ORDER BY properties(f)['last_seen_at'] DESC
             LIMIT $limit
             """,
             document_id=document_id,
@@ -6339,11 +6251,11 @@ class GraphStore:
             RETURN e.entity_id AS entity_id,
                    e.display_name AS display_name,
                    labels(e) AS labels,
-                   r.mention_count AS mention_count,
-                   r.observed_values AS observed_values,
-                   r.resolution AS resolution,
-                   r.max_score AS max_score
-            ORDER BY coalesce(r.mention_count,0) DESC, e.display_name
+                   properties(r)['mention_count'] AS mention_count,
+                   properties(r)['observed_values'] AS observed_values,
+                   properties(r)['resolution'] AS resolution,
+                   properties(r)['max_score'] AS max_score
+            ORDER BY coalesce(properties(r)['mention_count'],0) DESC, e.display_name
             """,
             document_id=document_id,
         )
@@ -6351,13 +6263,13 @@ class GraphStore:
             """
             MATCH (d:Document {document_id:$document_id})-[r:MENTIONS_NAME]->(m:MentionName)
             RETURN m.normalized AS normalized,
-                   coalesce(m.last_seen_value,m.value) AS value,
-                   r.status AS status,
-                   r.mention_count AS mention_count,
-                   r.observed_values AS observed_values,
-                   r.candidate_entity_ids AS candidate_entity_ids,
-                   r.candidate_scores AS candidate_scores
-            ORDER BY coalesce(r.mention_count,0) DESC, m.normalized
+                   coalesce(properties(m)['last_seen_value'],properties(m)['value']) AS value,
+                   properties(r)['status'] AS status,
+                   properties(r)['mention_count'] AS mention_count,
+                   properties(r)['observed_values'] AS observed_values,
+                   properties(r)['candidate_entity_ids'] AS candidate_entity_ids,
+                   properties(r)['candidate_scores'] AS candidate_scores
+            ORDER BY coalesce(properties(r)['mention_count'],0) DESC, m.normalized
             """,
             document_id=document_id,
         )
@@ -6380,8 +6292,8 @@ class GraphStore:
             RETURN e.entity_id AS entity_id,
                    e.display_name AS display_name,
                    labels(e) AS labels,
-                   coalesce(e.origin,'') AS origin,
-                   coalesce(e.identity_status,'') AS identity_status,
+                   coalesce(properties(e)['origin'],'') AS origin,
+                   coalesce(properties(e)['identity_status'],'') AS identity_status,
                    coalesce(e.identity_key,'') AS identity_key,
                    size([(d:Document)-[:MENTIONS]->(e) | d]) AS document_mentions,
                    size([(o:EntityObservation)-[:RESOLVED_TO]->(e) | o]) AS observations,
@@ -6403,9 +6315,9 @@ class GraphStore:
                OR o.curator_target_entity_id=$entity_id
             OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
             RETURN o.observation_id AS observation_id,
-                   o.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
+                   properties(o)['document_id'] AS document_id,
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
                    properties(o)['observed_text'] AS observed_text,
                    properties(o)['canonical_name'] AS canonical_name,
                    properties(o)['normalized'] AS normalized,
@@ -6463,13 +6375,13 @@ class GraphStore:
               AND ($needle=''
                    OR toLower(coalesce(properties(o)['observed_text'],'')) CONTAINS $needle
                    OR toLower(coalesce(properties(o)['canonical_name'],'')) CONTAINS $needle
-                   OR toLower(coalesce(d.title,'')) CONTAINS $needle
-                   OR toLower(coalesce(d.path,'')) CONTAINS $needle
+                   OR toLower(coalesce(properties(d)['title'],'')) CONTAINS $needle
+                   OR toLower(coalesce(properties(d)['path'],'')) CONTAINS $needle
                    OR toLower(coalesce(e.display_name,'')) CONTAINS $needle)
             RETURN o.observation_id AS observation_id,
-                   o.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
+                   properties(o)['document_id'] AS document_id,
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
                    properties(o)['observed_text'] AS observed_text,
                    properties(o)['canonical_name'] AS canonical_name,
                    properties(o)['normalized'] AS normalized,
@@ -6485,7 +6397,7 @@ class GraphStore:
                    properties(o)['curator_target_entity_id'] AS curator_target_entity_id,
                    e.entity_id AS resolved_entity_id,
                    e.display_name AS resolved_entity_name
-            ORDER BY coalesce(d.path,d.title,o.document_id), o.observation_id
+            ORDER BY coalesce(properties(d)['path'],properties(d)['title'],properties(o)['document_id']), o.observation_id
             LIMIT $limit
             """,
             needle=needle,
@@ -6559,9 +6471,9 @@ class GraphStore:
             OPTIONAL MATCH (d:Document)-[:HAS_ENTITY_OBSERVATION]->(o)
             OPTIONAL MATCH (o)-[:RESOLVED_TO]->(e:Entity)
             RETURN o.observation_id AS observation_id,
-                   o.document_id AS document_id,
-                   d.title AS document_title,
-                   d.path AS document_path,
+                   properties(o)['document_id'] AS document_id,
+                   properties(d)['title'] AS document_title,
+                   properties(d)['path'] AS document_path,
                    properties(o)['observed_text'] AS observed_text,
                    properties(o)['canonical_name'] AS canonical_name,
                    properties(o)['normalized'] AS normalized,
@@ -6631,7 +6543,7 @@ class GraphStore:
             self._run(
                 """
                 MATCH (e:Entity {entity_id:$entity_id})-[r:HAS_SEARCH_ALIAS]->(:SearchAlias)
-                WHERE r.source_document_id IS NOT NULL
+                WHERE properties(r)['source_document_id'] IS NOT NULL
                 SET r.active=false, r.retired_by='manual_name_correction',
                     r.retired_at=datetime(), r.updated_at=datetime()
                 """,
@@ -6763,7 +6675,7 @@ class GraphStore:
                     """
                     MATCH (o:EntityObservation {document_id:$document_id})-[:RESOLVED_TO]->(e:Entity {entity_id:$old_entity_id})
                     WHERE o.observation_id <> $observation_id
-                      AND coalesce(o.curator_status,'') <> 'manual_not_entity'
+                      AND coalesce(properties(o)['curator_status'],'') <> 'manual_not_entity'
                     RETURN count(o) > 0 AS supported
                     """,
                     document_id=document_id,
@@ -6794,10 +6706,10 @@ class GraphStore:
                 )
                 FOREACH (_ IN CASE WHEN existing IS NULL THEN [] ELSE [1] END |
                     SET existing.observed_values=CASE
-                            WHEN $observed_text='' OR $observed_text IN coalesce(existing.observed_values,[]) THEN coalesce(existing.observed_values,[])
-                            ELSE coalesce(existing.observed_values,[]) + [$observed_text] END,
+                            WHEN $observed_text='' OR $observed_text IN coalesce(properties(existing)['observed_values'],[]) THEN coalesce(properties(existing)['observed_values'],[])
+                            ELSE coalesce(properties(existing)['observed_values'],[]) + [$observed_text] END,
                         existing.resolution='manual_observation_correction',
-                        existing.max_score=CASE WHEN coalesce(existing.max_score,0.0) < 1.0 THEN 1.0 ELSE existing.max_score END,
+                        existing.max_score=CASE WHEN coalesce(properties(existing)['max_score'],0.0) < 1.0 THEN 1.0 ELSE properties(existing)['max_score'] END,
                         existing.updated_at=datetime()
                 )
                 """,
@@ -6812,7 +6724,7 @@ class GraphStore:
             rows = self._run(
                 """
                 MATCH (e:Entity {entity_id:$entity_id})
-                WHERE coalesce(e.identity_status,'')='provisional'
+                WHERE coalesce(properties(e)['identity_status'],'')='provisional'
                 OPTIONAL MATCH (d:Document)-[m:MENTIONS]->(e)
                 WITH e, count(m) AS mentions
                 OPTIONAL MATCH (o:EntityObservation)-[r:RESOLVED_TO]->(e)
@@ -6991,13 +6903,13 @@ class GraphStore:
             """
             MATCH (old:Entity {entity_id:$merge_id})-[r:POSSIBLE_SAME_AS]-(x:Entity)
             WHERE x.entity_id <> $keep_id
-              AND coalesce(r.status,'candidate')='candidate'
-              AND coalesce(x.identity_status,'') <> 'merged' AND coalesce(x.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(r)['status'],'candidate')='candidate'
+              AND coalesce(properties(x)['identity_status'],'') <> 'merged' AND coalesce(properties(x)['identity_status'],'') <> 'orphaned'
             RETURN DISTINCT x.entity_id AS entity_id,
-                   coalesce(r.score,0.0) AS score,
-                   coalesce(r.reason,'carried_candidate') AS reason,
-                   r.matched_left_form AS matched_left_form,
-                   r.matched_right_form AS matched_right_form
+                   coalesce(properties(r)['score'],0.0) AS score,
+                   coalesce(properties(r)['reason'],'carried_candidate') AS reason,
+                   properties(r)['matched_left_form'] AS matched_left_form,
+                   properties(r)['matched_right_form'] AS matched_right_form
             """,
             keep_id=keep_entity_id,
             merge_id=merge_entity_id,
@@ -7023,7 +6935,7 @@ class GraphStore:
             MATCH (old:Entity {entity_id:$merge_id})-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias)
             MATCH (keep:Entity {entity_id:$keep_id})
             MERGE (keep)-[nr:HAS_SEARCH_ALIAS {source_merge_entity_id:$merge_id, normalized:a.normalized}]->(a)
-            SET nr.kind='merged_alias', nr.weight=CASE WHEN coalesce(r.weight,0.5) >= 0.92 THEN coalesce(r.weight,0.5) ELSE 0.92 END, nr.active=true,
+            SET nr.kind='merged_alias', nr.weight=CASE WHEN coalesce(properties(r)['weight'],0.5) >= 0.92 THEN coalesce(properties(r)['weight'],0.5) ELSE 0.92 END, nr.active=true,
                 nr.resolution_policy=$alias_policy, nr.merged_at=datetime(), nr.updated_at=datetime()
             """,
             keep_id=keep_entity_id,
@@ -7089,11 +7001,11 @@ class GraphStore:
             MERGE (o)-[nr:RESOLVED_TO]->(keep)
             SET nr.resolved_by='manual_merge', nr.merged_from_entity_id=$merge_id,
                 nr.updated_at=datetime(),
-                o.status=CASE WHEN coalesce(o.curator_status,'')='corrected_observation' THEN 'corrected' ELSE 'resolved_existing' END,
+                o.status=CASE WHEN coalesce(properties(o)['curator_status'],'')='corrected_observation' THEN 'corrected' ELSE 'resolved_existing' END,
                 o.candidate_entity_ids=[$keep_id],
                 o.curator_target_entity_id=CASE
-                    WHEN coalesce(o.curator_status,'')='corrected_observation' THEN $keep_id
-                    ELSE o.curator_target_entity_id END,
+                    WHEN coalesce(properties(o)['curator_status'],'')='corrected_observation' THEN $keep_id
+                    ELSE properties(o)['curator_target_entity_id'] END,
                 o.updated_at=datetime()
             DELETE r
             """,
@@ -7117,12 +7029,12 @@ class GraphStore:
                     nr.updated_at=datetime()
             )
             FOREACH (_ IN CASE WHEN dst IS NULL THEN [] ELSE [1] END |
-                SET dst.mention_count=coalesce(dst.mention_count,0)+coalesce(src.mention_count,0),
-                    dst.observed_values=reduce(acc=[], x IN coalesce(dst.observed_values,[])+coalesce(src.observed_values,[]) |
+                SET dst.mention_count=coalesce(properties(dst)['mention_count'],0)+coalesce(properties(src)['mention_count'],0),
+                    dst.observed_values=reduce(acc=[], x IN coalesce(properties(dst)['observed_values'],[])+coalesce(properties(src)['observed_values'],[]) |
                         CASE WHEN x IN acc THEN acc ELSE acc + [x] END),
                     dst.max_score=CASE
-                        WHEN coalesce(dst.max_score,0.0) >= coalesce(src.max_score,0.0) THEN coalesce(dst.max_score,0.0)
-                        ELSE coalesce(src.max_score,0.0)
+                        WHEN coalesce(properties(dst)['max_score'],0.0) >= coalesce(properties(src)['max_score'],0.0) THEN coalesce(properties(dst)['max_score'],0.0)
+                        ELSE coalesce(properties(src)['max_score'],0.0)
                     END,
                     dst.resolution='manual_merge',
                     dst.updated_at=datetime()
@@ -7290,14 +7202,14 @@ class GraphStore:
                 MERGE (a)-[r:POSSIBLE_SAME_AS]->(b)
                 ON CREATE SET r.created_at=datetime()
                 SET r.score=CASE
-                        WHEN coalesce(r.score,0.0) >= $score THEN coalesce(r.score,0.0)
+                        WHEN coalesce(properties(r)['score'],0.0) >= $score THEN coalesce(properties(r)['score'],0.0)
                         ELSE $score END,
                     r.reason=CASE
-                        WHEN coalesce(r.score,0.0) >= $score AND r.reason IS NOT NULL THEN r.reason
+                        WHEN coalesce(properties(r)['score'],0.0) >= $score AND properties(r)['reason'] IS NOT NULL THEN properties(r)['reason']
                         ELSE $reason END,
                     r.status='candidate',
                     r.suggested_by=CASE
-                        WHEN coalesce(r.suggested_by,'')='identity_similarity_v1' THEN r.suggested_by
+                        WHEN coalesce(properties(r)['suggested_by'],'')='identity_similarity_v1' THEN properties(r)['suggested_by']
                         ELSE 'manual_merge_carry' END,
                     r.carried_from_merge_entity_id=$merge_id,
                     r.updated_at=datetime()
@@ -7362,24 +7274,25 @@ class GraphStore:
     def list_merge_candidates(self) -> list[dict[str, Any]]:
         return self._run(
             """
-            MATCH (a:Entity)-[r:POSSIBLE_SAME_AS]->(b:Entity)
-            WHERE coalesce(r.status,'candidate')='candidate'
-              AND coalesce(a.identity_status,'') <> 'merged' AND coalesce(a.identity_status,'') <> 'orphaned'
-              AND coalesce(b.identity_status,'') <> 'merged' AND coalesce(b.identity_status,'') <> 'orphaned'
+            MATCH (a:Entity)-[r]->(b:Entity)
+            WHERE type(r)='POSSIBLE_SAME_AS'
+              AND coalesce(properties(r)['status'],'candidate')='candidate'
+              AND coalesce(properties(a)['identity_status'],'') <> 'merged' AND coalesce(properties(a)['identity_status'],'') <> 'orphaned'
+              AND coalesce(properties(b)['identity_status'],'') <> 'merged' AND coalesce(properties(b)['identity_status'],'') <> 'orphaned'
             RETURN a.entity_id AS left_entity_id,
                    a.display_name AS left_name,
                    labels(a) AS left_labels,
                    b.entity_id AS right_entity_id,
                    b.display_name AS right_name,
                    labels(b) AS right_labels,
-                   r.score AS score,
-                   r.reason AS reason,
-                   r.status AS status,
-                   r.suggested_by AS suggested_by,
-                   r.matched_left_form AS matched_left_form,
-                   r.matched_right_form AS matched_right_form,
+                   properties(r)['score'] AS score,
+                   properties(r)['reason'] AS reason,
+                   properties(r)['status'] AS status,
+                   properties(r)['suggested_by'] AS suggested_by,
+                   properties(r)['matched_left_form'] AS matched_left_form,
+                   properties(r)['matched_right_form'] AS matched_right_form,
                    properties(r)['carried_from_merge_entity_id'] AS carried_from_merge_entity_id
-            ORDER BY r.score DESC, a.display_name, b.display_name
+            ORDER BY properties(r)['score'] DESC, a.display_name, b.display_name
             """
         )
 
@@ -7398,20 +7311,20 @@ class GraphStore:
         contact_import_runs = self._run("MATCH (n:ContactImportRun) RETURN count(n) AS count")
         documents = self._run("MATCH (n:Document) RETURN count(n) AS count")
         mention_names = self._run("MATCH (n:MentionName) RETURN count(n) AS count")
-        document_mentions = self._run("MATCH (:Document)-[r:MENTIONS]->(:Entity) RETURN count(r) AS count")
-        document_name_mentions = self._run("MATCH (:Document)-[r:MENTIONS_NAME]->(:MentionName) RETURN count(r) AS count")
+        document_mentions = self._run("MATCH (:Document)-[r]->(:Entity) WHERE type(r)='MENTIONS' RETURN count(r) AS count")
+        document_name_mentions = self._run("MATCH (:Document)-[r]->(:MentionName) WHERE type(r)='MENTIONS_NAME' RETURN count(r) AS count")
         provisional_entities = self._run("MATCH (e:Entity) WHERE coalesce(e.identity_status,'')='provisional' RETURN count(e) AS count")
         document_origin_entities = self._run("MATCH (e:Entity) WHERE coalesce(e.origin,'') CONTAINS 'document' RETURN count(e) AS count")
         entity_observations = self._run("MATCH (o:EntityObservation) RETURN count(o) AS count")
         relation_observations = self._run("MATCH (o:RelationObservation) RETURN count(o) AS count")
         research_findings = self._run("MATCH (f:ResearchFinding) RETURN count(f) AS count")
         mail_messages = self._run("MATCH (m:MailMessage) RETURN count(m) AS count")
-        mail_replies = self._run("MATCH (:MailMessage)-[r:REPLIES_TO]->(:MailMessage) RETURN count(r) AS count")
-        mail_representations = self._run("MATCH (:Document)-[r:REPRESENTS_MAIL]->(:MailMessage) RETURN count(r) AS count")
-        mail_attachments = self._run("MATCH (:Document)-[r:ATTACHMENT_OF]->(:MailMessage) RETURN count(r) AS count")
+        mail_replies = self._run("MATCH (:MailMessage)-[r]->(:MailMessage) WHERE type(r)='REPLIES_TO' RETURN count(r) AS count")
+        mail_representations = self._run("MATCH (:Document)-[r]->(:MailMessage) WHERE type(r)='REPRESENTS_MAIL' RETURN count(r) AS count")
+        mail_attachments = self._run("MATCH (:Document)-[r]->(:MailMessage) WHERE type(r)='ATTACHMENT_OF' RETURN count(r) AS count")
         rejected_observations = self._run("MATCH (o:EntityObservation {status:'rejected'}) RETURN count(o) AS count")
         unresolved_observations = self._run("MATCH (o:EntityObservation {status:'unresolved'}) RETURN count(o) AS count")
-        merge_candidates = self._run("MATCH ()-[r:POSSIBLE_SAME_AS]->() WHERE coalesce(r.status,'candidate')='candidate' RETURN count(r) AS count")
+        merge_candidates = self._run("MATCH ()-[r]->() WHERE type(r)='POSSIBLE_SAME_AS' AND coalesce(properties(r)['status'],'candidate')='candidate' RETURN count(r) AS count")
         merged_entities = self._run("MATCH (e:Entity {identity_status:'merged'}) RETURN count(e) AS count")
         confirmed_entities = self._run("MATCH (e:Entity {identity_status:'confirmed'}) RETURN count(e) AS count")
         orphaned_entities = self._run("MATCH (e:Entity {identity_status:'orphaned'}) RETURN count(e) AS count")
@@ -7732,9 +7645,9 @@ def main() -> int:
                 """
                 MATCH (e:Entity)
                 WHERE (e:Person OR e:Organization)
-                  AND coalesce(e.identity_status,'') <> 'merged' AND coalesce(e.identity_status,'') <> 'orphaned'
-                RETURN e.entity_id AS entity_id, e.display_name AS display_name, labels(e) AS labels
-                ORDER BY e.display_name
+                  AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
+                RETURN properties(e)['entity_id'] AS entity_id, properties(e)['display_name'] AS display_name, labels(e) AS labels
+                ORDER BY properties(e)['display_name']
                 """
             )
             matches = [row for row in rows if normalize_name(str(row.get("display_name") or "")) in set(blocked)]

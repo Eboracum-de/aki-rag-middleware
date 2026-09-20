@@ -1,11 +1,11 @@
-# Installation – 0.8.5-rc4
+# Installation – 0.8.5-rc4.1
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
-Functional profile and deployment mechanism are conceptually separate. In 0.8.4 the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
+Functional profile and deployment mechanism are conceptually separate. In the 0.8.5 line the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
 
-`0.8.5-rc4` is the first public release candidate. It consolidates the field-tested RC2 baseline plus Graph-Lite Findings curation and public-release hardening. Graph-Lite curation remains manual and does not alter retrieval automatically. It changes the security
-and user-configuration model before the first real beta test:
+`0.8.5-rc3` was the first public release candidate. `0.8.5-rc4.1` is the current hotfix candidate on top of RC4. It retains the Graph-Lite Findings curation model and adds authorization, installer-state, Finding-queue and Neo4j schema hardening. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
+and user-configuration model:
 
 - multi-user + live Nextcloud ACL is the safe installation default;
 - Nextcloud TLS verification is on by default;
@@ -204,6 +204,62 @@ TCP 443 and, if the redirect should be reachable, TCP 80.
 ### Bundled OpenWebUI and HTTPS
 
 Existing Apache/reverse proxy deployments may leave the bundled nginx disabled and proxy the public paths directly, or run nginx on alternate internal listen ports. Keep `/v1/`, `/auth/nextcloud/`, `/rag-admin/` and `/rag-api/` as distinct pass-through paths. The Admin UI emits path-only asset/navigation URLs in RC3, so the public host/scheme is no longer baked from the internal FastAPI request. API/provider services remain loopback-bound by default; do not expose 8765/8766 publicly.
+
+#### Same host as Nextcloud/Apache
+
+If Nextcloud's Apache already owns host ports 80/443, keep Apache as the public entry point and move only the bundled RAG nginx to unused internal host ports. Super-Light supports this directly:
+
+```bash
+sudo ./install/install.sh \
+  --profile super-light \
+  --deployment dockerized \
+  --nextcloud-url https://cloud.example.org/nextcloud \
+  --elasticsearch-url http://127.0.0.1:9200 \
+  --elasticsearch-index my_index \
+  --with-proxy \
+  --proxy-http-port 81 \
+  --proxy-https-port 444
+```
+
+The selected ports are part of the recorded `install/last-install-command.sh`, so an installer rerun reproduces the same topology. The RAG nginx still uses its normal TLS/Auth/rate-limit configuration; only the listen ports change. Keep 81/444 blocked from untrusted networks when they are used only as an Apache backend.
+
+In the Nextcloud HTTPS virtual host, proxy only the RAG path prefixes to nginx on loopback. Do **not** proxy `/`, because that would replace the Nextcloud application root. A minimal Apache example is:
+
+```apache
+ProxyPreserveHost On
+SSLProxyEngine On
+
+# The installer bootstrap certificate is self-signed. Either trust/replace it,
+# or limit disabled backend verification to this loopback proxy target.
+<Proxy "https://127.0.0.1:444/*">
+    SSLProxyVerify none
+    SSLProxyCheckPeerName off
+</Proxy>
+
+RedirectMatch 302 ^/rag-admin$ /rag-admin/
+RedirectMatch 302 ^/rag-api$ /rag-api/
+RedirectMatch 302 ^/curation$ /curation/
+
+ProxyPass        /v1/             https://127.0.0.1:444/v1/
+ProxyPassReverse /v1/             https://127.0.0.1:444/v1/
+
+ProxyPass        /auth/nextcloud/ https://127.0.0.1:444/auth/nextcloud/
+ProxyPassReverse /auth/nextcloud/ https://127.0.0.1:444/auth/nextcloud/
+
+ProxyPass        /rag-admin/      https://127.0.0.1:444/rag-admin/
+ProxyPassReverse /rag-admin/      https://127.0.0.1:444/rag-admin/
+
+ProxyPass        /rag-api/        https://127.0.0.1:444/rag-api/
+ProxyPassReverse /rag-api/        https://127.0.0.1:444/rag-api/
+
+ProxyPass        /curation/       https://127.0.0.1:444/curation/
+ProxyPassReverse /curation/       https://127.0.0.1:444/curation/
+```
+
+This requires Apache's proxy/proxy_http and SSL proxy support. Prefer trusting or replacing the nginx backend certificate where practical; `SSLProxyVerify none` above is appropriate only for the explicitly scoped loopback backend and must not be generalized to unrelated HTTPS proxies.
+
+Configure AKI with the **public Apache URL** (for example `https://cloud.example.org`), not `https://127.0.0.1:444`. Apache then forwards only the RAG paths internally. If bundled OpenWebUI is enabled, its `/` route cannot share the same Nextcloud virtual-host root; expose OpenWebUI through a separate hostname/vhost or keep it local.
+
 
 External clients always use nginx HTTPS (`https://HOST/v1`). The bundled
 OpenWebUI is different: because it runs on the same Linux host, the bundled configuration uses host
@@ -440,6 +496,8 @@ mail/Web activity for that user; configuration is retained for controlled
 re-enable/re-auth rather than deleted automatically.
 
 ## 11. Graph and normal sync
+
+When local Neo4j is selected, both installation profiles wait for the database and run the idempotent AKI schema initialization. The same step runs on an installer rerun, so an existing database receives missing non-destructive constraints, indexes and deterministic backfills; a new database is not required. The API also attempts this migration at startup for deployments managed outside the installer. See [the canonical Neo4j schema reference](../docs/NEO4J-SCHEMA.md).
 
 With Neo4j selected, graph retrieval and the asynchronous graph worker are
 available. Expensive whole-corpus graph extraction remains off during normal

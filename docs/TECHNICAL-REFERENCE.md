@@ -1,8 +1,8 @@
 # AKI RAG Middleware
 ## Technical documentation and command reference
 
-**Version:** `0.8.5-rc4`  
-**Updated:** 19 September 2026
+**Version:** `0.8.5-rc4.1`  
+**Updated:** 20 September 2026
 
 This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
 
@@ -52,7 +52,9 @@ Without a user UI, `/` redirects to `/rag-admin/`.
 sudo ./install/install.sh --plan --full
 ```
 
-## 2.2 Installer options
+## 2.2 Standard/native installer options
+
+The public wrapper accepts `--profile standard|super-light` and `--deployment native|dockerized`. In the 0.8.5 line the regression-tested combinations are `standard+native` and `super-light+dockerized`. The options below belong to the standard/native profile.
 
 | Option | Meaning |
 |---|---|
@@ -82,11 +84,58 @@ No longer bundled:
 
 Both can be operated externally and configured as backends.
 
-## 2.3 Reference installation
+## 2.3 Super-Light/dockerized installer options
+
+Super-Light has a separate CLI because it configures the external Nextcloud/FullTextSearch connection while building the containerized middleware. `--nextcloud-url` and `--elasticsearch-url` are required when the installer starts the stack; they may be omitted together with `--no-start`.
+
+| Option | Meaning |
+|---|---|
+| `--nextcloud-url URL` | canonical Nextcloud base URL, preferably HTTPS |
+| `--elasticsearch-url URL` | existing Nextcloud FullTextSearch Elasticsearch endpoint |
+| `--elasticsearch-index ID` | FullTextSearch index name; default `my_index` |
+| `--prefix PATH` | installation directory; default `/opt/nextcloud-rag` |
+| `--skip-system-packages` | do not install Docker/curl/jq/openssl |
+| `--no-start` | prepare files/images but do not start the stack |
+| `--with-openwebui` | also start the bundled OpenWebUI; default off |
+| `--with-proxy` | also start the bundled nginx TLS/auth gate; default off |
+| `--proxy-http-port PORT` | nginx HTTP listen port; default 80 |
+| `--proxy-https-port PORT` | nginx HTTPS listen port; default 443 |
+| `--ca-certificate FILE` | add a private root/intermediate CA to API/provider containers; repeatable |
+| `--x509-strict` | enable Python/OpenSSL `VERIFY_X509_STRICT` |
+| `--no-x509-strict` | compatibility mode: normal TLS verification remains enabled, extra strict checks remain off |
+| `--plan` | show the effective plan and exit |
+| `-y`, `--yes` | confirm non-interactively |
+
+Example:
+
+```bash
+sudo ./install/install.sh \
+  --profile super-light \
+  --deployment dockerized \
+  --nextcloud-url https://cloud.example.org/nextcloud \
+  --elasticsearch-url http://10.0.0.20:9200 \
+  --elasticsearch-index my_index \
+  --with-proxy
+```
+
+For a host where Nextcloud/Apache already owns 80/443, use alternate internal nginx ports, for example `--proxy-http-port 81 --proxy-https-port 444`, and let Apache proxy only the RAG path prefixes. See `install/INSTALL.md` and `docs/BETA-OPERATIONS.md`.
+
+## 2.4 Reference installation
+
+Standard/native:
 
 ```bash
 sudo ./install/install.sh --plan --with-openwebui --with-qdrant --with-neo4j
 sudo ./install/install.sh       --with-openwebui --with-qdrant --with-neo4j
+```
+
+Super-Light/dockerized:
+
+```bash
+sudo ./install/install.sh --profile super-light --plan \
+  --nextcloud-url https://cloud.example.org/nextcloud \
+  --elasticsearch-url http://10.0.0.20:9200 \
+  --elasticsearch-index my_index
 ```
 
 Before first start, review at least `config.yaml`, `provider.env` and `runtime.env`.
@@ -1457,7 +1506,7 @@ For latency measurements, record the WebDAV SEARCH time separately from total an
 - CardDAV seeds per verified Nextcloud user through Admin UI/CLI;
 - multi-user Nextcloud Login Flow;
 - admin-controlled Mail/Web/Contact settings;
-- AKI Recherche 0.2.3 for Nextcloud 23+ with saved chats, sidebar, safe Markdown tables, timestamps and source scopes.
+- AKI Recherche 0.2.4 for Nextcloud 23+ with saved chats, sidebar, safe Markdown tables, timestamps and source scopes.
 
 **Intentionally outside the 0.8.5 beta scope:**
 
@@ -1490,7 +1539,7 @@ The underlying Super-Light field path was installed and operated on a fresh Leap
 
 No new blank-VM run was performed in the neutral packaging environment after those later documentation/hardening changes; blank-VM acceptance remains part of operator validation before production rollout.
 
-The subsequent ResearchRun / user-scoped curation hardening on the development branch is covered by the current CI regression suite: **389 tests passed** on 19 September 2026. This does not replace a fresh deployment acceptance test.
+The 0.8.5-rc4.1 hotfix baseline, including the ResearchRun/user-scoped curation hardening and subsequent authorization, installer-state and Neo4j fixes, is covered by the CI regression suite: **450 tests passed** on 20 September 2026. The Super-Light rerun path was additionally field-tested against an existing RC4 installation and Neo4j store.
 
 Container images in `versions.lock.yaml` are digest-pinned. Secrets are not part of the package.
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4` contract.
+This file records follow-up work that is intentionally **not** part of the `0.8.5-rc4.1` contract.
 
 ## 0.8.5-rc5 candidates
 
@@ -26,6 +26,18 @@ Use Nextcloud FullTextSearch's document `hash` as the primary exact duplicate si
 The duplicate group must retain all distinct Nextcloud file IDs. Authorization is evaluated per visible copy so a denied representative can never hide an otherwise accessible duplicate. Near-text/OCR and same-stem format-variant detection remain separate secondary signals.
 
 For graph/research statistics, independent-source counts should ultimately use distinct extracted-content hashes rather than distinct file IDs when the hashes are available.
+
+### Dependency hardening and Transformers 5 evaluation
+
+Keep `transformers==4.57.6` as the RC4 baseline for now. Dependabot's direct 5.10.1 bump is not mergeable as-is because Transformers 5.10.1 requires `huggingface-hub>=1.5,<2`, while the current baseline intentionally pins `huggingface-hub>=0.24,<1`.
+
+For RC5:
+
+- test a coordinated Transformers 5.x + Hugging Face Hub 1.x upgrade on a dedicated branch rather than accepting an isolated major bump;
+- run the full regression suite plus a real local reranker smoke test with the configured cross-encoder model before changing the baseline;
+- document/automate reachability triage for dependency advisories: distinguish vulnerable APIs from actually exercised AKI paths, especially where the local reranker only imports `AutoTokenizer` and `AutoModelForSequenceClassification` with `local_files_only=True`;
+- split optional heavyweight ML dependencies from the core/server dependency set where practical (for example core vs. local-reranker requirements), so TEI/Super-Light deployments do not install Transformers merely because another profile can use it;
+- keep Dependabot major-version updates non-automatic; security updates within the supported major line should still be reviewed promptly.
 
 ### Smaller RC5 follow-ups
 

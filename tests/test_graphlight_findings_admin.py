@@ -139,7 +139,7 @@ def test_bulk_no_entity_cleanup_suppresses_without_deleting_provenance():
     result = store.suppress_research_findings_without_entities()
     assert result["updated"] == 7
     query = calls[0][0]
-    assert "size(coalesce(f.entity_texts,[])) = 0" in query
+    assert "size(coalesce(properties(f)['entity_texts'],[])) = 0" in query
     assert "DETACH DELETE" not in query
     assert "curator_status='suppressed'" in query
 
@@ -385,7 +385,7 @@ def test_evidence_relation_endpoint_uses_unique_exact_seed_resolution():
     assert eichner["auto_resolved"]["entity_id"] == "person-eichner"
 
 
-def test_relation_observation_schema_marker_covers_optional_finding_reads():
+def test_relation_observation_optional_finding_reads_are_property_safe():
     store = object.__new__(GraphStore)
     calls = []
     store._run = lambda query, **params: calls.append((query, params)) or []  # type: ignore[method-assign]
@@ -393,12 +393,11 @@ def test_relation_observation_schema_marker_covers_optional_finding_reads():
     store.ensure_schema()
 
     rendered = "\n".join(query for query, _params in calls)
-    assert "RAGSchemaMarker {key:'relation_observation_fields_v1'}" in rendered
+    assert "RAGSchemaMarker" not in rendered
+    graph_source = (Path(__file__).resolve().parents[1] / "rag/graph.py").read_text()
     for field in ("predicate_text", "relation_text", "evidence_text", "curator_note", "review_reason"):
-        assert f"m.{field}=" in rendered
-    assert "relation_text: properties(claim)['relation_text']" in (
-        Path(__file__).resolve().parents[1] / "rag/graph.py"
-    ).read_text()
+        assert f"properties(claim)['{field}']" in graph_source
+        assert f"{field}: claim.{field}" not in graph_source
 
 
 def test_active_manual_claim_can_be_withdrawn_without_deleting_provenance():
@@ -656,3 +655,87 @@ def test_finding_entity_ui_is_direct_with_optional_details_and_alias_action():
     assert "eindeutigen Treffer speichern" in finding
     assert "EntityFormDecision" in graph
     assert "entity_form_decision_normalized" in graph
+
+
+def test_research_run_listing_fetches_exact_produced_findings_not_global_window():
+    store = object.__new__(GraphStore)
+
+    def fake_run(query: str, **params):
+        if "MATCH (run:ResearchRun)" in query:
+            return [{
+                "run": {"run_id": "old-run", "curation_status": ""},
+                "produced": [{"finding_id": "finding-2501", "disposition": "pending"}],
+            }]
+        return []
+
+    store._run = fake_run  # type: ignore[method-assign]
+    seen = {}
+
+    def fake_findings(*, query="", limit=200, finding_ids=None):
+        seen["ids"] = finding_ids
+        return [{"finding_id": "finding-2501", "graph_state": "open", "entity_texts": ["A"]}]
+
+    store.list_research_findings = fake_findings  # type: ignore[method-assign]
+    result = store.list_research_runs(state="all")
+
+    assert seen["ids"] == ["finding-2501"]
+    assert result[0]["finding_count"] == 1
+    assert result[0]["findings"][0]["finding_id"] == "finding-2501"
+
+
+def test_research_run_detail_fetches_only_its_produced_findings():
+    store = object.__new__(GraphStore)
+    store._run = lambda query, **params: [{  # type: ignore[method-assign]
+        "run": {"run_id": "old-run"},
+        "produced": [{"finding_id": "finding-2501", "disposition": "pending"}],
+    }]
+    seen = {}
+
+    def fake_findings(*, query="", limit=200, finding_ids=None):
+        seen["ids"] = finding_ids
+        return [{"finding_id": "finding-2501", "graph_state": "open"}]
+
+    store.list_research_findings = fake_findings  # type: ignore[method-assign]
+    result = store.research_run_detail("old-run")
+
+    assert result is not None
+    assert seen["ids"] == ["finding-2501"]
+    assert result["findings"][0]["finding_id"] == "finding-2501"
+
+
+def test_targeted_finding_list_does_not_apply_global_2000_cap():
+    store = object.__new__(GraphStore)
+    calls = []
+
+    def fake_run(query: str, **params):
+        calls.append((query, params))
+        if "MATCH (f:ResearchFinding)-[s:SUPPORTED_BY]->(d:Document)" in query:
+            return [{
+                "finding_id": "finding-2501",
+                "document_id": "files:2501",
+                "entity_texts": [],
+                "entity_roles": [],
+                "curated_entities": [],
+                "suppressed_entity_texts": [],
+                "claim_count": 0,
+                "review_count": 0,
+            }]
+        return []
+
+    store._run = fake_run  # type: ignore[method-assign]
+    result = store.list_research_findings(finding_ids=["finding-2501"])
+
+    main_query, params = calls[0]
+    assert "f.finding_id IN $finding_ids" in main_query
+    assert params["finding_ids"] == ["finding-2501"]
+    assert params["limit"] == 1
+    assert result[0]["finding_id"] == "finding-2501"
+
+
+def test_admin_and_self_service_guards_do_not_use_global_2000_finding_scan():
+    root = Path(__file__).resolve().parents[1]
+    admin_source = (root / "rag/admin_ui.py").read_text()
+    curation_source = (root / "rag/curation_ui.py").read_text()
+    assert "list_research_findings(limit=2000)" not in admin_source
+    assert "list_research_findings(limit=2000)" not in curation_source
+    assert "_require_admin_findings_context(canonical_user_id, finding_ids)" in admin_source

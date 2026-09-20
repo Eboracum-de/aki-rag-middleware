@@ -1,7 +1,7 @@
 from rag.graph import GraphStore
 
 
-def test_entity_kind_schema_marker_and_backfill_are_idempotent_contract():
+def test_entity_kind_backfill_is_idempotent_without_schema_markers():
     store = object.__new__(GraphStore)
     calls = []
 
@@ -15,8 +15,8 @@ def test_entity_kind_schema_marker_and_backfill_are_idempotent_contract():
     assert store.ensure_entity_kind_schema() == 3
 
     rendered = "\n".join(query for query, _ in calls)
-    assert "RAGSchemaMarker {key:'entity_kind_v1'}" in rendered
-    assert "m.entity_kind=''" in rendered
+    assert "RAGSchemaMarker" not in rendered
+    assert "m.entity_kind=''" not in rendered
     assert "properties(e)['entity_kind'] IS NULL" in rendered
     assert "CASE WHEN e:Person THEN 'Person' ELSE '' END" in rendered
 

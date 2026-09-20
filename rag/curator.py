@@ -232,8 +232,8 @@ class GraphCurator:
             """
             MATCH (e:Entity)
             WHERE (e:Person OR e:Organization)
-              AND coalesce(e.identity_status,'') <> 'merged'
-              AND coalesce(e.identity_status,'') <> 'orphaned'
+              AND coalesce(properties(e)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN e.entity_id AS entity_id, e.display_name AS display_name,
                    labels(e) AS labels
             ORDER BY e.display_name
