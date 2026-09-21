@@ -570,3 +570,24 @@ def test_native_api_refuses_accidental_non_loopback_bind():
     assert "RAG_ALLOW_REMOTE_INTERNAL_API" in start_api
     assert "Refusing non-loopback RAG_API_HOST" in start_api
     assert "127.0.0.1|::1|localhost" in start_api
+
+
+def test_standard_rerun_repairs_missing_compose_env_before_preflight():
+    installer = _standard_installer_text()
+    compose_check = installer.index('if [[ ${#existing_compose[@]} -gt 0 && -f "$PREFIX/install/docker-compose.yml" ]]')
+    env_repair = installer.index('Recreating missing install/.env from .env.example for rerun preflight.')
+    compose_ps = installer.index('--env-file .env ps --services --filter status=running')
+    assert compose_check < env_repair < compose_ps
+
+
+def test_standard_rerun_repair_uses_actual_service_primary_group():
+    installer = _standard_installer_text()
+    assert 'env_group="$(id -gn "$RAG_USER" 2>/dev/null)"' in installer
+    assert 'chown "$RAG_USER:$env_group" "$PREFIX/install/.env"' in installer
+
+
+def test_standard_runtime_internal_keys_replace_placeholders():
+    installer = _standard_installer_text()
+    assert '[[ -n "$current" && "$current" != "replace-me" ]]' in installer
+    assert '[[ -n "$RAG_INTERNAL_API_KEY" && "$RAG_INTERNAL_API_KEY" != "replace-me" ]]' in installer
+    assert '[[ -n "$RAG_PROVIDER_INTERNAL_KEY" && "$RAG_PROVIDER_INTERNAL_KEY" != "replace-me" ]]' in installer

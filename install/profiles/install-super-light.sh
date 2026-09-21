@@ -411,9 +411,24 @@ set_runtime_env_value() {
   if grep -q "^${key}=" "$PREFIX/runtime.env"; then
     sed -i "s|^${key}=.*|${key}=${value}|" "$PREFIX/runtime.env"
   else
-    printf '%s=%s\\n' "$key" "$value" >> "$PREFIX/runtime.env"
+    printf '%s=%s\n' "$key" "$value" >> "$PREFIX/runtime.env"
   fi
 }
+
+repair_legacy_runtime_env_newline_bug() {
+  # One buggy rc4.3 rerun wrote literal "\\n" separators while appending
+  # newly introduced RAG_* keys to an older runtime.env. Repair only that
+  # recognizable upgrade artifact before reading the service keys.
+  if grep -Eq '\\n(RAG_MAINTENANCE_MODE|RAG_INTERNAL_API_KEY|RAG_PROVIDER_INTERNAL_KEY|RAG_ADMIN_USER|RAG_ADMIN_PASSWORD)=' "$PREFIX/runtime.env"; then
+    local tmp
+    tmp="$(mktemp)"
+    awk '{ if ($0 ~ /\\nRAG_/) gsub(/\\nRAG_/, "\nRAG_"); print }' "$PREFIX/runtime.env" > "$tmp"
+    cat "$tmp" > "$PREFIX/runtime.env"
+    rm -f "$tmp"
+  fi
+}
+
+repair_legacy_runtime_env_newline_bug
 
 NEO4J_PASSWORD="$(sed -n 's/^NEO4J_PASSWORD=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$NEO4J_PASSWORD" || "$NEO4J_PASSWORD" == "replace-me" ]]; then
