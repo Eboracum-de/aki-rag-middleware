@@ -373,9 +373,14 @@ preflight_existing_install() {
         if [[ ! -f "$PREFIX/install/.env" ]]; then
           if [[ -f "$PREFIX/install/.env.example" ]]; then
             echo "[INFO] Recreating missing install/.env from .env.example for rerun preflight."
+            local env_group
+            if ! env_group="$(id -gn "$RAG_USER" 2>/dev/null)"; then
+              echo "[WARN] Cannot resolve primary group for existing service user $RAG_USER; rerun preflight cannot repair install/.env safely." >&2
+              exit 2
+            fi
             cp "$PREFIX/install/.env.example" "$PREFIX/install/.env"
             chmod 600 "$PREFIX/install/.env"
-            chown "$RAG_USER:$RAG_GROUP" "$PREFIX/install/.env"
+            chown "$RAG_USER:$env_group" "$PREFIX/install/.env"
           else
             echo "[WARN] Existing Docker Compose installation has no install/.env or .env.example; cannot verify that the stack is stopped." >&2
             exit 2

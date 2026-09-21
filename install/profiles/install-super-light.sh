@@ -422,7 +422,7 @@ repair_legacy_runtime_env_newline_bug() {
   if grep -Eq '\\n(RAG_MAINTENANCE_MODE|RAG_INTERNAL_API_KEY|RAG_PROVIDER_INTERNAL_KEY|RAG_ADMIN_USER|RAG_ADMIN_PASSWORD)=' "$PREFIX/runtime.env"; then
     local tmp
     tmp="$(mktemp)"
-    awk '{ if ($0 ~ /\\nRAG_/) gsub(/\\n/, "\n"); print }' "$PREFIX/runtime.env" > "$tmp"
+    awk '{ if ($0 ~ /\\nRAG_/) gsub(/\\nRAG_/, "\nRAG_"); print }' "$PREFIX/runtime.env" > "$tmp"
     cat "$tmp" > "$PREFIX/runtime.env"
     rm -f "$tmp"
   fi

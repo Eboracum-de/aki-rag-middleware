@@ -580,6 +580,12 @@ def test_standard_rerun_repairs_missing_compose_env_before_preflight():
     assert compose_check < env_repair < compose_ps
 
 
+def test_standard_rerun_repair_uses_actual_service_primary_group():
+    installer = _standard_installer_text()
+    assert 'env_group="$(id -gn "$RAG_USER" 2>/dev/null)"' in installer
+    assert 'chown "$RAG_USER:$env_group" "$PREFIX/install/.env"' in installer
+
+
 def test_standard_runtime_internal_keys_replace_placeholders():
     installer = _standard_installer_text()
     assert '[[ -n "$current" && "$current" != "replace-me" ]]' in installer

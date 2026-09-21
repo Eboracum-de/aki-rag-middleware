@@ -371,5 +371,22 @@ def test_super_light_runtime_env_repairs_buggy_literal_newline_upgrade_state():
     installer = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
     assert "repair_legacy_runtime_env_newline_bug" in installer
     assert "RAG_PROVIDER_INTERNAL_KEY" in installer
-    assert "awk '{ if ($0 ~ /\\\\nRAG_/)" in installer
+    assert "gsub(/\\\\nRAG_/, \"\\nRAG_\")" in installer
     assert "repair_legacy_runtime_env_newline_bug\n\nNEO4J_PASSWORD=" in installer
+
+
+def test_super_light_runtime_env_repair_preserves_unrelated_literal_newlines():
+    fixture = "CUSTOM_VALUE=a\\\\nb\\\\nRAG_INTERNAL_API_KEY=replace-me\nOTHER_VALUE=x\\\\ny\n"
+    program = r'{ if ($0 ~ /\\nRAG_/) gsub(/\\nRAG_/, "\nRAG_"); print }'
+    result = subprocess.run(
+        ["awk", program],
+        input=fixture,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == (
+        "CUSTOM_VALUE=a\\\\nb\n"
+        "RAG_INTERNAL_API_KEY=replace-me\n"
+        "OTHER_VALUE=x\\\\ny\n"
+    )
