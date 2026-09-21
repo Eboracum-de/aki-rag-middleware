@@ -370,6 +370,17 @@ preflight_existing_install() {
         existing_compose=(docker-compose)
       fi
       if [[ ${#existing_compose[@]} -gt 0 && -f "$PREFIX/install/docker-compose.yml" ]]; then
+        if [[ ! -f "$PREFIX/install/.env" ]]; then
+          if [[ -f "$PREFIX/install/.env.example" ]]; then
+            echo "[INFO] Recreating missing install/.env from .env.example for rerun preflight."
+            cp "$PREFIX/install/.env.example" "$PREFIX/install/.env"
+            chmod 600 "$PREFIX/install/.env"
+            chown "$RAG_USER:$RAG_GROUP" "$PREFIX/install/.env"
+          else
+            echo "[WARN] Existing Docker Compose installation has no install/.env or .env.example; cannot verify that the stack is stopped." >&2
+            exit 2
+          fi
+        fi
         local docker_running
         if ! docker_running="$(
           cd "$PREFIX/install" &&
@@ -709,7 +720,7 @@ ensure_runtime_key() {
   if grep -q "^${key}=" "$PREFIX/runtime.env" 2>/dev/null; then
     local current
     current="$(grep "^${key}=" "$PREFIX/runtime.env" | head -1 | cut -d= -f2- || true)"
-    [[ -n "$current" ]] || sed -i "s|^${key}=.*|${key}=${value}|" "$PREFIX/runtime.env"
+    [[ -n "$current" && "$current" != "replace-me" ]] || sed -i "s|^${key}=.*|${key}=${value}|" "$PREFIX/runtime.env"
   else
     printf '\n%s=%s\n' "$key" "$value" >> "$PREFIX/runtime.env"
   fi
@@ -718,8 +729,8 @@ ensure_runtime_key() {
 [[ -n "$ADMIN_USER" ]] || ADMIN_USER="admin"
 [[ -n "$ADMIN_PASSWORD" ]] || ADMIN_PASSWORD="$(random_secret)"
 [[ -n "$PROVIDER_API_KEY" ]] || PROVIDER_API_KEY="$(random_secret)"
-[[ -n "$RAG_INTERNAL_API_KEY" ]] || RAG_INTERNAL_API_KEY="$(random_secret)"
-[[ -n "$RAG_PROVIDER_INTERNAL_KEY" ]] || RAG_PROVIDER_INTERNAL_KEY="$(random_secret)"
+[[ -n "$RAG_INTERNAL_API_KEY" && "$RAG_INTERNAL_API_KEY" != "replace-me" ]] || RAG_INTERNAL_API_KEY="$(random_secret)"
+[[ -n "$RAG_PROVIDER_INTERNAL_KEY" && "$RAG_PROVIDER_INTERNAL_KEY" != "replace-me" ]] || RAG_PROVIDER_INTERNAL_KEY="$(random_secret)"
 ensure_runtime_key NEO4J_PASSWORD "$NEO4J_PASSWORD"
 ensure_runtime_key RAG_ADMIN_USER "$ADMIN_USER"
 ensure_runtime_key RAG_ADMIN_PASSWORD "$ADMIN_PASSWORD"

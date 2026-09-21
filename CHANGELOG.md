@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased installer hotfix
+
+- Fix Super-Light reruns that appended newly introduced runtime keys with a literal `\\n`, which could hide `RAG_PROVIDER_INTERNAL_KEY` from Docker and make secure-runtime validation fail after an upgrade. A narrow repair step also normalizes already affected `runtime.env` files.
+- Fix Standard reruns to regenerate internal machine keys when legacy/example `replace-me` placeholders are present.
+- Recreate a missing `install/.env` from `.env.example` before the Standard Docker Compose stopped-stack preflight so an interrupted installation remains repairable without bypassing the safety check.
+
 ## 0.8.5-rc4.3 – 2026-09-20
 
 - Complete rc4.3 blank-VM acceptance for both supported deployment mappings (Standard/native and Super-Light/dockerized), align current documentation/version locks to rc4.3, and record deferred Playwright/Neo4j/WebDAV polish without changing the accepted runtime behavior.
