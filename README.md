@@ -225,6 +225,6 @@ See `docs/PROJECT-GOVERNANCE.md`.
 
 ## Trademark notice
 
-AKI RAG Middleware is an independent project and is not affiliated with or endorsed by Nextcloud GmbH. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH.
+AKI RAG Middleware is an independent project and is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH or aki.io GmbH. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH. References to aki.io are solely for identification and do not imply any affiliation, sponsorship, or endorsement.
 
 See `TRADEMARKS.md`.
