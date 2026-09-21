@@ -376,7 +376,7 @@ def test_super_light_runtime_env_repairs_buggy_literal_newline_upgrade_state():
 
 
 def test_super_light_runtime_env_repair_preserves_unrelated_literal_newlines():
-    fixture = "CUSTOM_VALUE=a\\\\nb\\\\nRAG_INTERNAL_API_KEY=replace-me\nOTHER_VALUE=x\\\\ny\n"
+    fixture = "CUSTOM_VALUE=a\\nb\\nRAG_INTERNAL_API_KEY=replace-me\nOTHER_VALUE=x\\ny\n"
     program = r'{ if ($0 ~ /\\nRAG_/) gsub(/\\nRAG_/, "\nRAG_"); print }'
     result = subprocess.run(
         ["awk", program],
@@ -386,7 +386,7 @@ def test_super_light_runtime_env_repair_preserves_unrelated_literal_newlines():
         check=True,
     )
     assert result.stdout == (
-        "CUSTOM_VALUE=a\\\\nb\n"
+        "CUSTOM_VALUE=a\\nb\n"
         "RAG_INTERNAL_API_KEY=replace-me\n"
-        "OTHER_VALUE=x\\\\ny\n"
+        "OTHER_VALUE=x\\ny\n"
     )
