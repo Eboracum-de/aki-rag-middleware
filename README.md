@@ -217,7 +217,7 @@ See `CONTRIBUTING.md`, `CLA.md` and `COMMERCIAL-LICENSING.md`.
 
 ## Project status and maintenance
 
-This is a small maintainer-led project. Public release does not imply an SLA or guaranteed support lifetime.
+Public release does not imply an SLA or guaranteed support lifetime. Questions about the project can be sent to `rag@eboracum.de`.
 
 If active development ends, the preferred lifecycle is to mark the project as maintained only for critical fixes and eventually archive the repository rather than erase the public history. Forks remain part of the freedoms provided by the AGPL.
 
