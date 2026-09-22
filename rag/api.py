@@ -1356,24 +1356,35 @@ def register_chat_archive_source(
             detail="Live Nextcloud ACL is required for chat archive registration",
         )
     try:
-        acl = live_acl.authorize(
-            [{"document_id": document_id}],
+        canonical_path = live_acl.resolve_visible_file_path(
+            document_id,
             rag_user_id=rag_user_id,
         )
     except AclIdentityError as exc:
         raise HTTPException(status_code=403, detail=f"Live ACL denied: {exc}") from exc
     except (AclBackendError, AclConfigurationError) as exc:
         raise HTTPException(status_code=503, detail=f"Live ACL unavailable: {exc}") from exc
-    if acl.authorized != 1:
+    if not canonical_path:
         raise HTTPException(
             status_code=403,
             detail="Live ACL denied chat archive document",
+        )
+    canonical_path = str(canonical_path).replace("\\", "/").strip("/")
+    if not any(path_is_under(canonical_path, root) for root in roots):
+        raise HTTPException(
+            status_code=400,
+            detail="server-derived path is outside the configured chat archive root",
+        )
+    if canonical_path != path:
+        raise HTTPException(
+            status_code=400,
+            detail="submitted chat archive path does not match Nextcloud",
         )
 
     changed = register_document(
         document_id,
         "chat_archive",
-        source_path=path,
+        source_path=canonical_path,
         classification_source="chat_archive_write",
     )
     mirror = {"checked": 0, "updated": 0, "missing": 0}
