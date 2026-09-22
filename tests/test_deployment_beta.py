@@ -368,7 +368,7 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 def test_public_baseline_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc4.3"'
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc5"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
