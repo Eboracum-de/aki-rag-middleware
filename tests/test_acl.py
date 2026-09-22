@@ -236,6 +236,52 @@ def test_acl_promotes_visible_duplicate_when_ranked_representative_is_denied():
     assert "<d:literal>2</d:literal>" in request_xml
 
 
+def test_acl_duplicate_promotion_drops_denied_identity_for_legacy_variant():
+    os.environ["NEXTCLOUD_USERNAME"] = "alice"
+    os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+    cfg = {
+        "nextcloud": {"base_url": "https://nc.example/nextcloud"},
+        "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+    }
+    response = httpx.Response(
+        207,
+        content=_multistatus_for(2),
+        request=httpx.Request("SEARCH", "https://nc.example/nextcloud/remote.php/dav/"),
+    )
+    result = {
+        "document_id": "files:1",
+        "id": "files:1",
+        "fileid": "1",
+        "title": "private.pdf",
+        "path": "/secret/private.pdf",
+        "source_url": "https://nc.example/secret",
+        "owner": "private-owner",
+        "users": ["private-user"],
+        "groups": ["private-group"],
+        "source_origin": "documents",
+        "es_snippet": "SECRET",
+        "duplicate_variants": [{
+            "fileid": "2",
+            "title": "visible.pdf",
+            "snippet": "visible snippet",
+        }],
+        "duplicate_count": 2,
+    }
+
+    with patch("rag.acl.httpx.request", return_value=response):
+        decision = NextcloudLiveAcl(cfg).authorize([result])
+
+    promoted = decision.results[0]
+    assert promoted["document_id"] == "files:2"
+    assert promoted["fileid"] == "2"
+    assert promoted["title"] == "visible.pdf"
+    assert promoted["context_text"] == "visible snippet"
+    for key in ("id", "path", "source_url", "owner", "users", "groups", "source_origin"):
+        assert key not in promoted
+    assert "SECRET" not in promoted["context_text"]
+    assert "SECRET" not in promoted["es_snippet"]
+
+
 def test_acl_hides_unauthorized_duplicate_metadata_when_representative_is_visible():
     os.environ["NEXTCLOUD_USERNAME"] = "alice"
     os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
