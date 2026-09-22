@@ -140,6 +140,15 @@ class RagProxy {
         }
 
         try {
+            $user = $this->userSession->getUser();
+            if ($user === null) {
+                return false;
+            }
+            $uid = trim((string)$user->getUID());
+            if ($uid === '') {
+                return false;
+            }
+
             $apiKey = $this->crypto->decrypt($encryptedKey);
             $client = $this->clientService->newClient();
             $response = $client->post($baseUrl . '/v1/archive/chat/register', [
@@ -147,6 +156,7 @@ class RagProxy {
                     'Accept' => 'application/json',
                     'Content-Type' => 'application/json',
                     'Authorization' => 'Bearer ' . $apiKey,
+                    'X-RAG-User-ID' => $uid,
                 ],
                 'body' => json_encode([
                     'document_id' => $documentId,
