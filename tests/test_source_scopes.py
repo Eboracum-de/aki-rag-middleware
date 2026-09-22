@@ -72,9 +72,20 @@ def test_aki_client_has_scope_ui_and_server_side_chat_archive():
 
 
 def test_chat_archive_registration_writes_registry_before_es_mirror(monkeypatch):
+    from types import SimpleNamespace
+
     import rag.api as api
+    from rag.acl import AclDecision
+
+    class FakeAcl:
+        enabled = True
+
+        def authorize(self, results, *, rag_user_id=None):
+            assert rag_user_id == 'alice'
+            return AclDecision(True, list(results), len(results), len(results))
 
     calls = []
+    monkeypatch.setattr(api, 'live_acl', FakeAcl())
     monkeypatch.setattr(api, 'chat_archive_roots', lambda: ('AKI-Chats',))
     monkeypatch.setattr(
         api,
@@ -93,7 +104,8 @@ def test_chat_archive_registration_writes_registry_before_es_mirror(monkeypatch)
         api.ChatArchiveRegisterRequest(
             document_id='files:74710',
             path='AKI-Chats/2026-09-22 - Vogelsang 280 - abcdef12.md',
-        )
+        ),
+        SimpleNamespace(headers={'x-rag-user-id': 'alice'}),
     )
 
     assert result['ok'] is True
