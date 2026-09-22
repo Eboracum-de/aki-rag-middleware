@@ -1,13 +1,12 @@
 # Roadmap
 
-This file records implemented RC5 direction together with follow-up work that is intentionally deferred beyond the current `0.8.5-rc5` release-candidate baseline.
+This file records the implemented RC5 direction together with follow-up work that is intentionally deferred beyond the current `0.8.5.1` public-beta baseline.
 
 ## Deferred operational/security polish
 
 The following items are deliberately deferred because they do not block the validated RC5 deployment paths:
 
 - reduce plaintext global-secret exposure in Dockerized/Super-Light operation: migrate suitable API keys/passwords from Compose environment materialization to Docker secrets or file-mounted credentials where practical, avoid support workflows that render full Compose configuration, and document Docker-daemon/group access as a privileged/root-equivalent boundary. This hardening can reduce accidental disclosure through `docker-compose config`/inspection but is not intended to protect secrets from a Docker administrator;
-- normalize container-visible `/app/...` configuration paths back to their host installation equivalents in the backup inventory where the mapping is unambiguous, so bundled Super-Light CA files do not produce a misleading external-path warning even though `runtime/ca/` is already included;
 - pin the Microsoft Playwright base image by immutable digest in addition to the existing version tag/package pins;
 - make the Standard `--plan` wording distinguish a fresh Playwright default-off install from a rerun that preserves an existing `web.yaml` choice;
 - bound each Neo4j schema-readiness attempt so periodic installer progress output cannot be delayed by one long connection attempt;
@@ -93,7 +92,6 @@ A future explicit `purge-document` workflow may coordinate deletion across deriv
 ### Smaller RC5 follow-ups
 
 - Reduce presentation drift between RAG-Admin Finding curation and `/curation/` by sharing more of the Finding view/presentation logic while keeping their authorization/session boundaries separate.
-- Make the global self-service gate and Login-Flow identity behavior more explicit in the UI.
 - Consider controlled expansion of self-service beyond a user's own ResearchRuns only after the ACL/provenance semantics are specified and tested.
 
 ## 0.8.6 direction

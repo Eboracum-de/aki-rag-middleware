@@ -3,6 +3,7 @@ from rag.search import (
     _dedup_filename_signature,
     _same_filename_variant,
     deduplicate_retrieval_arm,
+    filename_lookup,
 )
 
 
@@ -62,9 +63,39 @@ def test_invalid_or_missing_hash_never_forces_duplicate_grouping():
     assert [item["document_id"] for item in unique] == ["files:10", "files:20"]
 
 
-def test_hash_field_is_requested_from_nextcloud_elasticsearch():
-    from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "rag" / "search.py").read_text(encoding="utf-8")
-    assert '"hash"' in source
-    assert '"content_hash"' in source
-    assert "exact_extracted_content_hash" in source
+def test_hash_field_is_requested_and_mapped_from_nextcloud_elasticsearch(monkeypatch):
+    digest = "0123456789abcdef0123456789abcdef"
+    captured = {}
+
+    class FakeResponse:
+        is_error = False
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "hits": {
+                    "hits": [{
+                        "_id": "files:1",
+                        "_score": 1.0,
+                        "_source": {
+                            "title": "Folder/report.pdf",
+                            "hash": digest,
+                        },
+                    }]
+                }
+            }
+
+    def fake_post(endpoint, *, json, timeout):
+        captured["body"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("rag.search._es_post", fake_post)
+    results = filename_lookup("report.pdf")
+
+    assert "hash" in captured["body"]["_source"]
+    assert results[0]["content_hash"] == digest

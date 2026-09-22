@@ -73,5 +73,6 @@ def test_nginx_admin_returns_explicit_maintenance_status_when_api_is_down():
     for name in ("nginx.conf", "nginx-openwebui.conf"):
         text = (root / "install" / "nginx" / name).read_text(encoding="utf-8")
         assert "proxy_intercept_errors on;" in text
-        assert "error_page 502 503 504 = /rag-admin-unavailable;" in text
+        assert "error_page 502 504 = /rag-admin-unavailable;" in text
+        assert "error_page 502 503 504 = /rag-admin-unavailable;" not in text
         assert "RAG-Admin derzeit nicht verfügbar" in text

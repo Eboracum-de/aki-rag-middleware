@@ -6,12 +6,25 @@ from unittest.mock import patch
 
 import httpx
 
-from rag.acl import NextcloudLiveAcl, build_fileid_search_xml, parse_authorized_fileids
+from rag.acl import (
+    NextcloudLiveAcl,
+    build_fileid_search_xml,
+    parse_authorized_file_paths,
+    parse_authorized_fileids,
+)
 
 
 MULTISTATUS_ONE = b'''<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
   <d:response><d:propstat><d:prop><oc:fileid>2</oc:fileid></d:prop></d:propstat></d:response>
+</d:multistatus>'''
+
+MULTISTATUS_PATH = b'''<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/AKI-Chats/2026-09-22%20-%20Test%20-%20deadbeef.md</d:href>
+    <d:propstat><d:prop><oc:fileid>42</oc:fileid></d:prop></d:propstat>
+  </d:response>
 </d:multistatus>'''
 
 
@@ -30,6 +43,29 @@ class LiveAclTests(unittest.TestCase):
 
     def test_parse_fileids(self):
         self.assertEqual(parse_authorized_fileids(MULTISTATUS_ONE), {"2"})
+
+    def test_parse_server_derived_visible_paths(self):
+        self.assertEqual(
+            parse_authorized_file_paths(MULTISTATUS_PATH, "alice"),
+            {"42": "AKI-Chats/2026-09-22 - Test - deadbeef.md"},
+        )
+
+    def test_resolve_visible_file_path_uses_authenticated_dav_result(self):
+        os.environ["NEXTCLOUD_USERNAME"] = "alice"
+        os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+        cfg = {
+            "nextcloud": {"base_url": "https://nc.example"},
+            "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+        }
+        response = httpx.Response(
+            207,
+            content=MULTISTATUS_PATH,
+            request=httpx.Request("SEARCH", "https://nc.example/remote.php/dav/"),
+        )
+        with patch("rag.acl.httpx.request", return_value=response) as request_mock:
+            path = NextcloudLiveAcl(cfg).resolve_visible_file_path("files:42")
+        self.assertEqual(path, "AKI-Chats/2026-09-22 - Test - deadbeef.md")
+        self.assertEqual(request_mock.call_args.kwargs["auth"], ("alice", "secret"))
 
     def test_filter_does_not_backfill(self):
         os.environ["NEXTCLOUD_USERNAME"] = "alice"
@@ -198,6 +234,52 @@ def test_acl_promotes_visible_duplicate_when_ranked_representative_is_denied():
     request_xml = request_mock.call_args.kwargs["content"].decode("utf-8")
     assert "<d:literal>1</d:literal>" in request_xml
     assert "<d:literal>2</d:literal>" in request_xml
+
+
+def test_acl_duplicate_promotion_drops_denied_identity_for_legacy_variant():
+    os.environ["NEXTCLOUD_USERNAME"] = "alice"
+    os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+    cfg = {
+        "nextcloud": {"base_url": "https://nc.example/nextcloud"},
+        "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+    }
+    response = httpx.Response(
+        207,
+        content=_multistatus_for(2),
+        request=httpx.Request("SEARCH", "https://nc.example/nextcloud/remote.php/dav/"),
+    )
+    result = {
+        "document_id": "files:1",
+        "id": "files:1",
+        "fileid": "1",
+        "title": "private.pdf",
+        "path": "/secret/private.pdf",
+        "source_url": "https://nc.example/secret",
+        "owner": "private-owner",
+        "users": ["private-user"],
+        "groups": ["private-group"],
+        "source_origin": "documents",
+        "es_snippet": "SECRET",
+        "duplicate_variants": [{
+            "fileid": "2",
+            "title": "visible.pdf",
+            "snippet": "visible snippet",
+        }],
+        "duplicate_count": 2,
+    }
+
+    with patch("rag.acl.httpx.request", return_value=response):
+        decision = NextcloudLiveAcl(cfg).authorize([result])
+
+    promoted = decision.results[0]
+    assert promoted["document_id"] == "files:2"
+    assert promoted["fileid"] == "2"
+    assert promoted["title"] == "visible.pdf"
+    assert promoted["context_text"] == "visible snippet"
+    for key in ("id", "path", "source_url", "owner", "users", "groups", "source_origin"):
+        assert key not in promoted
+    assert "SECRET" not in promoted["context_text"]
+    assert "SECRET" not in promoted["es_snippet"]
 
 
 def test_acl_hides_unauthorized_duplicate_metadata_when_representative_is_visible():

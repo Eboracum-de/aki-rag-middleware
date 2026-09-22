@@ -1,11 +1,19 @@
 # AKI RAG Middleware
 
-**Privacy-oriented RAG middleware for existing Nextcloud deployments — from legacy-friendly Elasticsearch-only retrieval to hybrid vector and graph-assisted research.**
+**AI gateway for existing Nextcloud deployments.**
+
+> **Keep your Nextcloud. Add modern AI around it.**
+
+Modern AI-assisted research and RAG for established Nextcloud document estates — without replacing Nextcloud as the document store, rebuilding its permission model or requiring full-corpus vectorization.
+
+AKI reuses existing Nextcloud FullTextSearch / Elasticsearch infrastructure and keeps Nextcloud as the final authorization authority for private document evidence. Start with an Elasticsearch-centric Super-Light deployment and add semantic retrieval, reranking, Graph-Lite or additional research sources only where they provide value.
+
+**Super-Light can typically be up and running in under 10 minutes** when the required Nextcloud, Elasticsearch and model endpoints are already available. Actual installation time depends on network speed, host performance, image/package downloads and site configuration.
 
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
-[![Status: Release Candidate](https://img.shields.io/badge/status-release%20candidate-orange.svg)](CHANGELOG.md)
+[![Status: Public Beta](https://img.shields.io/badge/status-public%20beta-orange.svg)](CHANGELOG.md)
 
-AKI RAG Middleware connects natural-language research to an existing Nextcloud document estate without replacing Nextcloud as the document store or authorization authority. It combines Nextcloud FullTextSearch / Elasticsearch with optional semantic retrieval, graph signals, mail ingestion, web research and archived chats behind an OpenAI-compatible provider interface.
+Behind an OpenAI-compatible provider interface, AKI can combine FullTextSearch / Elasticsearch with optional semantic retrieval, graph signals, mail ingestion, web research and archived chats while keeping model backends replaceable.
 
 The central security invariant is deliberately simple:
 
@@ -13,15 +21,19 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc5` — current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline. RC5 adds conservative ACL-aware prefiltering, maintenance/backup/restore, follow-up evidence continuity, identity/Findings lifecycle hardening and Markdown chat archives while retaining live Nextcloud ACL as the final document-authorization boundary. See `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5.1` — current public-beta follow-up to the validated RC5 baseline. It keeps the RC5 retrieval and authorization architecture unchanged, fixes Super-Light backup inventory path normalization and clarifies AKI's existing-estate deployment model. See `RELEASE-NOTES-0.8.5.1.md`, `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
-Many organizations have useful document archives that predate modern AI stacks. Replacing those systems is often unnecessary, expensive or undesirable. AKI RAG is designed to add research capabilities around an existing Nextcloud installation while keeping operational complexity and external data exposure under administrator control.
+Many organizations already have a useful Nextcloud document estate, working permissions and a FullTextSearch / Elasticsearch index. Replacing that environment merely to add AI-assisted research is often unnecessary, expensive or undesirable.
 
-The project focuses on six practical goals:
+AKI follows a brownfield integration approach: keep the existing document store, search infrastructure and permission model in place, and add modern AI capabilities around them. Operational complexity and external data exposure remain under administrator control.
 
-- **Legacy-friendly deployment.** The Super-Light profile reuses an existing Nextcloud FullTextSearch / Elasticsearch index and is tested on an openSUSE Leap 15.3 host. The bundled AKI Recherche UI targets Nextcloud 23+.
+The project focuses on eight practical goals:
+
+- **Existing-estate / legacy-friendly deployment.** The Super-Light profile reuses an existing Nextcloud FullTextSearch / Elasticsearch index and is tested on an openSUSE Leap 15.3 host. The bundled AKI Recherche UI targets Nextcloud 23+.
+- **No document migration.** Nextcloud remains the document store and authorization authority; AKI does not require a separate AI knowledge base to become the system of record.
+- **No mandatory full-corpus vectorization.** Super-Light can remain Elasticsearch-centric indefinitely. Qdrant and embeddings are optional scale-up components rather than prerequisites for first use.
 - **UI agnostic.** The middleware exposes an OpenAI-compatible provider path. The included AKI Recherche app is a slim Nextcloud-native UI; external OpenWebUI deployments can use the same middleware.
 - **Small local footprint.** Super-Light runs without Qdrant and without a local reranker. On the current acceptance VM, the local middleware services used about **1.7 GiB RAM at idle** while Nextcloud, Elasticsearch and the LLM were external. This is an observed test point, not a guaranteed ceiling; 4 GiB remains the practical VM minimum when Chromium-based web archiving is enabled.
 - **Integrated research sources.** Ordinary documents, imported mail, archived web evidence and saved AKI chats are distinct source scopes. Live public-web research remains a separate evidence arm.
@@ -186,7 +198,8 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/ROADMAP.md` — explicitly deferred RC5 / 0.8.6 work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
-- `RELEASE-NOTES-0.8.5-rc5.md` — current release-candidate notes
+- `RELEASE-NOTES-0.8.5.1.md` — current public-beta release notes
+- `RELEASE-NOTES-0.8.5-rc5.md` — preceding release-candidate notes
 - `CHANGELOG.md` — detailed development/change history
 - `CONTRIBUTING.md` — contribution and licensing policy
 - `CLA.md` / `docs/CLA-PROCESS.md` — contributor rights without copyright assignment

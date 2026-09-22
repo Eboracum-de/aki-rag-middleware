@@ -784,10 +784,19 @@ def test_acl_denied_uncurated_finding_cleanup_detaches_only_user_provenance_and_
     assert eligibility_params["canonical_user_id"] == "user-a"
     assert eligibility_params["finding_ids"] == ["f1"]
     assert "DELETE p" in detach_query
+    assert "curator_status" in detach_query
+    assert "suppressed_entity_texts" in detach_query
+    assert "NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }" in detach_query
+    assert "NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }" in detach_query
     assert detach_params["finding_ids"] == ["f1"]
     assert "NOT EXISTS { MATCH (:ResearchRun)-[:PRODUCED]->(f) }" in orphan_query
     assert orphan_params["finding_ids"] == ["f1"]
     assert "DETACH DELETE f" in delete_query
+    assert "curator_status" in delete_query
+    assert "suppressed_entity_texts" in delete_query
+    assert "NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }" in delete_query
+    assert "NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }" in delete_query
+    assert "NOT EXISTS { MATCH (:ResearchRun)-[:PRODUCED]->(f) }" in delete_query
     assert delete_params["finding_ids"] == ["f1"]
 
 

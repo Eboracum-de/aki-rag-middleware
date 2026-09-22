@@ -5169,6 +5169,10 @@ class GraphStore:
                 """
                 MATCH (run:ResearchRun {canonical_user_id:$canonical_user_id})-[p:PRODUCED]->(f:ResearchFinding)
                 WHERE f.finding_id IN $finding_ids
+                  AND coalesce(properties(f)['curator_status'],'')=''
+                  AND size(coalesce(properties(f)['suppressed_entity_texts'],[]))=0
+                  AND NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }
+                  AND NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }
                 DELETE p
                 """,
                 canonical_user_id=user_id,
@@ -5198,6 +5202,11 @@ class GraphStore:
                 """
                 MATCH (f:ResearchFinding)
                 WHERE f.finding_id IN $finding_ids
+                  AND coalesce(properties(f)['curator_status'],'')=''
+                  AND size(coalesce(properties(f)['suppressed_entity_texts'],[]))=0
+                  AND NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }
+                  AND NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }
+                  AND NOT EXISTS { MATCH (:ResearchRun)-[:PRODUCED]->(f) }
                 DETACH DELETE f
                 """,
                 finding_ids=orphan_ids,

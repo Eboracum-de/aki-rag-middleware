@@ -75,6 +75,25 @@ class ChatStore {
         return $date . ' - ' . $title . ' - ' . $shortId . '.md';
     }
 
+    private function recoverMarkdownName($folder, $id) {
+        $shortId = substr((string)$id, 0, 8);
+        if ($shortId === '') {
+            return '';
+        }
+        $matches = [];
+        $pattern = '/^\\d{4}-\\d{2}-\\d{2} - .+ - ' . preg_quote($shortId, '/') . '\\.md$/u';
+        foreach ($folder->getDirectoryListing() as $node) {
+            $name = (string)$node->getName();
+            if (preg_match($pattern, $name)) {
+                $matches[] = $name;
+                if (count($matches) > 1) {
+                    return '';
+                }
+            }
+        }
+        return count($matches) === 1 ? $matches[0] : '';
+    }
+
     private function writeFile($folder, $name, $content) {
         if ($folder->nodeExists($name)) {
             $file = $folder->get($name);
@@ -232,7 +251,13 @@ class ChatStore {
         $id = $this->cleanId($id);
         $normalized = $this->normalizeMessages($messages);
         $now = gmdate('c');
-        $existing = $this->load($id, false);
+        try {
+            $existing = $this->load($id, false);
+        } catch (\Exception $e) {
+            // Damaged metadata must not block saving a new message. Treat the
+            // record as absent; the next save rewrites a valid metadata file.
+            $existing = null;
+        }
         $record = [
             'id' => $id,
             'title' => trim((string)$title) !== '' ? trim((string)$title) : ($existing['title'] ?? $this->defaultTitle($normalized)),
@@ -245,6 +270,9 @@ class ChatStore {
         ];
 
         $previousArchiveFile = is_array($existing) ? trim((string)($existing['archive_file'] ?? '')) : '';
+        if ($previousArchiveFile === '') {
+            $previousArchiveFile = $this->recoverMarkdownName($folder, $id);
+        }
         // Keep the readable file name stable after first creation so normal
         // chat title edits do not replace the Nextcloud file and change fileid.
         $archiveFile = (
@@ -321,7 +349,11 @@ class ChatStore {
     }
 
     public function rename($id, $title) {
-        $record = $this->load($id);
+        try {
+            $record = $this->load($id);
+        } catch (\RuntimeException $e) {
+            throw new \InvalidArgumentException('Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden.');
+        }
         $title = trim((string)$title);
         if ($title === '') {
             throw new \InvalidArgumentException('Titel darf nicht leer sein.');
@@ -335,10 +367,20 @@ class ChatStore {
         if ($folder === null) {
             return;
         }
-        $record = $this->load($id, false);
+        try {
+            $record = $this->load($id, false);
+        } catch (\Exception $e) {
+            // Damaged metadata must not prevent deletion of the fixed archive files.
+            $record = null;
+        }
         $names = [$this->metaName($id), $this->legacyHtmlName($id)];
         if (is_array($record) && !empty($record['archive_file'])) {
             $names[] = (string)$record['archive_file'];
+        } else {
+            $recoveredArchive = $this->recoverMarkdownName($folder, $id);
+            if ($recoveredArchive !== '') {
+                $names[] = $recoveredArchive;
+            }
         }
         foreach (array_unique($names) as $name) {
             if ($folder->nodeExists($name)) {

@@ -20,7 +20,6 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Super-Light intentionally relies on external Nextcloud, Elasticsearch and LLM
   services. Their availability and backup are outside the local Compose stack.
 - Super-Light still supplies several global service secrets through Compose environment files. A non-root account that can operate the Docker daemon/Compose stack can therefore render or inspect those values (for example with `docker-compose config`). Treat Docker-daemon access as privileged/root-equivalent, do not share full rendered Compose output, and restrict membership/access accordingly. Moving routine service-secret delivery to Docker secrets or file-mounted credentials is deferred hardening rather than an RC5 release blocker.
-- The RC5 backup inventory may report a configured Super-Light CA path such as `/app/runtime/ca/nextcloud-ca-bundle.pem` as an external `ca_file`, because the configuration uses the container path while inventory runs against the host installation prefix. `runtime/ca/` is nevertheless an explicit recovery-set member and is verified with the archive. Treat this specific `/app/runtime/ca/...` warning as path-normalization noise after confirming the file is present in `files.tar`; other genuinely external CA paths remain operator-owned dependencies.
 - Bundled nginx and OpenWebUI are opt-in in Super-Light. AKI Recherche is the
   reference user UI for the current beta.
 - The locally built Playwright renderer pins Playwright/Python package versions and the

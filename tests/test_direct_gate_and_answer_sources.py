@@ -75,6 +75,15 @@ def test_direct_gate_is_deliberately_narrow():
     assert provider._direct_query_kind("Was ist eine GmbH?") is None
 
 
+def test_context_reset_guards_history_rewrite():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "rag" / "openai_provider.py").read_text(encoding="utf-8")
+    # Both natural-control and ordinary retrieval paths must honor the already
+    # resolved reset boundary before any history-aware rewrite can run.
+    assert source.count("and not context_reset") >= 2
+
+
 def test_greeting_does_not_call_retrieval_or_query_rewrite(monkeypatch):
     monkeypatch.setattr(provider, "_check_auth", lambda authorization: "test-client")
 
