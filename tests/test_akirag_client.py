@@ -98,7 +98,9 @@ def test_aki_026_archive_registration_is_bounded_and_damaged_chats_remain_deleta
 
     assert "'timeout' => 3" in proxy
     assert "'connect_timeout' => 2" in proxy
-    assert "catch (\\Exception $e)" in store
+    assert "'X-RAG-User-ID' => $uid" in proxy
+    assert "Damaged metadata must not block saving a new message" in store
+    assert "Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden." in store
     assert "Damaged metadata must not prevent deletion" in store
     assert readme.startswith("# AKI Recherche 0.2.6")
     assert "Markdown plus Metadaten" in readme
