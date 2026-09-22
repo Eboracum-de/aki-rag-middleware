@@ -75,6 +75,25 @@ class ChatStore {
         return $date . ' - ' . $title . ' - ' . $shortId . '.md';
     }
 
+    private function recoverMarkdownName($folder, $id) {
+        $shortId = substr((string)$id, 0, 8);
+        if ($shortId === '') {
+            return '';
+        }
+        $matches = [];
+        $pattern = '/^\\d{4}-\\d{2}-\\d{2} - .+ - ' . preg_quote($shortId, '/') . '\\.md$/u';
+        foreach ($folder->getDirectoryListing() as $node) {
+            $name = (string)$node->getName();
+            if (preg_match($pattern, $name)) {
+                $matches[] = $name;
+                if (count($matches) > 1) {
+                    return '';
+                }
+            }
+        }
+        return count($matches) === 1 ? $matches[0] : '';
+    }
+
     private function writeFile($folder, $name, $content) {
         if ($folder->nodeExists($name)) {
             $file = $folder->get($name);
@@ -251,6 +270,9 @@ class ChatStore {
         ];
 
         $previousArchiveFile = is_array($existing) ? trim((string)($existing['archive_file'] ?? '')) : '';
+        if ($previousArchiveFile === '') {
+            $previousArchiveFile = $this->recoverMarkdownName($folder, $id);
+        }
         // Keep the readable file name stable after first creation so normal
         // chat title edits do not replace the Nextcloud file and change fileid.
         $archiveFile = (
@@ -354,6 +376,11 @@ class ChatStore {
         $names = [$this->metaName($id), $this->legacyHtmlName($id)];
         if (is_array($record) && !empty($record['archive_file'])) {
             $names[] = (string)$record['archive_file'];
+        } else {
+            $recoveredArchive = $this->recoverMarkdownName($folder, $id);
+            if ($recoveredArchive !== '') {
+                $names[] = $recoveredArchive;
+            }
         }
         foreach (array_unique($names) as $name) {
             if ($folder->nodeExists($name)) {
