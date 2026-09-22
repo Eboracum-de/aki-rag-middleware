@@ -5563,9 +5563,13 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
 @app.post("/v1/archive/chat/register")
 async def register_chat_archive(
     body: ChatArchiveRegisterRequest,
+    request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _check_auth(authorization)
+    user_id = str(request.headers.get("x-rag-user-id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=403, detail="RAG user identity missing")
     document_id = str(body.document_id or "").strip()
     path = str(body.path or "").strip()
     if not document_id or not path:
@@ -5576,6 +5580,7 @@ async def register_chat_archive(
             response = await client.post(
                 f"{RAG_MIDDLEWARE_URL}/source-origin/register-chat",
                 json={"document_id": document_id, "path": path},
+                headers={"X-RAG-User-ID": user_id},
             )
         response.raise_for_status()
         payload = response.json()
