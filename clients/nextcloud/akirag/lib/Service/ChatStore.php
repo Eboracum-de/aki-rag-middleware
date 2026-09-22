@@ -232,7 +232,13 @@ class ChatStore {
         $id = $this->cleanId($id);
         $normalized = $this->normalizeMessages($messages);
         $now = gmdate('c');
-        $existing = $this->load($id, false);
+        try {
+            $existing = $this->load($id, false);
+        } catch (\Exception $e) {
+            // Damaged metadata must not block saving a new message. Treat the
+            // record as absent; the next save rewrites a valid metadata file.
+            $existing = null;
+        }
         $record = [
             'id' => $id,
             'title' => trim((string)$title) !== '' ? trim((string)$title) : ($existing['title'] ?? $this->defaultTitle($normalized)),
@@ -321,7 +327,11 @@ class ChatStore {
     }
 
     public function rename($id, $title) {
-        $record = $this->load($id);
+        try {
+            $record = $this->load($id);
+        } catch (\RuntimeException $e) {
+            throw new \InvalidArgumentException('Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden.');
+        }
         $title = trim((string)$title);
         if ($title === '') {
             throw new \InvalidArgumentException('Titel darf nicht leer sein.');
