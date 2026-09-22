@@ -335,7 +335,12 @@ class ChatStore {
         if ($folder === null) {
             return;
         }
-        $record = $this->load($id, false);
+        try {
+            $record = $this->load($id, false);
+        } catch (\Exception $e) {
+            // Damaged metadata must not prevent deletion of the fixed archive files.
+            $record = null;
+        }
         $names = [$this->metaName($id), $this->legacyHtmlName($id)];
         if (is_array($record) && !empty($record['archive_file'])) {
             $names[] = (string)$record['archive_file'];
