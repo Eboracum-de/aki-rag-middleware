@@ -75,14 +75,13 @@ def test_chat_archive_registration_writes_registry_before_es_mirror(monkeypatch)
     from types import SimpleNamespace
 
     import rag.api as api
-    from rag.acl import AclDecision
-
     class FakeAcl:
         enabled = True
 
-        def authorize(self, results, *, rag_user_id=None):
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
             assert rag_user_id == 'alice'
-            return AclDecision(True, list(results), len(results), len(results))
+            assert document_id == 'files:74710'
+            return 'AKI-Chats/2026-09-22 - Vogelsang 280 - abcdef12.md'
 
     calls = []
     monkeypatch.setattr(api, 'live_acl', FakeAcl())
