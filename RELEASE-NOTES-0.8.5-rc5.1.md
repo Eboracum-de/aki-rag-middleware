@@ -90,4 +90,4 @@ The pre-finalization `0.8.5-rc5.1` development tree passed:
 - shipped shell syntax checks;
 - **553 automated tests**.
 
-The exact public release delta should be reviewed again before merge.
+The exact public release delta is reviewed separately in a review-only pull request before tagging; that review-only PR is not intended to be merged.
