@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.5.1 – 2026-09-22
+## 0.8.5-rc5.1 – 2026-09-22
 
 - Reposition the public README around AKI's existing-estate use case: an AI gateway for established Nextcloud deployments that reuses the document store, FullTextSearch / Elasticsearch and live Nextcloud authorization instead of requiring migration into a separate AI knowledge base. Make the no-mandatory-full-corpus-vectorization path explicit and document that a typical Super-Light deployment can be up and running in under 10 minutes when the required external endpoints are already available; actual time remains dependent on network, host and site conditions.
 - Fix Super-Light backup inventory path normalization for configured container-visible CA files below `/app/runtime/ca/`. When the corresponding file exists below the host installation's `runtime/ca/`, inventory now treats it as AKI-owned recovery state instead of reporting a misleading external-CA warning. Other absolute CA paths remain external/operator-owned.
@@ -14,7 +14,7 @@
 - Replace the Elasticsearch hash-field source-text assertion with a behavioral filename-lookup regression test.
 - Remove a completed self-service/Login-Flow UI clarification item from the roadmap; the current curation login and per-user administration already expose the global gate, temporary Login-Flow credential semantics and per-user enablement.
 
-**Scope note:** direct `/use` document selection remains independent of Research-Finding enrichment in 0.8.5.1. Persisting verifier-derived Findings there without changing the direct answer path also requires a semantically valid structured QueryFrame; that should be implemented as an explicit side pipeline rather than by fabricating curation metadata.
+**Scope note:** direct `/use` document selection remains independent of Research-Finding enrichment in 0.8.5-rc5.1. Persisting verifier-derived Findings there without changing the direct answer path also requires a semantically valid structured QueryFrame; that should be implemented as an explicit side pipeline rather than by fabricating curation metadata.
 
 ## 0.8.5-rc5 – 2026-09-22
 

@@ -21,7 +21,7 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5.1` — current public-beta follow-up to the validated RC5 baseline. It keeps the RC5 retrieval and authorization architecture unchanged, fixes Super-Light backup inventory path normalization and clarifies AKI's existing-estate deployment model. See `RELEASE-NOTES-0.8.5.1.md`, `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5-rc5.1` — current public-beta follow-up to the validated RC5 baseline. It keeps the RC5 retrieval and authorization architecture unchanged, fixes Super-Light backup inventory path normalization and clarifies AKI's existing-estate deployment model. See `RELEASE-NOTES-0.8.5-rc5.1.md`, `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
@@ -198,7 +198,7 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/ROADMAP.md` — explicitly deferred RC5 / 0.8.6 work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
-- `RELEASE-NOTES-0.8.5.1.md` — current public-beta release notes
+- `RELEASE-NOTES-0.8.5-rc5.1.md` — current public-beta release notes
 - `RELEASE-NOTES-0.8.5-rc5.md` — preceding release-candidate notes
 - `CHANGELOG.md` — detailed development/change history
 - `CONTRIBUTING.md` — contribution and licensing policy
