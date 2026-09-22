@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.5.1 – 2026-09-22
+
+- Reposition the public README around AKI's existing-estate use case: an AI gateway for established Nextcloud deployments that reuses the document store, FullTextSearch / Elasticsearch and live Nextcloud authorization instead of requiring migration into a separate AI knowledge base. Make the no-mandatory-full-corpus-vectorization path explicit and document that a typical Super-Light deployment can be up and running in under 10 minutes when the required external endpoints are already available; actual time remains dependent on network, host and site conditions.
+- Fix Super-Light backup inventory path normalization for configured container-visible CA files below `/app/runtime/ca/`. When the corresponding file exists below the host installation's `runtime/ca/`, inventory now treats it as AKI-owned recovery state instead of reporting a misleading external-CA warning. Other absolute CA paths remain external/operator-owned.
+- Harden RC5 behavior after full release-diff review: re-check all curation/provenance predicates inside the actual Neo4j Finding-delete writes, so a Finding that becomes curated or referenced between eligibility evaluation and mutation is preserved.
+- Honor natural and explicit conversation context resets before history-aware query rewriting, preventing prior-chat context from being reintroduced after a reset boundary.
+- Preserve genuine upstream RAG-Admin HTTP 503 responses instead of rewriting them to the maintenance fallback; only proxy-connectivity 502/504 responses use the maintenance page.
+- Bound best-effort AKI Recherche chat-archive registration to a short request window, keep damaged archive records deletable, and align the bundled app README with AKI Recherche 0.2.6 Markdown archives.
+- Harden chat-archive recovery and provenance writes after the follow-up review: damaged metadata no longer blocks saving a repaired chat; rename fails cleanly instead of surfacing an internal error; archive registration now carries the current Nextcloud UID and is accepted only after live ACL authorizes the concrete `files:<id>` for that user.
+- Complete chat-archive integrity hardening: when metadata is damaged, recover an existing managed Markdown file only if its chat-ID suffix matches uniquely; and derive the registered archive path from the authenticated Nextcloud WebDAV SEARCH result instead of trusting the client-supplied path.
+- Close a legacy duplicate-promotion ACL metadata leak: when a denied ranked representative is replaced by an authorized duplicate, clear all representative identity/ownership/path fields before copying the visible variant and synthesize canonical `document_id` from legacy file IDs when needed.
+- Replace the Elasticsearch hash-field source-text assertion with a behavioral filename-lookup regression test.
+- Remove a completed self-service/Login-Flow UI clarification item from the roadmap; the current curation login and per-user administration already expose the global gate, temporary Login-Flow credential semantics and per-user enablement.
+
+**Scope note:** direct `/use` document selection remains independent of Research-Finding enrichment in 0.8.5.1. Persisting verifier-derived Findings there without changing the direct answer path also requires a semantically valid structured QueryFrame; that should be implemented as an explicit side pipeline rather than by fabricating curation metadata.
+
 ## 0.8.5-rc5 – 2026-09-22
 
 - Introduce an explicit **maintenance mode** for installer reruns, backup/restore and controlled service work. `install/maintenance-mode.sh on|off|status` switches between the minimal authenticated maintenance provider and the normal stack; fresh installs and installer reruns enter maintenance mode first. On Dockerized/Super-Light, leaving maintenance waits for Neo4j/schema readiness and recreates the normal provider only after that succeeds; failed normal startup restores maintenance mode instead of leaving a half-started user-facing stack.

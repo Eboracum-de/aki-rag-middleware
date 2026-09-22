@@ -2,7 +2,7 @@ version: "2.4"
 
 services:
   api:
-    image: aki-rag:0.8.5-rc4.3
+    image: aki-rag:0.8.5.1
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider
@@ -23,7 +23,7 @@ services:
       - neo4j
 
   provider:
-    image: aki-rag:0.8.5-rc4.3
+    image: aki-rag:0.8.5.1
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider
@@ -43,7 +43,7 @@ services:
       - ../../runtime:/app/runtime
 
   mail-worker:
-    image: aki-rag:0.8.5-rc4.3
+    image: aki-rag:0.8.5.1
     build:
       context: ../..
       dockerfile: install/super-light/Dockerfile.provider

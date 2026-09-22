@@ -91,6 +91,25 @@ def test_aki_025_marks_context_boundary_and_persists_effective_source_scopes():
     assert "akirag-message-scopes" in js
 
 
+def test_aki_026_archive_registration_is_bounded_and_damaged_chats_remain_deletable():
+    proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
+    store = (APP / "lib" / "Service" / "ChatStore.php").read_text(encoding="utf-8")
+    readme = (APP / "README.md").read_text(encoding="utf-8")
+
+    assert "'timeout' => 3" in proxy
+    assert "'connect_timeout' => 2" in proxy
+    assert "'X-RAG-User-ID' => $uid" in proxy
+    assert "Damaged metadata must not block saving a new message" in store
+    assert "recoverMarkdownName" in store
+    assert "count($matches) > 1" in store
+    assert store.count("$this->recoverMarkdownName($folder, $id)") >= 2
+    assert "Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden." in store
+    assert "Damaged metadata must not prevent deletion" in store
+    assert readme.startswith("# AKI Recherche 0.2.6")
+    assert "Markdown plus Metadaten" in readme
+    assert "Legacy-HTML" in readme
+
+
 def test_aki_markdown_strong_weight_is_browser_independent():
     css = (APP / "css" / "style.css").read_text(encoding="utf-8")
     assert ".akirag-content strong" in css

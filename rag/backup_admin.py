@@ -82,6 +82,44 @@ def _resolve(
     return candidate, relative
 
 
+def _resolve_ca_reference(
+    root: Path,
+    raw: str | Path,
+    *,
+    source_prefix: Path | None = None,
+) -> tuple[Path, str | None]:
+    """Resolve configured CA files, including the Super-Light /app mount alias.
+
+    Dockerized Super-Light stores container-visible CA paths such as
+    /app/runtime/ca/nextcloud-ca-bundle.pem in config.yaml while backup
+    inventory runs against the host installation prefix. Treat only existing
+    files below that known runtime/ca alias as AKI-owned; genuinely external
+    absolute CA paths remain external.
+    """
+    path, relative = _resolve(root, raw, source_prefix=source_prefix)
+    if relative is not None:
+        return path, relative
+
+    raw_path = Path(str(raw or "").strip() or ".")
+    if not raw_path.is_absolute():
+        return path, relative
+    try:
+        app_relative = raw_path.relative_to("/app")
+    except ValueError:
+        return path, relative
+    if tuple(app_relative.parts[:2]) != ("runtime", "ca"):
+        return path, relative
+
+    candidate = (root.resolve() / app_relative).resolve(strict=False)
+    try:
+        candidate_relative = candidate.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path, relative
+    if candidate.is_file():
+        return candidate, candidate_relative
+    return path, relative
+
+
 def inventory(
     root: str | Path,
     *,
@@ -175,7 +213,7 @@ def inventory(
 
     ca_seen: set[str] = set()
     for raw in ca_raw:
-        path, relative = _resolve(root_path, raw, source_prefix=source_path)
+        path, relative = _resolve_ca_reference(root_path, raw, source_prefix=source_path)
         key = str(path)
         if key in ca_seen:
             continue

@@ -1333,9 +1333,15 @@ async def web_archive_finalize(request: WebArchiveFinalizeRequest, http_request:
 @app.post(
     "/source-origin/register-chat",
     summary="Register a Nextcloud chat archive document",
-    **ZONE_TRUSTED_PROVIDER
+    **ZONE_USER
 )
-def register_chat_archive_source(body: ChatArchiveRegisterRequest) -> dict[str, Any]:
+def register_chat_archive_source(
+    body: ChatArchiveRegisterRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    rag_user_id = str(http_request.headers.get("x-rag-user-id") or "").strip()
+    if not rag_user_id:
+        raise HTTPException(status_code=403, detail="RAG user identity missing")
     document_id = str(body.document_id or "").strip()
     path = str(body.path or "").strip().replace("\\", "/").strip("/")
     if not document_id.startswith("files:") or not document_id[6:].isdigit():
@@ -1344,10 +1350,41 @@ def register_chat_archive_source(body: ChatArchiveRegisterRequest) -> dict[str, 
     if not path or not any(path_is_under(path, root) for root in roots):
         raise HTTPException(status_code=400, detail="path is outside the configured chat archive root")
 
+    if not live_acl.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Live Nextcloud ACL is required for chat archive registration",
+        )
+    try:
+        canonical_path = live_acl.resolve_visible_file_path(
+            document_id,
+            rag_user_id=rag_user_id,
+        )
+    except AclIdentityError as exc:
+        raise HTTPException(status_code=403, detail=f"Live ACL denied: {exc}") from exc
+    except (AclBackendError, AclConfigurationError) as exc:
+        raise HTTPException(status_code=503, detail=f"Live ACL unavailable: {exc}") from exc
+    if not canonical_path:
+        raise HTTPException(
+            status_code=403,
+            detail="Live ACL denied chat archive document",
+        )
+    canonical_path = str(canonical_path).replace("\\", "/").strip("/")
+    if not any(path_is_under(canonical_path, root) for root in roots):
+        raise HTTPException(
+            status_code=400,
+            detail="server-derived path is outside the configured chat archive root",
+        )
+    if canonical_path != path:
+        raise HTTPException(
+            status_code=400,
+            detail="submitted chat archive path does not match Nextcloud",
+        )
+
     changed = register_document(
         document_id,
         "chat_archive",
-        source_path=path,
+        source_path=canonical_path,
         classification_source="chat_archive_write",
     )
     mirror = {"checked": 0, "updated": 0, "missing": 0}
