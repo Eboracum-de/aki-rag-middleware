@@ -234,14 +234,23 @@ def _promote_authorized_duplicate(
     """Promote one ACL-visible duplicate without reusing denied evidence text."""
     promoted = dict(representative)
     identity_keys = (
-        "document_id", "title", "path", "directory", "filename",
+        "document_id", "id", "fileid", "file_id",
+        "title", "path", "directory", "filename",
         "nextcloud_es_id", "nextcloud_openfile_id", "source_url",
         "document_date", "content_type", "content_hash", "source", "provider",
         "share_names", "owner", "users", "groups", "circles", "source_origin",
     )
+    # Promotion crosses an authorization boundary: never retain identity or ACL
+    # metadata from the denied representative merely because the visible legacy
+    # variant omitted that field.
+    for key in identity_keys:
+        promoted.pop(key, None)
     for key in identity_keys:
         if key in variant:
             promoted[key] = variant.get(key)
+    variant_file_id = _file_id(variant)
+    if variant_file_id and not promoted.get("document_id"):
+        promoted["document_id"] = f"files:{variant_file_id}"
 
     snippet = str(
         variant.get("snippet")
