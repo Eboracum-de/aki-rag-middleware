@@ -5915,6 +5915,7 @@ async def chat_completions(
         # ordinary internal search, exactly as without a leading instruction.
         if (
             not auxiliary
+            and not context_reset
             and list_mode is None
             and not use_references
             and not elastic_mode
@@ -5927,6 +5928,7 @@ async def chat_completions(
             retrieval_query = question
     elif (
         not auxiliary
+        and not context_reset
         and list_mode is None
         and not use_references
         and not elastic_mode
