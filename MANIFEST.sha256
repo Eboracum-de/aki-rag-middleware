@@ -5,7 +5,7 @@ a081a6e4d025b7087770856742a705ed8d21812661f0ebef36cb6936e46163bc  ./.github/ISSU
 0a2462dd9fe785bab54e1ee5701bfae3f3b909539947cbd30af5b3976f392987  ./.github/pull_request_template.md
 a79af9795a323beb5b2758dff968c2d7b3b7c05a50d346fe4209e139d50e34bc  ./.github/workflows/ci.yml
 b34055499d61da58af74e03cb242a6a3ff70fcb0f3844f8f71f64d6efa505c81  ./.gitignore
-0036ca2dd23d7ead75a2d5d6428d367b278e29dbffa52f033d30f696a725ab0c  ./CHANGELOG.md
+9e3f63c685984921c90b53b34d86216f9356cc830767851a14f08804014f7c3b  ./CHANGELOG.md
 ff8e29f42a23c5943105159251be47401876368afce8a494cd01441435874c08  ./check-config.sh
 baf6797c3c7b773dc447f12d4bdeab81448d5f536e3e80f8ebaf6c3c21a05705  ./CLA.md
 6cb73a539bb62b04b2a33daf3edbf1598807d5d9667cd9fdc8bdd1359c8a6938  ./clients/nextcloud/akirag/appinfo/info.xml
@@ -42,7 +42,7 @@ b64b3483be1b841b70bf4115d96e4ccca94ec1932fd959968c063669d00933aa  ./docs/ARCHITE
 c03e6c283053f8a3a8e68b265a025ad29b312af8d232968886a6762b5af69489  ./docs/PRIVACY-ARCHITECTURE.md
 15d904f372424c72130a40935d71b36fdea643aa229ca9e229c5a1bcd5a5ede5  ./docs/PROJECT-GOVERNANCE.md
 f00685e325b9beab5107e2c638646c4fc2c8e0442935e2c294cacfb502f70ecf  ./docs/README.md
-7ab4329bdf3f7c90907d011639f2b71b96154e374fb8ede3477af9e21d288056  ./docs/ROADMAP.md
+5bc360b13079a5025385eae197e4b16671819948416025ac51c6c484db1ef3ef  ./docs/ROADMAP.md
 7c49574e3977d2ba2a0c68ebfd978c0f7c45be89732894abb30ed6644089019d  ./docs/TECHNICAL-REFERENCE.md
 29484cf9955345d374aa0e951a69f31afea7246cce837d61619deb1d7a1470b9  ./docs/THREAT-MODEL.md
 7ce865182a9648e257a961cd362e02e61a470e687cee682c19ec86c8463ec155  ./helpers/fts_reconcile/appinfo/info.xml
@@ -68,7 +68,7 @@ a4aee3cf6fc148f7a2542ff15a6643b7959eb571b81475f45ddc60c85496bc44  ./install/prof
 da4a5b3e6cf1df631d24b32f48df7f23f75f1b7371873c7428d4c23efd7300b1  ./install/smoke-test.sh
 8a8130ea0ab9d3a2317b9a7b2fe5909fee330a6e30e1ba65b4b8b91aca21c087  ./install/super-light/config.super-light.yaml
 2f310a513f08ed83288ef2a54ea649ce01b738246b818bab3a3cbc7240e731cd  ./install/super-light/contacts.sh
-431ed528f77a1cb094be2373032ed8b96ba85aa26719f33a645b56fea878ac68  ./install/super-light/docker-compose.yml
+ef3bbc9226bb0c8c0bcf99d30c839d7ff458c94ee87f526aa02a781a4126e2cc  ./install/super-light/docker-compose.yml
 7c837b668cce5d3104f632b1dd43ec9094dc79a1471c2639ef04d4ed9871488c  ./install/super-light/Dockerfile.provider
 385bbb2450a64d16b81ffe6d563867e0f75797a43d6759593fd193ac9b000080  ./install/super-light/install-super-light.sh
 026693f01d60a04fd9c6dbff1e4b6007d9bb9f9ccf631871b5e23321c453e647  ./install/super-light/provider.env.super-light.example
@@ -191,16 +191,16 @@ d4e0553500c1dbeb0e6cf898627e6737b004462aee3ebbdf3e05c8475be0fae7  ./rag/tls_comp
 56d7e08b712c79b765fb2863b8d680c2b764352129b6e5564b55581073da770c  ./rag/user_admin.py
 6619890b935740af999ee9136d2f283b9da18ee211a6f6bc6bb03953f66713f0  ./rag/user_credentials.py
 cd96faba874507bc863e862b653579990f51c61993b483a3a6d8e49f43ee7a5c  ./rag/vector.py
-b32996486a4d32c1a26cf699425dd0a17ebdb1494ab9f145109e01db9958b1f4  ./rag/version.py
+19201726992a93011a164a8a8b026becf3daba8244c97904be02546fe2afcae2  ./rag/version.py
 ede60d20821f9d2dc5cfde0e9265b12cfad428a856cfb5657eaa2f9f88d9714f  ./rag/web_research.py
-32d1566fe6621dc9adbf9d56cf663c2746a4b101400db4bcbb40e7c117af004d  ./README.md
+1126988414712b904296379780b279986c143763cb05650c3fa1fd5298da72a1  ./README.md
 34042b9f409f7496fea52bb4b035322f020d3eefe69c89598f8689a25ded6771  ./RELEASE-NOTES-0.8.5-rc3.md
 2714bb93973c327c98426dd33c8ad66ae4bae80838e44f948fc396edea05f97f  ./RELEASE-NOTES-0.8.5-rc4.1.md
 1469c22e047274fde57a8caceac63e0ba4672ac89fcae28b6d4d03c48515aa3b  ./RELEASE-NOTES-0.8.5-rc4.2.md
 2ef37f89b9239262bb6e15008fc9c2419d89281b5e7a12823efd95638ddaedca  ./RELEASE-NOTES-0.8.5-rc4.3.md
 5bdfa26f16af69e7bbf7e2537a1eb4f81abb49a921a14284914cb6bc43d7f7c4  ./RELEASE-NOTES-0.8.5-rc4.md
+c02ee7757412dd3848fe42e631c10acb137eb9260dc315c53c9dc701df416c7c  ./RELEASE-NOTES-0.8.5-rc5.1.md
 dfa6bd48de74e5819c65ba55d0f000078a8ad867e44b943667fe8752b72de0af  ./RELEASE-NOTES-0.8.5-rc5.md
-a2f4054b72560e9c6eb73155df949a4c876121331721ef94f4f52bc25ed53b70  ./RELEASE-NOTES-0.8.5.1.md
 d1d7feaa1e4c9411db99a11d561721ebd52f3da34bd71bd3f245f2223c0ac29e  ./requirements-dev.txt
 0ae08b2d994070cb2107d6e249fe534b9c0d5005c622dd84bb34ad471ede3526  ./requirements-super-light.txt
 f856444f10ebd4ce2ec48b7b8e83f2def5acf128a9c578f3c0b51ca08650f234  ./requirements.txt
@@ -233,7 +233,7 @@ fa3bbaaf86eec557eede7e406c9105e8472c9a114f32e0fd4d6e91186bec085b  ./tests/test_c
 db44257781ef06b579d1a50c2d8e69255de01c7c410f7265558f7b2a4d6b1cf0  ./tests/test_curation_sessions.py
 43cba35fe75f42e1f8af8817145d48dc34b5f95c98e3c4cfe195e353c9288ea0  ./tests/test_dedup_variants.py
 d5191ed7f400dd16a86e6b76467d141d9d332f7f916327c6d27dbc96fad309fd  ./tests/test_degraded_retrieval.py
-c360fb4ca9a473f6015843b1238272ca5ed6b5c24c7c1dadea768741ce0927ac  ./tests/test_deployment_beta.py
+b7fd72c3b83bd5e26b1170402931732e4a3d3f5e5c6812fd0d84a20fc1786040  ./tests/test_deployment_beta.py
 b6b52a400d2ee08a441bcaf0723d7dfdeb76eb41236558ee5794147f50d3b5df  ./tests/test_direct_gate_and_answer_sources.py
 f25831aff84835dcb7a0fe051bc8515a863eac7b723510e87065bd6d64fd77be  ./tests/test_elastic_exact.py
 288549a7e298869eca74a8ba5edbb26c01ad309557c62e486d7e7d6b0f553109  ./tests/test_elasticsearch_config.py

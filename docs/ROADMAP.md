@@ -1,6 +1,6 @@
 # Roadmap
 
-This file records the implemented RC5 direction together with follow-up work that is intentionally deferred beyond the current `0.8.5.1` public-beta baseline.
+This file records the implemented RC5 direction together with follow-up work that is intentionally deferred beyond the current `0.8.5-rc5.1` public-beta baseline.
 
 ## Deferred operational/security polish
 
