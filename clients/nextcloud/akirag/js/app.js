@@ -13,6 +13,13 @@
     var retryButton;
     var chatList;
     var scopeInputs = [];
+    var sourceScopeLabels = {
+        documents: 'Dokumente',
+        mailarchive: 'Mailarchiv',
+        webarchive: 'Webarchiv',
+        chatarchive: 'Chatarchiv',
+        web: 'Web'
+    };
 
     function appendInlineMarkdown(container, text) {
         var tokenRe = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]{1,240}\]\((?:https?:\/\/)[^\s)]+\)|https?:\/\/[^\s<]+)/g;
@@ -289,6 +296,21 @@
         }
     }
 
+    function formatSourceScopes(scopes) {
+        if (!Array.isArray(scopes) || !scopes.length) {
+            return '';
+        }
+        var labels = [];
+        scopes.forEach(function (scope) {
+            var value = String(scope || '').toLowerCase();
+            var label = sourceScopeLabels[value];
+            if (label && labels.indexOf(label) === -1) {
+                labels.push(label);
+            }
+        });
+        return labels.length ? 'Quellen: ' + labels.join(', ') : '';
+    }
+
     function makeSmallButton(label, title, handler) {
         var button = document.createElement('button');
         button.type = 'button';
@@ -299,7 +321,7 @@
         return button;
     }
 
-    function addMessage(role, content, index, createdAt) {
+    function addMessage(role, content, index, createdAt, sourceScopes) {
         var wrapper = document.createElement('div');
         wrapper.className = 'akirag-message ' + (role === 'user' ? 'akirag-user' : 'akirag-assistant');
 
@@ -316,6 +338,13 @@
             timeNode.dateTime = createdAt;
             timeNode.textContent = timestamp;
             metaNode.appendChild(timeNode);
+        }
+        var sourceScopeText = role === 'assistant' ? formatSourceScopes(sourceScopes) : '';
+        if (sourceScopeText) {
+            var scopesNode = document.createElement('span');
+            scopesNode.className = 'akirag-message-scopes';
+            scopesNode.textContent = sourceScopeText;
+            metaNode.appendChild(scopesNode);
         }
 
         var contentNode = document.createElement('div');
@@ -346,7 +375,7 @@
             addMessage('assistant', 'Was möchten Sie finden?');
         } else {
             messages.forEach(function (message, index) {
-                addMessage(message.role, message.content, index, message.created_at || '');
+                addMessage(message.role, message.content, index, message.created_at || '', message.source_scopes || []);
             });
         }
         messageList.scrollTop = messageList.scrollHeight;
@@ -488,7 +517,12 @@
             conversationId: conversationId
         }).then(function (data) {
             var answer = data.content || 'Keine Antwort erhalten.';
-            var assistant = {role: 'assistant', content: answer, created_at: data.message_created_at || new Date().toISOString()};
+            var assistant = {
+                role: 'assistant',
+                content: answer,
+                created_at: data.message_created_at || new Date().toISOString(),
+                source_scopes: Array.isArray(data.source_scopes) ? data.source_scopes : []
+            };
             if (Array.isArray(data.sources) && data.sources.length) {
                 assistant.sources = data.sources;
             }

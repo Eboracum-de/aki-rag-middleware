@@ -183,6 +183,53 @@ def parse_authorized_fileids(xml_body: str | bytes) -> set[str]:
     return result
 
 
+def _promote_authorized_duplicate(
+    representative: dict[str, Any],
+    variant: dict[str, Any],
+    remaining_variants: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Promote one ACL-visible duplicate without reusing denied evidence text."""
+    promoted = dict(representative)
+    identity_keys = (
+        "document_id", "title", "path", "directory", "filename",
+        "nextcloud_es_id", "nextcloud_openfile_id", "source_url",
+        "document_date", "content_type", "content_hash", "source", "provider",
+        "share_names", "owner", "users", "groups", "circles", "source_origin",
+    )
+    for key in identity_keys:
+        if key in variant:
+            promoted[key] = variant.get(key)
+
+    snippet = str(
+        variant.get("snippet")
+        or variant.get("es_snippet")
+        or variant.get("vector_snippet")
+        or variant.get("graph_snippet")
+        or ""
+    )
+    promoted["snippet"] = snippet
+    promoted["es_snippet"] = str(variant.get("es_snippet") or "")
+    promoted["vector_snippet"] = str(variant.get("vector_snippet") or "")
+    promoted["graph_snippet"] = str(variant.get("graph_snippet") or "")
+    promoted["context_text"] = snippet or str(variant.get("title") or variant.get("path") or "")
+    promoted["context_enriched"] = False
+    promoted["acl_promoted_duplicate"] = True
+
+    # Graph/extraction evidence belongs to the denied representative unless it
+    # was explicitly stored on this concrete variant, which current dedup does
+    # not do. Do not carry it over merely because ranking provenance is shared.
+    for key in (
+        "graph_reason", "graph_entities", "graph_direct_relations",
+        "graph_indirect_chains", "graph_relation_observations",
+        "graph_relation_evidence",
+    ):
+        promoted.pop(key, None)
+
+    promoted["duplicate_variants"] = [dict(item) for item in remaining_variants]
+    promoted["duplicate_count"] = 1 + len(remaining_variants)
+    return promoted
+
+
 class NextcloudLiveAcl:
     def __init__(self, cfg: dict[str, Any]):
         self.cfg = cfg
@@ -193,12 +240,17 @@ class NextcloudLiveAcl:
         verify = nextcloud_verify_value(cfg, "acl", "carddav")
         self.verify_tls = verify if isinstance(verify, bool) else True
         self.ca_file = verify if isinstance(verify, str) else None
+        self.nextcloud_base_url = str(
+            _cfg_get(cfg, "nextcloud.base_url", default="") or ""
+        ).strip().rstrip("/")
         explicit_url = str(_cfg_get(cfg, "acl.webdav_url", default="") or "").strip()
         if explicit_url:
             self.webdav_url = explicit_url.rstrip("/") + "/"
         else:
-            base = str(_cfg_get(cfg, "nextcloud.base_url", default="") or "").rstrip("/")
-            self.webdav_url = base + "/remote.php/dav/" if base else ""
+            self.webdav_url = (
+                self.nextcloud_base_url + "/remote.php/dav/"
+                if self.nextcloud_base_url else ""
+            )
 
     def _credential(self, rag_user_id: str | None) -> NextcloudCredential:
         if self.identity_mode == "single_user":
@@ -254,6 +306,86 @@ class NextcloudLiveAcl:
         """
         return self._credential(rag_user_id)
 
+    def prefilter_identity(self, rag_user_id: str | None = None) -> tuple[str, list[str]]:
+        """Resolve the authenticated Nextcloud UID and current groups via OCS.
+
+        Prefilter metadata is an optimization only.  The app credential is the
+        same server-side credential used by live ACL; no client-supplied group
+        header is trusted for this lookup.  Callers may fail open to the normal
+        retrieval path if OCS is unavailable, while live WebDAV ACL remains the
+        final authorization boundary.
+        """
+        if not self.enabled:
+            raise AclConfigurationError("live ACL is disabled")
+        if not self.nextcloud_base_url:
+            raise AclConfigurationError("nextcloud.base_url is not configured")
+
+        credential = self._credential(rag_user_id)
+        verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+        url = self.nextcloud_base_url + "/ocs/v1.php/cloud/user"
+        try:
+            response = httpx.get(
+                url,
+                params={"format": "json"},
+                headers={
+                    "Accept": "application/json",
+                    "OCS-APIRequest": "true",
+                },
+                auth=(credential.username, credential.password),
+                timeout=self.timeout,
+                verify=verify,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise AclIdentityError(
+                    f"Nextcloud rejected OCS identity credentials (HTTP {status})"
+                ) from exc
+            raise AclBackendError(
+                f"Nextcloud OCS identity lookup failed (HTTP {status})"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AclBackendError(
+                f"Nextcloud OCS identity lookup failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        try:
+            payload = response.json()
+            ocs = payload.get("ocs") if isinstance(payload, dict) else None
+            meta = ocs.get("meta") if isinstance(ocs, dict) else None
+            data = ocs.get("data") if isinstance(ocs, dict) else None
+            if not isinstance(data, dict):
+                raise ValueError("missing ocs.data object")
+
+            status_code = meta.get("statuscode") if isinstance(meta, dict) else None
+            status = str(meta.get("status") or "").strip().casefold() if isinstance(meta, dict) else ""
+            if status_code not in {None, 100} or (status and status != "ok"):
+                message = str(meta.get("message") or "") if isinstance(meta, dict) else ""
+                raise ValueError(
+                    f"OCS status={status or '?'} statuscode={status_code!r} {message}".strip()
+                )
+
+            uid = str(data.get("id") or "").strip()
+            if not uid:
+                raise ValueError("missing authenticated Nextcloud user id")
+
+            raw_groups = data.get("groups")
+            if raw_groups is None:
+                raw_groups = []
+            if not isinstance(raw_groups, list):
+                raise ValueError("ocs.data.groups is not a list")
+            groups: list[str] = []
+            for item in raw_groups[:256]:
+                group = str(item or "").strip()
+                if group and len(group) <= 256 and group not in groups:
+                    groups.append(group)
+            return uid, groups
+        except (TypeError, ValueError) as exc:
+            raise AclBackendError(
+                f"invalid Nextcloud OCS identity response: {exc}"
+            ) from exc
+
     def authorize_with_credential(
         self,
         results: list[dict[str, Any]],
@@ -282,8 +414,27 @@ class NextcloudLiveAcl:
         results: list[dict[str, Any]],
         credential: NextcloudCredential,
     ) -> AclDecision:
-        ids_by_pos: list[str | None] = [_file_id(item) for item in results]
-        file_ids = [x for x in ids_by_pos if x]
+        # Dedupe runs before live ACL for ranking efficiency, so one result may
+        # represent several concrete Nextcloud files. Authorize every file ID in
+        # the group: a denied representative must never hide an accessible copy,
+        # and unauthorized duplicate metadata must never leave this boundary.
+        groups: list[tuple[dict[str, Any], str | None, list[tuple[dict[str, Any], str | None]]]] = []
+        file_ids: list[str] = []
+        for item in results:
+            representative_id = _file_id(item)
+            variants: list[tuple[dict[str, Any], str | None]] = []
+            for raw_variant in item.get("duplicate_variants") or []:
+                if not isinstance(raw_variant, dict):
+                    continue
+                variant = dict(raw_variant)
+                variant_id = _file_id(variant)
+                variants.append((variant, variant_id))
+                if variant_id:
+                    file_ids.append(variant_id)
+            groups.append((item, representative_id, variants))
+            if representative_id:
+                file_ids.append(representative_id)
+
         if not file_ids:
             # Fail closed for results that cannot be tied to a Nextcloud file.
             return AclDecision(True, [], len(results), 0)
@@ -314,10 +465,26 @@ class NextcloudLiveAcl:
             except httpx.HTTPError as exc:
                 raise AclBackendError(f"Nextcloud live ACL SEARCH failed: {type(exc).__name__}: {exc}") from exc
             authorized_ids.update(parse_authorized_fileids(response.content))
-        filtered = [
-            item for item, file_id in zip(results, ids_by_pos)
-            if file_id is not None and file_id in authorized_ids
-        ]
+        filtered: list[dict[str, Any]] = []
+        for item, representative_id, variants in groups:
+            visible_variants = [
+                variant for variant, variant_id in variants
+                if variant_id is not None and variant_id in authorized_ids
+            ]
+            if representative_id is not None and representative_id in authorized_ids:
+                kept = dict(item)
+                kept["duplicate_variants"] = [dict(variant) for variant in visible_variants]
+                kept["duplicate_count"] = 1 + len(visible_variants)
+                filtered.append(kept)
+                continue
+            if visible_variants:
+                filtered.append(
+                    _promote_authorized_duplicate(
+                        item,
+                        visible_variants[0],
+                        visible_variants[1:],
+                    )
+                )
         return AclDecision(True, filtered, len(results), len(filtered))
 
     def authorize(self, results: list[dict[str, Any]], *, rag_user_id: str | None = None) -> AclDecision:

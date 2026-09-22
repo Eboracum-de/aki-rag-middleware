@@ -257,6 +257,26 @@ done
 
 log() { printf '\n==> %s\n' "$*"; }
 
+probe_service_url() {
+  local label="$1" url="$2"
+  [[ -n "$url" ]] || return 0
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[INFO] $label reachability check skipped: curl is not available yet."
+    return 0
+  fi
+  if curl -sS --max-time 5 -o /dev/null "$url"; then
+    echo "[CHECK] $label endpoint reachable."
+  else
+    echo "[WARN] $label endpoint is not reachable with current host curl/TLS trust." >&2
+    echo "       Installation will continue; verify the configured URL/service before using AKI." >&2
+  fi
+}
+
+probe_configured_services() {
+  probe_service_url "Nextcloud" "$NEXTCLOUD_URL"
+  probe_service_url "Elasticsearch" "$ELASTICSEARCH_URL"
+}
+
 print_plan() {
   # Conservative component-wise estimate.  Indexed/user data is extra.
   local disk_low=4
@@ -571,6 +591,7 @@ PY
 if [[ $INSTALL_SYSTEM_PACKAGES -eq 1 ]]; then
   install_system_packages
 fi
+probe_configured_services
 select_python
 ensure_venv_support
 log "Using Python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
@@ -616,6 +637,7 @@ for item in rag prompts ontology install docs clients requirements.txt versions.
   rm -rf "$PREFIX/$item"
   cp -a "$SOURCE_DIR/$item" "$PREFIX/$item"
 done
+chmod 0755 "$PREFIX/install/maintenance-mode.sh"
 if [[ -n "$INSTALL_ENV_BACKUP" ]]; then
   mv "$INSTALL_ENV_BACKUP" "$PREFIX/install/.env"
 fi
@@ -696,6 +718,7 @@ RAG_ADMIN_PASSWORD=$ADMIN_PASSWORD
 PROVIDER_API_KEY=$PROVIDER_API_KEY
 RAG_INTERNAL_API_KEY=$RAG_INTERNAL_API_KEY
 RAG_PROVIDER_INTERNAL_KEY=$RAG_PROVIDER_INTERNAL_KEY
+RAG_MAINTENANCE_MODE=true
 LLM_API_KEY=
 EMBEDDING_API_KEY=
 GRAPH_ENTITY_API_KEY=
@@ -743,6 +766,11 @@ ensure_runtime_key PROVIDER_API_KEY "$PROVIDER_API_KEY"
 ensure_runtime_key RAG_INTERNAL_API_KEY "$RAG_INTERNAL_API_KEY"
 ensure_runtime_key RAG_PROVIDER_INTERNAL_KEY "$RAG_PROVIDER_INTERNAL_KEY"
 ensure_runtime_key ELASTICSEARCH_PASSWORD ""
+if grep -q '^RAG_MAINTENANCE_MODE=' "$PREFIX/runtime.env" 2>/dev/null; then
+  sed -i 's/^RAG_MAINTENANCE_MODE=.*/RAG_MAINTENANCE_MODE=true/' "$PREFIX/runtime.env"
+else
+  printf '\nRAG_MAINTENANCE_MODE=true\n' >> "$PREFIX/runtime.env"
+fi
 chmod 600 "$PREFIX/runtime.env"
 chown "$RAG_USER:$RAG_GROUP" "$PREFIX/runtime.env"
 
@@ -1228,7 +1256,14 @@ if [[ $WITH_SYSTEMD -eq 1 ]]; then
   systemctl daemon-reload
   systemctl enable rag-api rag-provider rag-sync-worker rag-mail-worker
   if [[ $WITH_NEO4J -eq 1 ]]; then systemctl enable rag-graph-worker; fi
-  # Do not start yet: config.yaml still contains site-specific Nextcloud/ES data.
+  # Normal services remain stopped until maintenance mode is disabled.
+fi
+
+log "Starting maintenance provider"
+if [[ $WITH_SYSTEMD -eq 1 ]]; then
+  systemctl start rag-provider
+else
+  run_as_rag "$PREFIX/start-all.sh"
 fi
 
 log "Bootstrap complete"
@@ -1245,7 +1280,7 @@ Proxy:       $([[ $WITH_PROXY -eq 1 ]] && echo https://HOST/ \(self-signed boots
 Proxy gate:  $([[ $WITH_PROXY -eq 1 && $PROXY_BASIC_AUTH -eq 1 ]] && echo Basic-Auth + rate-limit || echo rate-limit/no Basic-Auth)
 ACL mode:    $([[ $ACL_OFF -eq 1 ]] && echo ACL-OFF-DIAGNOSTIC || ([[ $MULTI_USER -eq 1 ]] && echo credential_store || echo single_user-live-ACL))
 Provider client: $PROVIDER_CLIENT_ID
-Systemd:      $([[ $WITH_SYSTEMD -eq 1 ]] && echo optional units installed, not started || echo skipped)
+Systemd:      $([[ $WITH_SYSTEMD -eq 1 ]] && echo 'units installed; provider running in maintenance mode' || echo skipped)
 
 Generated credentials (also in $PREFIX/runtime.env):
   Admin user:       ${ADMIN_USER}
@@ -1260,13 +1295,14 @@ Next steps:
      Additional frontends need their own key: python -m rag.provider_clients create CLIENT_ID.
   4. Optional public web search is external/admin-managed; configure web.yaml and WEB_SEARCH_API_KEY when needed.
      Per-user CardDAV seeds use the Login-Flow credential and are managed under RAG Admin -> Users -> Kontakt-DB.
-  5. Run: $PREFIX/install/smoke-test.sh $PREFIX
+  5. The provider is now in maintenance mode; normal API/workers are not started.
   6. External entry point: https://<server-ip>/ (RAG admin: /rag-admin/, health: /rag-api/health).
      HTTP port 80 redirects to HTTPS. The bootstrap certificate is self-signed;
      replace install/nginx/tls/server.crt and server.key with site certificates as desired.
-  7. Start middleware: sudo -u $RAG_USER $PREFIX/start-all.sh
+  7. Run preflight/smoke checks, then leave maintenance mode:
+     sudo $PREFIX/install/maintenance-mode.sh off
   8. Check: $PREFIX/status.sh
-  9. Firewall is NOT modified by this installer. Open inbound TCP 443 for HTTPS
+ 10. Firewall is NOT modified by this installer. Open inbound TCP 443 for HTTPS
      and TCP 80 if you want the HTTP-to-HTTPS redirect reachable externally.
 
 Global runtime secrets generated during first install are in $PREFIX/runtime.env (chmod 600).

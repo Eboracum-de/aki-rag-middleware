@@ -58,8 +58,16 @@ sudo ./install/install.sh --profile super-light -y \
   --elasticsearch-index my_index
 ```
 
-The installer intentionally uses Docker for the middleware runtime. It installs
-no middleware Python packages on the host. On hosts with Compose V2, `docker compose` may be used instead of the legacy `docker-compose` command.
+The installer intentionally uses Docker for the middleware runtime. It installs no middleware Python packages on the host. On hosts with Compose V2, `docker compose` may be used instead of the legacy `docker-compose` command.
+
+A fresh install or installer rerun starts only the minimal provider (plus optional OpenWebUI/nginx) in **maintenance mode**. API, mail worker, Neo4j-dependent RAG startup and Playwright processing remain out of normal service until configuration is complete. The provider still checks the configured trusted-client Bearer key and returns a stable maintenance message. Switch modes with:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+```
+
+Use `... maintenance-mode.sh on` before maintenance operations that should run without normal RAG/API/background traffic.
 
 
 ### Private/internal CA certificates

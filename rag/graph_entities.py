@@ -314,7 +314,14 @@ def detect_known_entities(
         )
         occupied.append((s, e))
 
-        if len(candidates) == 1:
+        same_as_resolved = False
+        if len(candidates) > 1:
+            component_lookup = getattr(graph, "same_as_component_ids", None)
+            if callable(component_lookup):
+                component = set(component_lookup(candidates[0].entity_id))
+                same_as_resolved = bool(component) and all(c.entity_id in component for c in candidates)
+
+        if len(candidates) == 1 or same_as_resolved:
             c = candidates[0]
             entities.append(QueryEntity(
                 mention=mention,
@@ -328,7 +335,7 @@ def detect_known_entities(
                 matched_form=c.form_value,
                 matched_form_type=c.form_type,
                 resolution_weight=c.weight,
-                resolution_method="unique_name_form",
+                resolution_method="same_as_equivalent_form" if same_as_resolved else "unique_name_form",
                 candidates=candidates,
                 search_forms=graph.entity_search_forms(c.entity_id),
             ))

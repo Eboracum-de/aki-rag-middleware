@@ -7,7 +7,7 @@ APP = ROOT / "clients" / "nextcloud" / "akirag"
 
 def test_aki_client_is_packaged_for_nextcloud_23_plus():
     root = ET.parse(APP / "appinfo" / "info.xml").getroot()
-    assert root.findtext("version") == "0.2.4"
+    assert root.findtext("version") == "0.2.6"
     dependency = root.find("./dependencies/nextcloud")
     assert dependency is not None
     assert dependency.attrib.get("min-version") == "23"
@@ -27,6 +27,9 @@ def test_aki_client_keeps_api_key_server_side_and_sends_scoped_user_header():
     proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
     assert "api_key_encrypted" in proxy
     assert "X-RAG-User-ID" in proxy
+    assert "X-RAG-User-Groups" in proxy
+    assert "IGroupManager" in proxy
+    assert "getUserGroups" in proxy
     assert "X-RAG-Web-Allowed" in proxy
 
 
@@ -67,3 +70,28 @@ def test_aki_chat_routes_use_nextcloud23_compatible_noadmin_docblocks():
 
     assert "/** @NoAdminRequired */" not in controller
 
+
+
+def test_aki_025_marks_context_boundary_and_persists_effective_source_scopes():
+    main = (APP / "templates" / "main.php").read_text(encoding="utf-8")
+    js = (APP / "js" / "app.js").read_text(encoding="utf-8")
+    proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
+    controller = (APP / "lib" / "Controller" / "ChatController.php").read_text(encoding="utf-8")
+    store = (APP / "lib" / "Service" / "ChatStore.php").read_text(encoding="utf-8")
+
+    assert "Chats sind kontextsensitiv" in main
+    assert "nutzen Sie bitte einen neuen Chat" in main
+    assert "source_scopes" in proxy
+    assert "preg_match_all" in proxy
+    assert "explicit user source selection wins over UI state" in proxy
+    assert "direct/special commands are not source-scoped" in proxy
+    assert "source_scopes" in controller
+    assert "source_scopes" in store
+    assert "Quellen:" in js
+    assert "akirag-message-scopes" in js
+
+
+def test_aki_markdown_strong_weight_is_browser_independent():
+    css = (APP / "css" / "style.css").read_text(encoding="utf-8")
+    assert ".akirag-content strong" in css
+    assert "font-weight: 700" in css

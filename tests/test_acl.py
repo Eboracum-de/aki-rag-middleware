@@ -133,3 +133,99 @@ def test_acl_accepts_explicit_temporary_credential():
         )
     assert [x["document_id"] for x in decision.results] == ["files:2"]
     assert request_mock.call_args.kwargs["auth"] == ("alice", "temporary")
+
+
+
+def _multistatus_for(*file_ids: int) -> bytes:
+    entries = "".join(
+        f"<d:response><d:propstat><d:prop><oc:fileid>{file_id}</oc:fileid></d:prop></d:propstat></d:response>"
+        for file_id in file_ids
+    )
+    return (
+        '<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" '
+        'xmlns:oc="http://owncloud.org/ns">' + entries + "</d:multistatus>"
+    ).encode("utf-8")
+
+
+def test_acl_promotes_visible_duplicate_when_ranked_representative_is_denied():
+    os.environ["NEXTCLOUD_USERNAME"] = "alice"
+    os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+    cfg = {
+        "nextcloud": {"base_url": "https://nc.example/nextcloud"},
+        "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+    }
+    response = httpx.Response(
+        207,
+        content=_multistatus_for(2),
+        request=httpx.Request("SEARCH", "https://nc.example/nextcloud/remote.php/dav/"),
+    )
+    result = {
+        "document_id": "files:1",
+        "title": "private.pdf",
+        "context_text": "SECRET FROM DENIED REPRESENTATIVE",
+        "context_enriched": True,
+        "es_snippet": "SECRET ES",
+        "duplicate_variants": [{
+            "document_id": "files:2",
+            "title": "visible.pdf",
+            "path": "/visible.pdf",
+            "directory": "/",
+            "filename": "visible.pdf",
+            "nextcloud_openfile_id": "2",
+            "source_url": "https://nc.example/open-visible",
+            "es_snippet": "visible snippet",
+            "snippet": "visible snippet",
+            "reason": "exact_extracted_content_hash",
+            "similarity": 1.0,
+        }],
+        "duplicate_count": 2,
+    }
+    with patch("rag.acl.httpx.request", return_value=response) as request_mock:
+        decision = NextcloudLiveAcl(cfg).authorize([result])
+
+    assert decision.checked == 1
+    assert decision.authorized == 1
+    assert len(decision.results) == 1
+    promoted = decision.results[0]
+    assert promoted["document_id"] == "files:2"
+    assert promoted["title"] == "visible.pdf"
+    assert promoted["context_text"] == "visible snippet"
+    assert "SECRET" not in promoted["context_text"]
+    assert "SECRET" not in promoted["es_snippet"]
+    assert promoted["context_enriched"] is False
+    assert promoted["acl_promoted_duplicate"] is True
+    assert promoted["duplicate_variants"] == []
+    request_xml = request_mock.call_args.kwargs["content"].decode("utf-8")
+    assert "<d:literal>1</d:literal>" in request_xml
+    assert "<d:literal>2</d:literal>" in request_xml
+
+
+def test_acl_hides_unauthorized_duplicate_metadata_when_representative_is_visible():
+    os.environ["NEXTCLOUD_USERNAME"] = "alice"
+    os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+    cfg = {
+        "nextcloud": {"base_url": "https://nc.example/nextcloud"},
+        "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+    }
+    response = httpx.Response(
+        207,
+        content=_multistatus_for(1),
+        request=httpx.Request("SEARCH", "https://nc.example/nextcloud/remote.php/dav/"),
+    )
+    result = {
+        "document_id": "files:1",
+        "title": "visible.pdf",
+        "duplicate_variants": [{
+            "document_id": "files:2",
+            "title": "hidden.pdf",
+            "es_snippet": "HIDDEN VARIANT",
+        }],
+        "duplicate_count": 2,
+    }
+    with patch("rag.acl.httpx.request", return_value=response):
+        decision = NextcloudLiveAcl(cfg).authorize([result])
+
+    assert len(decision.results) == 1
+    assert decision.results[0]["document_id"] == "files:1"
+    assert decision.results[0]["duplicate_variants"] == []
+    assert decision.results[0]["duplicate_count"] == 1

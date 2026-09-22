@@ -31,6 +31,13 @@ proc_status graph-worker
 proc_status sync-worker
 proc_status mail-worker
 
+maintenance_value="${RAG_MAINTENANCE_MODE:-false}"
+maintenance_value="$(printf '%s' "$maintenance_value" | tr '[:upper:]' '[:lower:]')"
+case "$maintenance_value" in
+  1|true|yes|on) printf '%-14s ENABLED\n' maintenance ;;
+  *) printf '%-14s disabled\n' maintenance ;;
+esac
+
 printf '\nEndpoints:\n'
 api_probe_host="${RAG_API_HOST:-127.0.0.1}"
 [[ "$api_probe_host" == "0.0.0.0" || "$api_probe_host" == "::" ]] && api_probe_host="127.0.0.1"

@@ -67,6 +67,13 @@ class GraphCurator:
     def research_finding_observed_by_user(self, canonical_user_id: str, finding_id: str) -> bool:
         return self.graph.research_finding_observed_by_user(canonical_user_id, finding_id)
 
+    def purge_denied_uncurated_research_findings_for_user(
+        self, canonical_user_id: str, finding_ids: list[str]
+    ) -> dict[str, int]:
+        return self.graph.purge_denied_uncurated_research_findings_for_user(
+            canonical_user_id, finding_ids
+        )
+
     def get_research_run(self, run_id: str) -> dict[str, Any] | None:
         return self.graph.research_run_detail(run_id)
 
@@ -204,8 +211,8 @@ class GraphCurator:
             curator_actor=curator_actor,
         )
 
-    def list_candidates(self) -> list[dict[str, Any]]:
-        return self.graph.list_merge_candidates()
+    def list_candidates(self, *, source_user_id: str = "") -> list[dict[str, Any]]:
+        return self.graph.list_merge_candidates(source_user_id=source_user_id)
 
     def list_merges(self, query: str = "", *, limit: int = 100) -> list[dict[str, Any]]:
         return self.graph.list_merges(query, limit=limit)
@@ -256,6 +263,11 @@ class GraphCurator:
         if apply:
             return self.graph.merge_entities(keep_entity_id, merge_entity_id, alias_policy=alias_policy)
         return self.graph.merge_entities_preview(keep_entity_id, merge_entity_id, alias_policy=alias_policy)
+
+    def confirm_same(self, left_entity_id: str, right_entity_id: str, *, reason: str = "manual_identity_confirmation", apply: bool = False) -> dict[str, Any]:
+        if apply:
+            return self.graph.confirm_same_as(left_entity_id, right_entity_id, reason=reason)
+        return self.graph.confirm_same_as_preview(left_entity_id, right_entity_id, reason=reason)
 
     def reject_merge(self, left_entity_id: str, right_entity_id: str, *, reason: str = "manual_rejection", apply: bool = False) -> dict[str, Any]:
         left = self.graph._entity_curation_summary(left_entity_id)

@@ -1,8 +1,8 @@
 # AKI RAG Middleware
 ## Technical documentation and command reference
 
-**Version:** `0.8.5-rc4.3`  
-**Updated:** 20 September 2026
+**Version:** `0.8.5-rc5`  
+**Updated:** 22 September 2026
 
 This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
 
@@ -44,7 +44,7 @@ Without a user UI, `/` redirects to `/rag-admin/`.
 
 ### Internal API trust boundary
 
-Port `8765` is an internal FastAPI service and is loopback-bound by the supported profiles. RC4.3 enforces explicit route zones through central FastAPI dependencies:
+Port `8765` is an internal FastAPI service and is loopback-bound by the supported profiles. The current 0.8.5 line enforces explicit route zones through central FastAPI dependencies:
 
 - `PUBLIC`: no internal machine credential; currently only `/live`;
 - `INTERNAL`: requires `X-AKI-Internal-Key` / `RAG_INTERNAL_API_KEY`;
@@ -164,6 +164,42 @@ sudo ./install/install.sh --profile super-light --plan \
 
 Before first start, review at least `config.yaml`, `provider.env` and `runtime.env`.
 
+## 2.5 Maintenance mode
+
+RC5 introduces an explicit operator-controlled maintenance state. Fresh installs and installer reruns set:
+
+```text
+RAG_MAINTENANCE_MODE=true
+```
+
+in `runtime.env` and start only the maintenance-facing provider path needed to keep the OpenAI-compatible endpoint predictable for trusted frontends while normal retrieval/API/workers are unavailable.
+
+Use the wrapper rather than editing the environment value manually:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+```
+
+`status` reports both the maintenance state and the recorded deployment mode.
+
+While maintenance is **on**:
+
+- the normal RAG API/background workers are stopped or not started;
+- the provider runs the minimal `rag.maintenance_provider` implementation;
+- `/live` and `/health` report maintenance state;
+- `/v1/models` and `/v1/chat/completions` still require a registered provider-client Bearer key from `runtime/users.sqlite`;
+- authenticated chat requests receive the configured maintenance message instead of loading retrieval, LLM, Elasticsearch, Qdrant or Neo4j paths.
+
+This is intentionally not an unauthenticated bypass. If the provider-client registry is unavailable, the maintenance provider fails closed rather than accepting arbitrary callers.
+
+For **Super-Light/dockerized**, `maintenance-mode.sh off` starts Neo4j, Playwright, API and mail worker, waits for Neo4j/schema initialization, and only then recreates the normal provider. If schema/startup readiness fails, the script restores `RAG_MAINTENANCE_MODE=true` and returns to the maintenance provider.
+
+For **Standard/native**, the wrapper performs the corresponding systemd/native process switch. Systemd-managed switching requires root.
+
+Maintenance mode is required before RC5 `backup-restore.sh create` and `restore` operations and is the expected state for comparable invasive maintenance. The restore workflow deliberately leaves AKI in maintenance mode until health/smoke/live-ACL checks have completed; see `BETA-OPERATIONS.md` and `DATA-LIFECYCLE.md`.
+
 ---
 
 # 3. Configuration files
@@ -253,6 +289,15 @@ A compact Neo4j seed/alias context is supplied before the rewrite. `elastic_quer
 
 Backend results are fused, deduplicated and optionally reranked. The current normal path then applies live Nextcloud ACL and the Candidate Verifier. ACL denials do not trigger adaptive replacement searches, so the visible candidate window may become smaller. A fixed pre-rerank ACL pool is a documented future optimization, not the current implementation.
 
+After Candidate Verification, AKI still contains an optional **Evidence Control** pass. It may return `answer`, `retry`, `clarify`, `insufficient` or `conflict`, and for `answer` may narrow the authorized/verified set via `answer_sources` before the final answer model. This layer is experimental and **disabled by default** in the 0.8.5 reference configuration:
+
+```yaml
+evidence_control:
+  mode: "off"  # off | review
+```
+
+`config.yaml` is canonical for this mode. `EVIDENCE_DECISION_MODE=off|review` in `provider.env` is retained only as a compatibility fallback when an older preserved `config.yaml` has no `evidence_control` section. Turning Evidence Control off does **not** disable the Candidate Verifier.
+
 The SearchSpec path logs the generated `elastic_query`, the actual Elasticsearch JSON request body and a compact hit list without document contents.
 
 Current reference values:
@@ -281,6 +326,9 @@ retrieval_planner:
   verification_max_chars_per_document: 2500
   verification_max_tokens: 900
   verification_batch_size: 6
+
+evidence_control:
+  mode: "off"
 ```
 
 With additional rounds enabled, the rewriter may produce a new SearchSpec from the already visible result picture. Every round uses the same pipeline. The historical `strict_lexical`/`lexical`/`semantic` multi-probe language is no longer part of the normal provider path; compatibility/diagnostic code remains available separately.
@@ -405,6 +453,15 @@ Accounts, servers, mailbox roots, target paths and credentials are user-specific
 ---
 
 ## 3.2 `provider.env` / `runtime.env`
+
+`runtime.env` contains deployment/global service secrets and operational flags. In RC5 the maintenance-state flag is:
+
+```bash
+RAG_MAINTENANCE_MODE=true
+```
+
+Treat it as wrapper-managed state; use `install/maintenance-mode.sh` to switch modes so process/container lifecycle and readiness handling stay consistent with the flag.
+
 
 Example OpenAI reference path:
 
@@ -1634,6 +1691,8 @@ The provenance/curation model separates the concrete research run from the share
 The legacy-compatible `finding_id` remains deterministic from provenance, document ID and the complete canonical QueryFrame. A separate `curation_hash` covers the structured Entities, relations, constraints and concepts while excluding free-form `intent` wording. Persistence first looks for an existing Finding on the same supporting document with that curation fingerprint, allowing equivalent provider/chat runs to reuse one global curation decision without changing existing Finding IDs during upgrade.
 
 Admin curation is user-context scoped. The RAG Admin selects a canonical Nextcloud user; the backend requires that the selected user actually produced the Finding and re-checks the supporting document through the user's current live Nextcloud ACL before returning Finding evidence. Unauthorized Findings are omitted from lists and counts.
+
+RC5 adds lazy cleanup at these Finding ACL-filter points. When a successful ACL check definitively denies a numeric Nextcloud `files:<id>`, the graph layer may remove the selected/current user's `PRODUCED` edges for Findings that are still completely uncurated. The shared Finding is deleted only after its last ResearchRun reference disappears. Finding curator status/suppression, `CURATED_ENTITY` edges or any Finding-derived RelationObservation prevent deletion. ACL/backend/TLS/network/credential errors and non-numeric/non-Nextcloud identifiers never trigger cleanup. This mechanism is not called by Qdrant sync and does not replace a future explicit cross-store `purge-document` workflow.
 
 Optional end-user curation is exposed at `/curation/`. It uses Nextcloud Login Flow v2 once per curation session and creates no separate RAG password. The returned app password is stored only in the encrypted `curation_sessions` table, not in the normal provider credential namespace and not in `identity_bindings`.
 

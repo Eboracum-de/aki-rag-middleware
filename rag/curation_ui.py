@@ -67,6 +67,7 @@ def _filter_findings_with_acl(
     acl: NextcloudLiveAcl,
     session: CurationSession,
     findings: list[dict[str, Any]],
+    purge_denied: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Filter self-service Findings through the current Nextcloud ACL, fail closed."""
     if not acl.enabled:
@@ -95,6 +96,25 @@ def _filter_findings_with_acl(
             detail="Live ACL is disabled; self-service Finding curation is unavailable",
         )
     allowed = {str(item.get("_finding_id") or "") for item in decision.results}
+    denied_purgeable = list(dict.fromkeys(
+        str(item.get("_finding_id") or "")
+        for item in candidates
+        if str(item.get("_finding_id") or "")
+        and str(item.get("_finding_id") or "") not in allowed
+        and str(item.get("document_id") or "").startswith("files:")
+        and str(item.get("document_id") or "")[6:].isdigit()
+    ))
+    if denied_purgeable and purge_denied is not None:
+        try:
+            purge_denied(session.canonical_user_id, denied_purgeable)
+        except Exception as exc:
+            log.warning(
+                "ACL self-cleanup failed for user=%s findings=%s: %s: %s",
+                session.canonical_user_id,
+                len(denied_purgeable),
+                type(exc).__name__,
+                exc,
+            )
     return [
         item
         for item in findings
@@ -268,6 +288,15 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         if not supplied or not secrets.compare_digest(session.csrf_token, str(supplied)):
             raise HTTPException(status_code=403, detail="Invalid curation CSRF token")
 
+    def purge_denied_uncurated_findings(
+        canonical_user_id: str,
+        finding_ids: list[str],
+    ) -> dict[str, int]:
+        with GraphCurator.from_config(cfg) as curator:
+            return curator.purge_denied_uncurated_research_findings_for_user(
+                canonical_user_id, finding_ids
+            )
+
     async def filter_findings(
         session: CurationSession,
         findings: list[dict[str, Any]],
@@ -277,6 +306,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
             acl,
             session,
             findings,
+            purge_denied_uncurated_findings,
         )
 
     async def require_finding(session: CurationSession, finding_id: str) -> dict[str, Any]:

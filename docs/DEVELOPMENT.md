@@ -2,7 +2,7 @@
 
 ## Baseline
 
-`0.8.5-rc4.3` is the current release-candidate baseline and consolidates the rc4.x authorization, installer, TLS, internal-service and recovery hardening. Earlier draft identifiers remain development snapshots rather than maintained upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`, and both have completed rc4.3 blank-VM acceptance.
+`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline. RC5 builds on the rc4.x authorization, installer, TLS and internal-service hardening with conservative prefiltering, maintenance/recovery tooling and the current Graph-Lite/archive work. Earlier draft identifiers remain development snapshots rather than maintained upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`; both completed rc4.3 blank-VM acceptance, with RC5 changes covered by the current regression/field acceptance work.
 
 ## Repository layout
 

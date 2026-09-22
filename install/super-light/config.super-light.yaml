@@ -149,6 +149,9 @@ acl:
   webdav_url: ''
   timeout: 15
   batch_size: 100
+  prefilter:
+    enabled: false
+    # rc5 v1: owner/direct-user/group only; Circles are not evaluated yet.
 entity_resolution:
   enabled: true
   fail_open: true

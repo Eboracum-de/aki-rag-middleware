@@ -1,6 +1,6 @@
 # Graph-Lite Findings curation
 
-**Reference:** `0.8.5-rc4.3`
+**Reference:** `0.8.5-rc5` (development)
 
 Graph-Lite turns selected, verified research findings into **curated, document-grounded graph observations**. It is deliberately conservative: a ResearchFinding is provenance-bearing evidence that a query frame matched a document; it is not automatically a global fact.
 
@@ -81,6 +81,22 @@ The Admin landing page is a list of ResearchRuns with open, currently ACL-visibl
 A global Finding decision is reused automatically wherever that Finding appears later. Entity grouping and bulk work may still be useful inside a ResearchRun, but the primary human work unit is the originating research rather than a corpus-wide entity inbox.
 
 A whole ResearchRun, or selected Findings only within that run, may be dismissed from the queue. This is queue state, not a graph truth decision.
+
+## Lazy ACL self-cleanup
+
+RC5 adds a deliberately narrow self-cleanup path to the same Finding ACL checks used by RAG Admin and `/curation/`.
+
+When a live Nextcloud ACL request completes successfully and a numeric supporting `files:<id>` is not returned for the selected/current canonical user, AKI may remove that user's `ResearchRun-[:PRODUCED]->ResearchFinding` provenance **only while the Finding is still uncurated**. If no ResearchRun for any user references that uncurated Finding afterwards, the shared Finding node is garbage-collected.
+
+The lazy cleanup never deletes curated Finding knowledge. A Finding is preserved when any of the following applies:
+
+- a Finding-level curator status or suppression exists;
+- at least one `CURATED_ENTITY` relationship exists;
+- any `RelationObservation-[:DERIVED_FROM_FINDING]->ResearchFinding` provenance exists.
+
+The cleanup is also deliberately non-destructive on uncertainty. Timeout, TLS/network failure, Nextcloud backend error, rejected/invalid credentials, disabled live ACL or a source that is not a numeric Nextcloud `files:<id>` cause fail-closed visibility but **no deletion**.
+
+This is lazy cleanup, not a periodic reconciler and not a general document purge. It currently runs when Findings are ACL-filtered for RAG Admin or self-service curation. Qdrant synchronization does not trigger Neo4j deletion.
 
 ## Durable manual state
 

@@ -24,7 +24,7 @@
 <nav class="sectionnav" aria-label="Graph-Navigation">
   <div>
     <a class="{{ 'active' if path.startswith('/rag-admin/entities') or path.startswith('/rag-admin/entity/') else '' }}" href="{{ request.app.url_path_for('admin_entities') }}">Entitäten</a>
-    <a class="{{ 'active' if path.startswith('/rag-admin/candidates') else '' }}" href="{{ request.app.url_path_for('admin_candidates') }}">Merge-Kandidaten</a>
+    <a class="{{ 'active' if path.startswith('/rag-admin/candidates') else '' }}" href="{{ request.app.url_path_for('admin_candidates') }}">Identitäts-Kandidaten</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/observations') or path.startswith('/rag-admin/observation/') else '' }}" href="{{ request.app.url_path_for('admin_observations') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Beobachtungen</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/relations') else '' }}" href="{{ request.app.url_path_for('admin_relations') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Relationen</a>
     <a class="{{ 'active' if path.startswith('/rag-admin/findings') or path.startswith('/rag-admin/finding/') else '' }}" href="{{ request.app.url_path_for('admin_findings') }}{% if scope_user_id %}?canonical_user_id={{ scope_user_id }}{% endif %}">Findings</a>
@@ -34,6 +34,9 @@
 </nav>
 {% endif %}
 <main>
+  {% if acl_disabled_warning %}
+  <div class="alert warning"><strong>Live Nextcloud ACL ist deaktiviert.</strong> Dokumentzugriffe werden derzeit nicht gegen die aktuellen Nextcloud-Berechtigungen geprüft.</div>
+  {% endif %}
   {% if unauthenticated_warning %}
   <div class="alert warning">Admin UI läuft ohne Authentifizierung. Nur für bewusst abgeschottete interne Netze verwenden.</div>
   {% endif %}

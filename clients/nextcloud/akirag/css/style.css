@@ -57,8 +57,12 @@
     font-weight: 600;
 }
 
-.akirag-message-time {
+.akirag-message-time,
+.akirag-message-scopes {
     font-size: 0.82em;
+}
+
+.akirag-message-time {
     font-variant-numeric: tabular-nums;
 }
 
@@ -73,6 +77,10 @@
 .akirag-user .akirag-content {
     border: 1px solid var(--color-primary, #0082c9);
     background: var(--color-main-background, #fff);
+}
+
+.akirag-content strong {
+    font-weight: 700;
 }
 
 .akirag-composer {
@@ -327,4 +335,9 @@
 .akirag-table th {
     font-weight: 600;
     background: var(--color-background-hover, rgba(127, 127, 127, 0.08));
+}
+
+.akirag-context-hint {
+    margin: 0 0 6px 0 !important;
+    font-weight: 600;
 }

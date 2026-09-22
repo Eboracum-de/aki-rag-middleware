@@ -12,6 +12,7 @@ from rag.version import VERSION
 import asyncio
 import base64
 import json
+import logging
 import os
 import secrets
 import threading
@@ -40,6 +41,7 @@ HERE = Path(__file__).resolve().parent
 TEMPLATE_DIR = HERE / "templates" / "admin"
 CSS_FILE = HERE / "static" / "admin" / "admin.css"
 JS_FILE = HERE / "static" / "admin" / "admin.js"
+log = logging.getLogger("rag.admin")
 
 
 def _env_or_cfg(cfg: dict[str, Any], direct_path: str, env_path: str, default: str = "") -> str:
@@ -303,6 +305,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             "policies": POLICIES,
             "priorities": PRIORITIES,
             "unauthenticated_warning": bool(allow_unauthenticated),
+            "acl_disabled_warning": not bool(curation_acl.enabled),
             **extra,
         }
 
@@ -461,7 +464,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             "LLM_API_KEY", "EMBEDDING_API_KEY", "GRAPH_ENTITY_API_KEY",
             "GRAPH_RELATION_API_KEY", "WEB_SEARCH_API_KEY", "WEB_LLM_API_KEY",
             "ELASTICSEARCH_PASSWORD", "NEO4J_PASSWORD", "RAG_ADMIN_PASSWORD",
-            "PROVIDER_API_KEY",
+            "PROVIDER_API_KEY", "RAG_INTERNAL_API_KEY", "RAG_PROVIDER_INTERNAL_KEY",
         )
         env_status = [{"name": name, "configured": bool(os.getenv(name, ""))} for name in env_names]
         return render(request, "security.html", secret_status=status, env_status=env_status)
@@ -807,6 +810,28 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         if not decision.enabled:
             return [], "Live ACL ist deaktiviert; nutzerbezogene Findings werden nicht angezeigt."
         allowed = {str(item.get("_finding_id") or "") for item in decision.results}
+        denied_purgeable = list(dict.fromkeys(
+            str(item.get("_finding_id") or "")
+            for item in candidates
+            if str(item.get("_finding_id") or "")
+            and str(item.get("_finding_id") or "") not in allowed
+            and str(item.get("document_id") or "").startswith("files:")
+            and str(item.get("document_id") or "")[6:].isdigit()
+        ))
+        if denied_purgeable:
+            try:
+                with GraphCurator.from_config(cfg) as curator:
+                    curator.purge_denied_uncurated_research_findings_for_user(
+                        canonical_user_id, denied_purgeable
+                    )
+            except Exception as exc:
+                log.warning(
+                    "ACL self-cleanup failed for selected user=%s findings=%s: %s: %s",
+                    canonical_user_id,
+                    len(denied_purgeable),
+                    type(exc).__name__,
+                    exc,
+                )
         return [item for item in findings if str(item.get("finding_id") or "") in allowed], ""
 
     def _acl_filter_document_rows_for_canonical_user(
@@ -1536,11 +1561,58 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             return error_page(request, exc)
 
     @router.get("/candidates", response_class=HTMLResponse, name="admin_candidates", dependencies=auth)
-    async def admin_candidates(request: Request):
+    async def admin_candidates(request: Request, canonical_user_id: str = ""):
+        try:
+            users = user_store.list_canonical_users()
+            selected_user = next(
+                (user for user in users if user.canonical_user_id == canonical_user_id),
+                None,
+            )
+            if canonical_user_id and selected_user is None:
+                raise HTTPException(status_code=404, detail="Unbekannter kanonischer Benutzer")
+            source_user_id = str(selected_user.nextcloud_login or "") if selected_user else ""
+            with GraphCurator.from_config(cfg) as curator:
+                rows = curator.list_candidates(source_user_id=source_user_id)
+            return render(
+                request,
+                "candidates.html",
+                candidates=rows,
+                candidate_users=users,
+                canonical_user_id=canonical_user_id,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            return error_page(request, exc)
+
+    @router.post("/candidate/same", name="admin_candidate_same", dependencies=auth)
+    async def admin_candidate_same(request: Request):
+        data = await form_data(request)
+        left_id = data.get("left_id", "").strip()
+        right_id = data.get("right_id", "").strip()
+        reason = data.get("reason", "manual_identity_confirmation").strip() or "manual_identity_confirmation"
+        canonical_user_id = data.get("canonical_user_id", "").strip()
+        confirm = data.get("confirm", "") == "yes"
+        candidate_url = str(request.app.url_path_for("admin_candidates"))
+        if canonical_user_id:
+            candidate_url += "?" + urlencode({"canonical_user_id": canonical_user_id})
         try:
             with GraphCurator.from_config(cfg) as curator:
-                rows = curator.list_candidates()
-            return render(request, "candidates.html", candidates=rows)
+                result = curator.confirm_same(left_id, right_id, reason=reason, apply=confirm)
+            if not confirm:
+                return preview_response(
+                    request,
+                    title="Entities als identisch verknüpfen",
+                    preview=result,
+                    action_url=str(request.app.url_path_for("admin_candidate_same")),
+                    fields={
+                        "left_id": left_id, "right_id": right_id, "reason": reason,
+                        "canonical_user_id": canonical_user_id,
+                    },
+                    confirm_label="SAME_AS speichern",
+                    cancel_url=candidate_url,
+                )
+            return redirect(candidate_url, "SAME_AS gespeichert; beide Entities bleiben aktiv")
         except Exception as exc:
             return error_page(request, exc)
 
@@ -1550,7 +1622,11 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         left_id = data.get("left_id", "").strip()
         right_id = data.get("right_id", "").strip()
         reason = data.get("reason", "manual_rejection").strip() or "manual_rejection"
+        canonical_user_id = data.get("canonical_user_id", "").strip()
         confirm = data.get("confirm", "") == "yes"
+        candidate_url = str(request.app.url_path_for("admin_candidates"))
+        if canonical_user_id:
+            candidate_url += "?" + urlencode({"canonical_user_id": canonical_user_id})
         try:
             with GraphCurator.from_config(cfg) as curator:
                 result = curator.reject_merge(left_id, right_id, reason=reason, apply=confirm)
@@ -1560,11 +1636,14 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
                     title="Als verschiedene Entities markieren",
                     preview=result,
                     action_url=str(request.app.url_path_for("admin_candidate_reject")),
-                    fields={"left_id": left_id, "right_id": right_id, "reason": reason},
+                    fields={
+                        "left_id": left_id, "right_id": right_id, "reason": reason,
+                        "canonical_user_id": canonical_user_id,
+                    },
                     confirm_label="NOT_SAME_AS speichern",
-                    cancel_url=str(request.app.url_path_for("admin_candidates")),
+                    cancel_url=candidate_url,
                 )
-            return redirect(str(request.app.url_path_for("admin_candidates")), "NOT_SAME_AS gespeichert")
+            return redirect(candidate_url, "NOT_SAME_AS gespeichert")
         except Exception as exc:
             return error_page(request, exc)
 

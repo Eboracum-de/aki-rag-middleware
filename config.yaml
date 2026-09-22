@@ -100,6 +100,12 @@ retrieval_planner:
   verification_max_tokens: 900
   verification_batch_size: 6
 
+# Optional post-ACL/post-verifier evidence controller. Experimental in 0.8.5
+# and deliberately disabled by default. "review" may select answer sources or
+# return retry/clarify/insufficient/conflict before the final answer model.
+evidence_control:
+  mode: "off"  # off | review
+
 retrieval_signal:
   enabled: true
   reject_unspecific: true
@@ -220,6 +226,13 @@ acl:
   timeout: 15
   # WebDAV SEARCH ids per request; batching prevents pathological OR trees.
   batch_size: 100
+  # Optional retrieval prefilter. This is only a recall/performance optimization;
+  # live WebDAV ACL remains the final authorization boundary.
+  prefilter:
+    enabled: false
+    # rc5 v1 considers Nextcloud owner/direct-user/group metadata only.
+    # Circle membership is intentionally not evaluated yet. Keep this disabled
+    # on deployments where Circle-only shares must be discoverable.
 entity_resolution:
   enabled: true
   fail_open: true

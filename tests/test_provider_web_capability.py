@@ -4,9 +4,9 @@ from rag.openai_provider import (
     ChatCompletionRequest,
     SearchResult,
     _auxiliary_task_kind,
+    _merge_followup_evidence,
     _previous_source_map,
-    _probable_followup,
-    _short_acronym_continues_prior_user,
+    _previous_supporting_document_ids,
     _request_allows_web,
     _source_suffix,
 )
@@ -53,36 +53,157 @@ def test_web_query_generation_helper_is_auxiliary():
     assert _auxiliary_task_kind(_request(), prompt) == "ui:web_query_generation"
 
 
-def test_standalone_name_is_not_followup():
-    assert _probable_followup("Frank Muster") is False
+def test_llm_reference_resolution_handles_elliptic_followup(monkeypatch):
+    import asyncio
+    import json
+    import rag.openai_provider as provider
 
-
-def test_pronoun_question_is_followup():
-    assert _probable_followup("Was ist mit ihm?") is True
-
-
-def test_web_acronym_can_continue_immediately_prior_user_entity():
     messages = [
-        {"role": "user", "content": "Suche im Internet nach FLG Automation in Karben"},
-        {"role": "assistant", "content": "Ergebnis zur FLG Automation AG."},
-        {"role": "user", "content": "/web FLG"},
+        {"role": "user", "content": "Welche Beziehung besteht zwischen RAE und V280?"},
+        {
+            "role": "assistant",
+            "content": "RAE ist Gesellschafterin der V280. [1]\n\n"
+                       "**Quellen:**\n- [1] Gesellschafterbeschluss",
+        },
+        {"role": "user", "content": "Wer sind die anderen Gesellschafter?"},
     ]
-    assert _short_acronym_continues_prior_user(messages, "FLG") is True
+
+    async def fake_complete(messages, **kwargs):
+        assert kwargs["response_format"] == provider.FOLLOWUP_REWRITE_RESPONSE_SCHEMA
+        prompt = messages[-1]["content"]
+        assert "Wer sind die anderen Gesellschafter?" in prompt
+        assert "RAE ist Gesellschafterin der V280" in prompt
+        return json.dumps({
+            "use_history": True,
+            "standalone_query": "Wer sind die anderen Gesellschafter der V280?",
+        })
+
+    monkeypatch.setattr(provider, "_ollama_complete", fake_complete)
+    query, used = asyncio.run(
+        provider._rewrite_query_with_context(
+            messages,
+            "Wer sind die anderen Gesellschafter?",
+        )
+    )
+    assert used is True
+    assert query == "Wer sind die anderen Gesellschafter der V280?"
 
 
-def test_web_acronym_does_not_inherit_unrelated_or_exact_prior_query():
-    unrelated = [
-        {"role": "user", "content": "Suche aktuelle Informationen zu Acme Automation"},
-        {"role": "assistant", "content": "Ergebnis."},
-        {"role": "user", "content": "/web FLG"},
+def test_llm_reference_resolution_keeps_new_topic_exact(monkeypatch):
+    import asyncio
+    import json
+    import rag.openai_provider as provider
+
+    question = "Frank Muster"
+    messages = [
+        {"role": "user", "content": "Welche Beziehung besteht zwischen RAE und V280?"},
+        {"role": "assistant", "content": "Antwort zur V280."},
+        {"role": "user", "content": question},
     ]
-    exact = [
-        {"role": "user", "content": "FLG"},
-        {"role": "assistant", "content": "Mehrdeutig."},
-        {"role": "user", "content": "/web FLG"},
+
+    async def fake_complete(*args, **kwargs):
+        return json.dumps({
+            "use_history": False,
+            "standalone_query": "Frank Muster V280",
+        })
+
+    monkeypatch.setattr(provider, "_ollama_complete", fake_complete)
+    query, used = asyncio.run(
+        provider._rewrite_query_with_context(messages, question)
+    )
+    assert used is False
+    assert query == question
+
+
+def test_followup_prompt_is_language_neutral():
+    import rag.openai_provider as provider
+
+    prompt = provider.FOLLOWUP_REWRITE_SYSTEM_PROMPT
+    assert "any language" in prompt
+    assert "Preserve the user's language" in prompt
+    assert "the others" in prompt
+
+
+def test_previous_supporting_documents_prefer_cited_sources():
+    messages = [
+        {"role": "user", "content": "Frage"},
+        {
+            "role": "assistant",
+            "content": (
+                "Antwort [2] und danach [1].\n\n"
+                "**Quellen:**\n"
+                "- [1] A\n- [2] B\n- [3] C\n"
+                "<!--rag-source:1:files:101-->"
+                "<!--rag-source:2:files:202-->"
+                "<!--rag-source:3:files:303-->"
+            ),
+        },
+        {"role": "user", "content": "Folgefrage"},
     ]
-    assert _short_acronym_continues_prior_user(unrelated, "FLG") is False
-    assert _short_acronym_continues_prior_user(exact, "FLG") is False
+    assert _previous_supporting_document_ids(messages, limit=3) == [
+        "files:202", "files:101", "files:303"
+    ]
+
+
+def test_followup_evidence_merge_prioritizes_prior_and_deduplicates():
+    prior = [
+        SearchResult(index=1, title="Beschluss.pdf", text="A", raw={
+            "document_id": "files:101", "_followup_evidence": True
+        })
+    ]
+    ranked = [
+        SearchResult(index=1, title="Beschluss.pdf", text="A", raw={
+            "document_id": "files:101"
+        }),
+        SearchResult(index=2, title="Andere.pdf", text="B", raw={
+            "document_id": "files:202"
+        }),
+    ]
+    merged = _merge_followup_evidence(prior, ranked)
+    assert [item.raw["document_id"] for item in merged] == ["files:101", "files:202"]
+    assert [item.index for item in merged] == [1, 2]
+    assert merged[0].raw["_followup_evidence"] is True
+
+
+def test_followup_evidence_respects_current_source_scope(monkeypatch):
+    import asyncio
+    import rag.openai_provider as provider
+
+    messages = [
+        {"role": "assistant", "content": (
+            "Antwort [1] [2]\n\n**Quellen:**\n"
+            "<!--rag-source:1:files:101-->"
+            "<!--rag-source:2:files:202-->"
+        )},
+        {"role": "user", "content": "Who are the other shareholders?"},
+    ]
+
+    async def fake_resolve(question, references, user_id, user_groups, request_id=None):
+        assert references == ["files:101", "files:202"]
+        return {}, [
+            SearchResult(index=1, title="A.pdf", text="A", raw={
+                "document_id": "files:101",
+                "path": "Dokumente/A.pdf",
+                "source_origin": "internal",
+            }),
+            SearchResult(index=2, title="Chat.html", text="B", raw={
+                "document_id": "files:202",
+                "path": "AKI-Chats/Chat.html",
+                "source_origin": "chat_archive",
+            }),
+        ]
+
+    monkeypatch.setattr(provider, "_rag_resolve_documents", fake_resolve)
+    resolved = asyncio.run(provider._resolve_followup_evidence(
+        messages,
+        query="Who are the other shareholders of V280?",
+        user_id="u1",
+        user_groups="g1",
+        source_scopes={"documents"},
+        request_id="r1",
+    ))
+    assert [item.raw["document_id"] for item in resolved] == ["files:101"]
+    assert resolved[0].raw["_followup_evidence"] is True
 
 
 def test_normal_source_suffix_contains_snippet():

@@ -86,6 +86,26 @@ done
 
 log() { printf '\n==> %s\n' "$*"; }
 
+probe_service_url() {
+  local label="$1" url="$2"
+  [[ -n "$url" ]] || return 0
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[INFO] $label reachability check skipped: curl is not available yet."
+    return 0
+  fi
+  if curl -sS --max-time 5 -o /dev/null "$url"; then
+    echo "[CHECK] $label endpoint reachable."
+  else
+    echo "[WARN] $label endpoint is not reachable with current host curl/TLS trust." >&2
+    echo "       Installation will continue; verify the configured URL/service before using AKI." >&2
+  fi
+}
+
+probe_configured_services() {
+  probe_service_url "Nextcloud" "$NEXTCLOUD_URL"
+  probe_service_url "Elasticsearch" "$ELASTICSEARCH_URL"
+}
+
 read_state_bool() {
   local key="$1" value="$2"
   case "$value" in
@@ -336,6 +356,8 @@ command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
 
+probe_configured_services
+
 log "Installing source tree"
 mkdir -p "$PREFIX"
 # This profile is intended for a dedicated node. Preserve site-owned runtime/config
@@ -351,6 +373,7 @@ if [[ "$(readlink -f "$SOURCE_DIR")" != "$(readlink -f "$PREFIX")" ]]; then
   mkdir -p "$PREFIX/install"
   cp -a "$SOURCE_DIR/install/." "$PREFIX/install/"
 fi
+chmod 0755 "$PREFIX/install/maintenance-mode.sh"
 mkdir -p "$PREFIX/runtime" "$PREFIX/runtime/ca"
 touch "$PREFIX/runtime/ca/.keep"
 # Keep private trust anchors as site-owned runtime state.  The Docker build only
@@ -416,7 +439,7 @@ set_runtime_env_value() {
 }
 
 repair_legacy_runtime_env_newline_bug() {
-  # One buggy rc4.3 rerun wrote literal "\\n" separators while appending
+  # One buggy RC5 rerun wrote literal "\\n" separators while appending
   # newly introduced RAG_* keys to an older runtime.env. Repair only that
   # recognizable upgrade artifact before reading the service keys.
   if grep -Eq '\\n(RAG_MAINTENANCE_MODE|RAG_INTERNAL_API_KEY|RAG_PROVIDER_INTERNAL_KEY|RAG_ADMIN_USER|RAG_ADMIN_PASSWORD)=' "$PREFIX/runtime.env"; then
@@ -429,6 +452,9 @@ repair_legacy_runtime_env_newline_bug() {
 }
 
 repair_legacy_runtime_env_newline_bug
+
+# Every install/update returns to the explicit maintenance gate first.
+set_runtime_env_value RAG_MAINTENANCE_MODE true
 
 NEO4J_PASSWORD="$(sed -n 's/^NEO4J_PASSWORD=//p' "$PREFIX/runtime.env" | head -1)"
 if [[ -z "$NEO4J_PASSWORD" || "$NEO4J_PASSWORD" == "replace-me" ]]; then
@@ -645,68 +671,45 @@ print("trusted provider client registered: default-client")
 PYCLIENT
 
 if [[ $START_STACK -eq 0 ]]; then
-  log "Prepared. Edit $PREFIX/config.yaml, provider.env and runtime.env, then start with:"
-  echo "  cd $PREFIX/install/super-light && docker-compose up -d api provider mail-worker neo4j playwright-renderer"
+  log "Prepared in maintenance mode. Edit $PREFIX/config.yaml, provider.env and runtime.env, then start the maintenance provider with:"
+  echo "  cd $PREFIX/install/super-light && docker-compose up -d provider"
   exit 0
 fi
 
-log "Starting super-light stack"
-SERVICES=(api provider mail-worker neo4j playwright-renderer)
+log "Starting super-light maintenance endpoint"
+SERVICES=(provider)
 [[ $WITH_OPENWEBUI -eq 1 ]] && SERVICES+=(openwebui)
 [[ $WITH_PROXY -eq 1 ]] && SERVICES+=(proxy)
 compose up -d --remove-orphans "${SERVICES[@]}"
 
-log "Waiting for local endpoints"
-for attempt in $(seq 1 90); do
-  api_state=waiting
-  provider_state=waiting
-  playwright_state=waiting
-  curl -fsS --max-time 2 http://127.0.0.1:8765/live >/dev/null 2>&1 && api_state=ready
-  curl -fsS --max-time 2 http://127.0.0.1:8766/live >/dev/null 2>&1 && provider_state=ready
-  curl -fsS --max-time 2 http://127.0.0.1:8090/live >/dev/null 2>&1 && playwright_state=ready
-  if [[ "$api_state" == ready && "$provider_state" == ready && "$playwright_state" == ready ]]; then
-    printf '  API: ready | Provider: ready | Playwright: ready\n'
+log "Waiting for maintenance provider"
+PROVIDER_READY=0
+for attempt in $(seq 1 60); do
+  if curl -fsS --max-time 2 http://127.0.0.1:8766/live >/dev/null 2>&1; then
+    PROVIDER_READY=1
     break
   fi
   if [[ $attempt -eq 1 || $((attempt % 10)) -eq 0 ]]; then
-    printf '  API: %s | Provider: %s | Playwright: %s (attempt %d/90)\n' \
-      "$api_state" "$provider_state" "$playwright_state" "$attempt"
+    printf '  Maintenance provider: waiting (attempt %d/60)\n' "$attempt"
   fi
   sleep 2
 done
-curl -fsS http://127.0.0.1:8765/live >/dev/null || { echo "RAG API did not become live" >&2; compose logs --tail=100 api; exit 1; }
-curl -fsS http://127.0.0.1:8766/live >/dev/null || { echo "Provider did not become live" >&2; compose logs --tail=100 provider; exit 1; }
-curl -fsS http://127.0.0.1:8090/live >/dev/null || { echo "Playwright renderer did not become live" >&2; compose logs --tail=100 playwright-renderer; exit 1; }
-
-log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"
-NEO4J_SCHEMA_READY=0
-for attempt in $(seq 1 90); do
-  if compose exec -T api python -m rag.graph --config /app/config.yaml init >/dev/null 2>&1; then
-    NEO4J_SCHEMA_READY=1
-    break
-  fi
-  if [[ $attempt -eq 1 || $((attempt % 10)) -eq 0 ]]; then
-    printf '  Neo4j/schema: waiting (attempt %d/90)\n' "$attempt"
-  fi
-  sleep 2
-done
-if [[ $NEO4J_SCHEMA_READY -ne 1 ]]; then
-  echo "Neo4j did not become ready or the AKI schema upgrade failed." >&2
-  compose exec -T api python -m rag.graph --config /app/config.yaml init >&2 || true
-  compose logs --tail=120 neo4j api >&2 || true
+if [[ $PROVIDER_READY -ne 1 ]]; then
+  echo "Maintenance provider did not become live" >&2
+  compose logs --tail=100 provider >&2 || true
   exit 1
 fi
-printf '  Neo4j/schema: ready\n'
+printf '  Maintenance provider: ready\n'
 
 cat <<DONE
 
 Super-light installation profile installed.
 
 Local services:
-  API:        http://127.0.0.1:8765
-  Provider:   http://127.0.0.1:8766
-  Neo4j:      bolt://127.0.0.1:7687 (Browser via SSH tunnel to 7474)
-  Playwright: http://127.0.0.1:8090
+  API:        stopped until maintenance mode is disabled
+  Provider:   http://127.0.0.1:8766 (maintenance)
+  Neo4j:      prepared; normal stack start after configuration
+  Playwright: prepared; normal stack start after configuration
   OpenWebUI:  $([[ $WITH_OPENWEBUI -eq 1 ]] && echo http://127.0.0.1:3000 || echo disabled)
   nginx:      $([[ $WITH_PROXY -eq 1 ]] && echo "enabled on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}" || echo disabled)
   CA trust:   $([[ -d "$PREFIX/runtime/ca" ]] && find "$PREFIX/runtime/ca" -maxdepth 1 -name "*.crt" -type f 2>/dev/null | wc -l || echo 0) private certificate(s) baked into API/provider image
@@ -723,6 +726,9 @@ and review:
   $PREFIX/provider.env     # model/backend selection
   $PREFIX/config.yaml
   $PREFIX/web.yaml
+
+After configuration/verification, leave maintenance mode and start the normal stack:
+  sudo $PREFIX/install/maintenance-mode.sh off
 
 Contact seeds:
   Per-user CardDAV seeds are managed under RAG Admin -> Users -> Kontakt-DB

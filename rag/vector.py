@@ -115,6 +115,8 @@ class VectorStore:
         limit: int = 5,
         exclude_source_origins: list[str] | None = None,
         include_source_origins: list[str] | None = None,
+        acl_user: str | None = None,
+        acl_groups: list[str] | None = None,
     ):
 
         # Internal maintenance/smoke-test points must never become retrieval
@@ -135,14 +137,33 @@ class VectorStore:
                         match=MatchValue(value=value),
                     )
                 )
-        should = []
+        must = []
+
+        origin_should = []
         for origin in include_source_origins or []:
             value = str(origin or "").strip()
             if value:
-                should.append(
+                origin_should.append(
                     FieldCondition(key="source_origin", match=MatchValue(value=value))
                 )
-        internal_filter = Filter(must_not=must_not, should=should or None)
+        if origin_should:
+            must.append(Filter(should=origin_should))
+
+        username = str(acl_user or "").strip()
+        if username and acl_groups is not None:
+            acl_should = [
+                FieldCondition(key="owner", match=MatchValue(value=username)),
+                FieldCondition(key="users", match=MatchValue(value=username)),
+            ]
+            for group in acl_groups:
+                value = str(group or "").strip()
+                if value:
+                    acl_should.append(
+                        FieldCondition(key="groups", match=MatchValue(value=value))
+                    )
+            must.append(Filter(should=acl_should))
+
+        internal_filter = Filter(must=must or None, must_not=must_not)
 
         result = self.client.query_points(
             collection_name=self.collection,

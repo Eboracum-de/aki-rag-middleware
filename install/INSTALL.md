@@ -1,10 +1,10 @@
-# Installation – 0.8.5-rc4.3
+# Installation – 0.8.5-rc5
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
 Functional profile and deployment mechanism are conceptually separate. In the 0.8.5 line the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
 
-`0.8.5-rc4.3` is the current release-candidate baseline. It retains the Graph-Lite Findings curation model and adds the rc4.x authorization, installer, TLS and internal-service hardening, including explicit Standard Playwright lifecycle management and rerun safety. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
+`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` remains the preceding accepted baseline. It retains the Graph-Lite Findings curation model and adds the rc4.x authorization, installer, TLS and internal-service hardening, including explicit Standard Playwright lifecycle management and rerun safety. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
 and user-configuration model:
 
 - multi-user + live Nextcloud ACL is the safe installation default;
@@ -101,17 +101,26 @@ Other useful flags:
 -y                  non-interactive after plan review
 ```
 
-The installer starts selected Docker backends, but deliberately does **not**
-start the RAG API/provider automatically: `config.yaml` initially contains a
-placeholder Nextcloud URL and site-specific Elasticsearch settings still have
-to be checked.
+Fresh installs and installer reruns deliberately return to **maintenance mode**. The OpenAI-compatible provider is started in a minimal maintenance implementation that still validates registered provider-client Bearer keys, but does not load the RAG API, LLM backends, retrieval stores or workers. Normal API/workers stay stopped until site configuration and checks are complete. Selected infrastructure containers may already be prepared or running in the Standard profile; they do not receive user RAG traffic while the provider gate remains in maintenance mode.
 
 All Docker images shipped by the installer are immutable digest-qualified pins.
 Human-readable tags remain in the image reference for clarity, but Docker resolves
 the exact digest recorded in `versions.lock.yaml`. Image upgrades are therefore
 explicit release changes, not side effects of a mutable tag.
 
-## 3. Mandatory site configuration before first start
+## 3. Mandatory site configuration before first normal start
+
+Edit `/opt/nextcloud-rag/config.yaml`. During this phase the provider returns only `RAG ist im Maintenance-Modus. Bitte versuchen Sie es später erneut.` after successful provider-key authentication.
+
+The operator switch is:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+```
+
+`on` stops the normal API/background workers and restarts the minimal provider. `off` restarts the normal provider and normal services. This is also the intended envelope for master-key rotation, restore checks and other operations that must not race normal credential/RAG traffic.
 
 Edit `/opt/nextcloud-rag/config.yaml`.
 
@@ -584,8 +593,8 @@ Then:
 
 1. set canonical Nextcloud HTTPS URL and Elasticsearch index;
 2. set LLM/embedding endpoint as required;
-3. run smoke test;
-4. start middleware;
+3. while maintenance mode is still enabled, run configuration/preflight checks;
+4. leave maintenance mode with `sudo /opt/nextcloud-rag/install/maintenance-mode.sh off`;
 5. verify `/rag-api/health` and `/rag-admin/`;
 6. install/open AKI Recherche (or another trusted frontend), complete Nextcloud Login Flow for two users and verify ACL separation;
 7. synchronize one user's Kontakt-DB seed from the Admin UI and verify Neo4j source/provenance;
@@ -692,6 +701,7 @@ is also a hard error.
 Use `--plan` first when changing profile options, URLs, CA paths or optional services.
 Site-owned `config.yaml`, `provider.env`, `runtime.env`, runtime databases, credential
 master key and generated TLS material remain preserved on normal reruns.
+Preservation is intentional and is not a schema merge: newly introduced optional `config.yaml` keys are not inserted into an existing site configuration automatically. Review the release changelog/reference profile after an update and add wanted settings manually (for example RC5 `acl.prefilter.enabled`).
 
 ### Dockerized super-light with private CA
 

@@ -291,3 +291,47 @@ def test_startup_cleanup_can_revoke_pending_sessions_after_master_key_is_restore
     assert calls == ["recoverable-session-secret"]
     with sqlite3.connect(store.path) as con:
         assert con.execute("SELECT COUNT(*) FROM curation_sessions").fetchone()[0] == 0
+
+
+def test_self_service_acl_definitive_denial_triggers_uncurated_cleanup_only_for_nextcloud_file_ids():
+    class EnabledAcl:
+        enabled = True
+
+        def authorize_with_credential(self, results, **kwargs):
+            allowed = [item for item in results if item["document_id"] == "files:2"]
+            return AclDecision(True, allowed, len(results), len(allowed))
+
+    cleanup_calls = []
+    rows = [
+        {"finding_id": "f1", "document_id": "files:1"},
+        {"finding_id": "f2", "document_id": "files:2"},
+        {"finding_id": "f3", "document_id": "webarchive:test"},
+    ]
+    visible = _filter_findings_with_acl(
+        EnabledAcl(),  # type: ignore[arg-type]
+        _session(),
+        rows,
+        lambda user_id, finding_ids: cleanup_calls.append((user_id, finding_ids)),
+    )
+    assert visible == [rows[1]]
+    assert cleanup_calls == [("user-id", ["f1"])]
+
+
+def test_self_service_acl_backend_error_never_triggers_cleanup():
+    from rag.acl import AclBackendError
+
+    class BrokenAcl:
+        enabled = True
+
+        def authorize_with_credential(self, results, **kwargs):
+            raise AclBackendError("temporary outage")
+
+    cleanup_calls = []
+    with pytest.raises(AclBackendError):
+        _filter_findings_with_acl(
+            BrokenAcl(),  # type: ignore[arg-type]
+            _session(),
+            [{"finding_id": "f1", "document_id": "files:1"}],
+            lambda user_id, finding_ids: cleanup_calls.append((user_id, finding_ids)),
+        )
+    assert cleanup_calls == []

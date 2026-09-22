@@ -1,6 +1,6 @@
 # Data lifecycle, deletion, backup and restore
 
-**Reference:** `0.8.5-rc4.3`
+**Reference:** `0.8.5-rc5`
 
 AKI deliberately reuses Nextcloud and its FullTextSearch infrastructure, but it also creates derived state. Operators therefore need to distinguish **authoritative source data**, **rebuildable indexes** and **state that contains manual work or credentials**.
 
@@ -41,6 +41,31 @@ aki purge-document files:12345 --execute
 ```
 
 that proves removal from Elasticsearch/Qdrant/Neo4j/retrieval records/archive derivatives in one transaction. This is a known operational gap.
+
+### RC5 lazy Finding cleanup on ACL denial
+
+RC5 starts the purge work conservatively at the Neo4j user-provenance boundary.
+When a Finding is checked through the current Nextcloud live ACL and a successful
+ACL request definitively does not return its numeric `files:<id>`, AKI removes
+that user's `ResearchRun -[:PRODUCED]-> ResearchFinding` provenance only if the
+Finding is still uncurated. If no ResearchRun for any user references that
+uncurated Finding afterwards, the Finding node is garbage-collected.
+
+A Finding is treated as curated/preserved when it has a Finding curator status,
+per-Finding suppressed entity text, a `CURATED_ENTITY` relationship or any
+`RelationObservation -[:DERIVED_FROM_FINDING]-> ResearchFinding` provenance.
+Those objects remain stored and continue to be hidden from users who no longer
+pass the live ACL.
+
+This cleanup is deliberately **not** triggered by timeout, TLS/network failure,
+Nextcloud 5xx, rejected/invalid credentials, disabled ACL, or a document
+identifier that cannot be tied to a numeric Nextcloud file ID. These cases remain
+fail-closed for visibility but non-destructive for stored graph state.
+
+This is not yet a global document deletion workflow and is intentionally not
+coupled to Qdrant synchronization. A later central `purge-document` operation
+can coordinate Qdrant, Neo4j and other AKI-owned derived stores from an explicit
+document-lifecycle event.
 
 ## 3. Person-related deletion
 
@@ -89,23 +114,76 @@ Qdrant is normally rebuildable from the indexed corpus and embedding configurati
 
 Elasticsearch recovery is primarily a Nextcloud/FullTextSearch operational concern; AKI does not replace the source platform's own backup strategy.
 
+### RC5 console recovery set
+
+RC5 provides a console-first recovery workflow for AKI-owned state:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/backup-restore.sh create /srv/aki-backups
+sudo /opt/nextcloud-rag/install/backup-restore.sh verify /srv/aki-backups/aki-rag-backup-...
+```
+
+`create` requires maintenance mode and creates a timestamped recovery set with
+SHA-256 checksums. The set contains AKI configuration/runtime/provider state,
+`runtime/users.sqlite` with its matching credential master key, discovered AKI
+SQLite state, private CA/TLS/operator state below the installation prefix and the
+bundled Neo4j data volume when that component belongs to the selected deployment.
+
+Configured CA or other referenced paths outside the AKI installation prefix are
+reported as external operator dependencies rather than silently copied. A
+credential store or credential master key outside the installation prefix is a
+blocking condition for the automatic recovery set because the pair must remain
+recoverable together.
+
+The first RC5 recovery format deliberately excludes Nextcloud, Elasticsearch,
+Qdrant, external Neo4j, OpenWebUI/Playwright state and model caches. Nextcloud
+and Elasticsearch remain source-platform responsibilities; Qdrant is treated as
+rebuildable derived state in this version. External Neo4j must have its own
+operator-managed backup.
+
+The recovery set contains secrets and the credential master key. Store it with
+access controls appropriate for production credentials and, where required by
+the deployment policy, on encrypted/off-host backup storage. A bundled Neo4j
+container is stopped briefly while its data volume is snapshotted and is returned
+to its previous running state afterwards.
+
 ## 6. Restore order
 
-There is no automated cross-service consistent-restore command in 0.8.5-rc4.3. A conservative manual order is:
+For AKI-owned state, verify the selected recovery set before allowing any
+destructive restore:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/backup-restore.sh verify /srv/aki-backups/aki-rag-backup-...
+sudo /opt/nextcloud-rag/install/backup-restore.sh restore /srv/aki-backups/aki-rag-backup-... --yes
+```
+
+The RC5 restore command requires the same supported deployment profile/mode and
+installation prefix. Before replacing local state it verifies the recovery-set
+checksums, SQLite integrity and that reversible credentials can be decrypted with
+the included master key. If bundled Neo4j is part of the set, its local data volume
+is restored as part of the operation. Restore deliberately leaves AKI in
+maintenance mode.
+
+For a full deployment recovery, the conservative order remains:
 
 1. restore Nextcloud and its authoritative files/shares;
-2. restore AKI configuration, `runtime/users.sqlite` and the matching credential master key;
-3. restore or rebuild Elasticsearch/FullTextSearch and verify file IDs/paths;
-4. restore Neo4j if manual curation must be preserved;
-5. restore Qdrant only if its embedding model/configuration still matches; otherwise rebuild it;
-6. start AKI and run health/ACL smoke tests with at least two users;
-7. reconcile/sync derived stores before reopening the service broadly.
+2. prepare the same AKI profile/mode at the same installation prefix and enable maintenance mode;
+3. verify and restore the AKI recovery set;
+4. restore or rebuild Elasticsearch/FullTextSearch and verify file IDs/paths;
+5. restore external Neo4j separately if used; bundled Neo4j is covered by the AKI set;
+6. reconcile/rebuild Qdrant and other derived stores as required;
+7. run health/smoke/live-ACL checks with at least two users;
+8. disable AKI maintenance mode only after those checks pass.
 
-A snapshot that mixes an old `users.sqlite` with a newer master key, or vice versa, can make credentials undecryptable. Treat those as one recovery set.
+A snapshot that mixes an old `users.sqlite` with a newer master key, or vice
+versa, can make credentials undecryptable. The recovery workflow therefore treats
+those files as one set and verifies decryption before restore.
 
 ## 7. Key rotation
 
-The current credential format is versioned and authenticated, but 0.8.5-rc4.3 does not provide a documented zero-downtime master-key rotation workflow for all encrypted rows.
+The current credential format is versioned and authenticated, but 0.8.5-rc5 does not provide a documented zero-downtime master-key rotation workflow for all encrypted rows.
 
 Until a dedicated rotation command exists, operators should not replace the master key independently of the encrypted store. Back up the existing key and database before any credential migration.
 
@@ -124,8 +202,7 @@ Useful future additions are:
 - plan/execute document purge with per-store results;
 - provenance-aware entity/person review for deletion requests;
 - explicit archive retention policies;
-- backup/restore verification command;
 - master-key rotation/migration command;
 - admin report showing which derived stores contain state for one document ID.
 
-Until those exist, deletion and restore remain operator-run procedures that should be tested on the deployment's actual profile.
+These lifecycle workflows should still be tested on the deployment's actual profile; master-key rotation and cross-store purge remain operator-run gaps.

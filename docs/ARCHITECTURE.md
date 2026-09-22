@@ -1,9 +1,9 @@
 # AKI RAG Middleware
-## Architecture and design baseline 0.8.5-rc4.3
+## Architecture and design baseline 0.8.5-rc5
 
-**Updated:** 20 September 2026  
+**Updated:** 22 September 2026  
 **Status:** Release Candidate  
-**Reference version:** `0.8.5-rc4.3`
+**Reference version:** `0.8.5-rc5`
 
 ---
 
@@ -674,14 +674,33 @@ The middleware uses explicit states for incomplete or uncertain processing:
 
 ---
 
-## 18. Current release-candidate boundaries
+## 18. Backup and recovery boundary
 
-`0.8.5-rc4.3` is the current release-candidate baseline.
+RC5 adds recovery for **AKI-owned operational state**, not a transaction across the complete Nextcloud/RAG estate. The console recovery set groups state that must remain coherent: configuration/runtime state, AKI SQLite databases, `runtime/users.sqlite` with its matching credential master key, local private CA/TLS/operator files below the installation prefix and bundled Neo4j where selected.
+
+The boundary is intentional:
+
+- **Nextcloud** remains the authoritative source/document/ACL platform and uses its own backup process;
+- **Elasticsearch/FullTextSearch** remains source-platform derived state and is restored/rebuilt separately;
+- **Qdrant** is rebuildable derived state and is excluded from the first recovery format;
+- **external Neo4j** is operator-managed and is not copied into the AKI recovery set;
+- **bundled Neo4j** is included because Graph-Lite/manual curation may contain non-reconstructible human work;
+- **credential SQLite + master key** are recovered as one unit because separating versions can make encrypted secrets unusable.
+
+Create/restore operations run behind the explicit maintenance gate. Restore verifies checksums, SQLite integrity and credential decryption before replacing state and deliberately leaves the service in maintenance mode afterwards. Operational command sequences are documented in `BETA-OPERATIONS.md`; cross-system restore ordering and lifecycle semantics are in `DATA-LIFECYCLE.md`.
+
+This is recovery, not a unified purge/rollback transaction: AKI does not atomically restore or delete Nextcloud, Elasticsearch, Qdrant and all derived stores together.
+
+---
+
+## 19. Current release-candidate boundaries
+
+`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline.
 
 Known limits include:
 
 - only `standard+native` and `super-light+dockerized` are released/tested deployment combinations;
-- no unified cross-store purge/restore workflow;
+- no unified cross-store purge/restore transaction;
 - no complete prompt-injection defense;
 - Web snapshots are research artifacts, not full WARC/WACZ captures;
 - ResearchRun provenance and user-scoped live-ACL curation are implemented, but curation still writes shared Graph-Lite knowledge and should therefore be granted deliberately;
@@ -691,7 +710,7 @@ See `KNOWN-LIMITATIONS.md`, `THREAT-MODEL.md`, `DATA-LIFECYCLE.md` and `GRAPHLIG
 
 ---
 
-## 19. Responsibility separation
+## 20. Responsibility separation
 
 The current middleware separates four responsibilities:
 

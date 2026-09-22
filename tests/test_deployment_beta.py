@@ -30,7 +30,36 @@ def test_super_light_compose_is_legacy_compatible_shape():
     services = cfg["services"]
     assert "proxy" not in services
     assert "openwebui" not in services
-    assert services["provider"]["depends_on"] == ["api"]
+    assert "depends_on" not in services["provider"]
+    assert services["provider"]["command"] == ["python", "-m", "rag.provider_entrypoint"]
+
+
+def test_systemd_normal_services_honor_maintenance_gate():
+    for name in ("rag-api", "rag-graph-worker", "rag-sync-worker", "rag-mail-worker"):
+        unit = (ROOT / "install/systemd" / f"{name}.service.in").read_text()
+        assert "ExecCondition=" in unit
+        assert "RAG_MAINTENANCE_MODE" in unit
+    provider = (ROOT / "install/systemd/rag-provider.service.in").read_text()
+    assert "ExecCondition=" not in provider
+
+
+def test_maintenance_mode_is_shipped_and_defaulted_on_install():
+    standard = _standard_installer_text()
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    runtime = (ROOT / "install/runtime.env.example").read_text()
+    super_runtime = (ROOT / "install/super-light/runtime.env.super-light.example").read_text()
+    start_all = (ROOT / "start-all.sh").read_text()
+    provider_start = (ROOT / "start-openwebui-provider.sh").read_text()
+    helper = (ROOT / "install/maintenance-mode.sh").read_text()
+
+    assert "RAG_MAINTENANCE_MODE=true" in runtime
+    assert "RAG_MAINTENANCE_MODE=true" in super_runtime
+    assert "RAG_MAINTENANCE_MODE=true" in standard
+    assert "set_runtime_env_value RAG_MAINTENANCE_MODE true" in super_light
+    assert "Maintenance mode is enabled: API/workers are intentionally not started." in start_all
+    assert "rag.provider_entrypoint" in provider_start
+    assert "on|off|status" in helper
+    assert "Starting super-light maintenance endpoint" in super_light
 
 
 def test_super_light_container_build_does_not_require_root_provider_example():
@@ -101,8 +130,14 @@ def test_optional_external_services_are_not_bundled():
 
 
 def test_evidence_controller_is_off_by_default():
+    cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
+    assert cfg["evidence_control"]["mode"] == "off"
     env = (ROOT / "provider.env.example").read_text()
+    assert "Legacy fallback only; config.yaml evidence_control.mode is canonical." in env
     assert "EVIDENCE_DECISION_MODE=off" in env
+    provider = (ROOT / "rag/openai_provider.py").read_text()
+    assert 'PROVIDER_CONFIG.get("evidence_control")' in provider
+    assert 'os.getenv("EVIDENCE_DECISION_MODE", "off")' in provider
 
 
 def test_openwebui_connection_forwards_stable_user_identity():
@@ -353,7 +388,7 @@ def test_admin_navigation_uses_four_primary_areas_and_graph_subnav():
     base = (ROOT / "rag/templates/admin/base.html").read_text()
     for label in ("Übersicht", "Benutzer", "Graph", "Sicherheit"):
         assert f">{label}</a>" in base
-    assert ">Merge-Kandidaten</a>" in base
+    assert ">Identitäts-Kandidaten</a>" in base
     assert ">Beobachtungen</a>" in base
     assert ">Relationen</a>" in base
     assert ">Kontaktquellen</a>" in base

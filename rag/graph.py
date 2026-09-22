@@ -1008,6 +1008,18 @@ class GraphStore:
             """,
             entity_id=entity_id,
         )
+        same_as = self._run(
+            """
+            MATCH (e:Entity {entity_id:$entity_id})-[r]-(peer:Entity)
+            WHERE type(r)='SAME_AS' AND coalesce(properties(r)['active'],true)=true
+            RETURN peer.entity_id AS entity_id, peer.display_name AS display_name,
+                   coalesce(properties(peer)['identity_status'],'') AS identity_status,
+                   coalesce(properties(r)['reason'],'') AS reason,
+                   toString(properties(r)['decided_at']) AS decided_at
+            ORDER BY peer.display_name, peer.entity_id
+            """,
+            entity_id=entity_id,
+        )
         return {
             "entity": entity,
             "forms": self.entity_forms(entity_id),
@@ -1016,6 +1028,7 @@ class GraphStore:
             "relations": self.entity_relation_observations(entity_id),
             "merged_into": (dict(merge_target[0]) if merge_target and merge_target[0].get("entity_id") else None),
             "merged_from": [dict(row) for row in merged_from],
+            "same_as": [dict(row) for row in same_as],
         }
 
     def remove_alias_preview(self, entity_id: str, alias: str) -> dict[str, Any]:
@@ -1492,27 +1505,39 @@ class GraphStore:
         # curator decisions and merge-carried candidates remain untouched.
         self._run(
             """
-            MATCH (e:Entity {entity_id:$entity_id})-[r:POSSIBLE_SAME_AS]-()
-            WHERE coalesce(properties(r)['status'],'candidate')='candidate'
+            MATCH (e:Entity {entity_id:$entity_id})-[r]-()
+            WHERE type(r)='POSSIBLE_SAME_AS'
+              AND coalesce(properties(r)['status'],'candidate')='candidate'
               AND coalesce(properties(r)['suggested_by'],'')='identity_similarity_v1'
             DELETE r
             """,
             entity_id=entity_id,
         )
 
+        # SAME_AS is an equivalence relation. Candidate suppression must therefore
+        # operate on the whole component, not merely on the concrete edge that a
+        # curator happened to confirm. Likewise, one NOT_SAME_AS decision between
+        # two components blocks all equivalent members on both sides.
+        own_component_ids = set(self.same_as_component_ids(entity_id) or [entity_id])
+        blocked_ids = set(own_component_ids)
         blocked_rows = self._run(
             """
-            MATCH (e:Entity {entity_id:$entity_id})-[r]-(x:Entity)
-            WHERE type(r) = 'NOT_SAME_AS'
-            RETURN x.entity_id AS entity_id
+            UNWIND $component_ids AS current_id
+            MATCH (e:Entity {entity_id:current_id})-[r]-(x:Entity)
+            WHERE type(r)='NOT_SAME_AS'
+            RETURN DISTINCT x.entity_id AS entity_id
             """,
-            entity_id=entity_id,
+            component_ids=sorted(own_component_ids),
         )
-        blocked_ids = {str(r.get("entity_id") or "") for r in blocked_rows}
+        for blocked_row in blocked_rows:
+            blocked_id = str(blocked_row.get("entity_id") or "")
+            if not blocked_id:
+                continue
+            blocked_ids.update(self.same_as_component_ids(blocked_id) or [blocked_id])
 
         forms = self.name_forms(include_inactive_names=False)
         own_forms: list[dict[str, Any]] = [
-            row for row in forms if str(row.get("entity_id") or "") == entity_id
+            row for row in forms if str(row.get("entity_id") or "") in own_component_ids
         ]
         # A display name should remain usable even when a legacy/imported node has
         # no explicit active HAS_NAME edge.
@@ -2853,8 +2878,8 @@ class GraphStore:
         )
         names = self._run(
             f"""
-            MATCH (e:Entity)-[r:HAS_NAME]->(n:EntityName)
-            WHERE n.normalized <> '' {active_clause} {policy_clause_name}
+            MATCH (e:Entity)-[r]->(n:EntityName)
+            WHERE type(r)='HAS_NAME' AND n.normalized <> '' {active_clause} {policy_clause_name}
               AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN n.normalized AS normalized,
                    coalesce(properties(n)['last_seen_value'], properties(n)['value']) AS value,
@@ -2871,8 +2896,8 @@ class GraphStore:
         )
         aliases = self._run(
             f"""
-            MATCH (e:Entity)-[r:HAS_SEARCH_ALIAS]->(a:SearchAlias)
-            WHERE coalesce(properties(r)['active'],true)=true AND a.normalized <> '' {policy_clause_alias}
+            MATCH (e:Entity)-[r]->(a:SearchAlias)
+            WHERE type(r)='HAS_SEARCH_ALIAS' AND coalesce(properties(r)['active'],true)=true AND a.normalized <> '' {policy_clause_alias}
               AND coalesce(properties(e)['identity_status'],'') <> 'merged' AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
             RETURN a.normalized AS normalized,
                    coalesce(properties(a)['last_seen_value'], properties(a)['value']) AS value,
@@ -2924,15 +2949,70 @@ class GraphStore:
                 combined[key] = row
         return list(combined.values())
 
-    def entity_search_forms(self, entity_id: str) -> list[dict[str, Any]]:
-        rows = self._run(
+    def same_as_component_ids(self, entity_id: str, *, max_hops: int = 16) -> list[str]:
+        """Return the active SAME_AS equivalence component containing one Entity.
+
+        SAME_AS is non-destructive identity equivalence: every Entity keeps its
+        own lifecycle and provenance.  Traversal is bounded and implemented
+        without a typed variable-length Cypher pattern so older/sparse stores
+        do not emit unknown-relationship warnings before the first decision.
+        """
+        root = str(entity_id or "").strip()
+        if not root:
+            return []
+        active = self._run(
             """
             MATCH (e:Entity {entity_id:$entity_id})
+            WHERE coalesce(properties(e)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(e)['identity_status'],'') <> 'orphaned'
+            RETURN e.entity_id AS entity_id
+            LIMIT 1
+            """,
+            entity_id=root,
+        )
+        if not active:
+            return []
+
+        seen = {root}
+        frontier = [root]
+        for _ in range(max(1, min(int(max_hops or 16), 64))):
+            if not frontier:
+                break
+            rows = self._run(
+                """
+                UNWIND $frontier AS current_id
+                MATCH (e:Entity {entity_id:current_id})-[r]-(peer:Entity)
+                WHERE type(r)='SAME_AS'
+                  AND coalesce(properties(r)['active'],true)=true
+                  AND coalesce(properties(peer)['identity_status'],'') <> 'merged'
+                  AND coalesce(properties(peer)['identity_status'],'') <> 'orphaned'
+                RETURN DISTINCT peer.entity_id AS entity_id
+                """,
+                frontier=frontier,
+            )
+            next_frontier = []
+            for row in rows:
+                peer_id = str(row.get("entity_id") or "").strip()
+                if peer_id and peer_id not in seen:
+                    seen.add(peer_id)
+                    next_frontier.append(peer_id)
+            frontier = next_frontier
+        return sorted(seen)
+
+    def entity_search_forms(self, entity_id: str) -> list[dict[str, Any]]:
+        entity_ids = self.same_as_component_ids(entity_id)
+        if not entity_ids:
+            return []
+        rows = self._run(
+            """
+            MATCH (e:Entity)
+            WHERE e.entity_id IN $entity_ids
             OPTIONAL MATCH (e)-[rn:HAS_NAME]->(n:EntityName)
             WITH e, collect(CASE WHEN n IS NULL THEN null ELSE {
                 value:coalesce(properties(n)['last_seen_value'],properties(n)['value']), normalized:n.normalized,
                 weight:CASE WHEN coalesce(properties(rn)['preferred'],false) THEN 1.0 ELSE 0.92 END,
                 kind:coalesce(properties(rn)['kind'],'name'), active:coalesce(properties(rn)['active'],true), source:'name',
+                source_entity_id:e.entity_id,
                 resolution_policy:coalesce(properties(rn)['resolution_policy'],'exclusive')
             } END) AS names
             OPTIONAL MATCH (e)-[ra:HAS_SEARCH_ALIAS]->(a:SearchAlias)
@@ -2940,19 +3020,30 @@ class GraphStore:
                 value:coalesce(properties(a)['last_seen_value'],properties(a)['value']), normalized:a.normalized,
                 weight:coalesce(properties(ra)['weight'],0.5), kind:coalesce(properties(ra)['kind'],'alias'),
                 active:coalesce(properties(ra)['active'],true), source:'alias',
+                source_entity_id:e.entity_id,
                 resolution_policy:coalesce(properties(ra)['resolution_policy'],'contextual')
             } END) AS aliases
-            RETURN e.display_name AS display_name, labels(e) AS labels,
-                   [x IN names + aliases WHERE x IS NOT NULL AND coalesce(x.resolution_policy,'contextual') <> 'document_only'] AS forms
+            RETURN [x IN names + aliases WHERE x IS NOT NULL AND coalesce(x.resolution_policy,'contextual') <> 'document_only'] AS forms
             """,
-            entity_id=entity_id,
+            entity_ids=entity_ids,
         )
-        if not rows:
-            return []
-        forms = rows[0].get("forms") or []
-        # Prefer current forms but retain historical names for document search.
-        forms.sort(key=lambda x: (bool(x.get("active")), float(x.get("weight", 0.0))), reverse=True)
-        return forms
+        forms = []
+        for row in rows:
+            forms.extend(list(row.get("forms") or []))
+
+        # The same spelling can occur on multiple equivalent identities. Search
+        # it once using the strongest available form while retaining provenance.
+        combined: dict[str, dict[str, Any]] = {}
+        for form in forms:
+            key = str(form.get("normalized") or normalize_name(form.get("value") or "")).strip()
+            if not key:
+                continue
+            old = combined.get(key)
+            if old is None or float(form.get("weight") or 0.0) > float(old.get("weight") or 0.0):
+                combined[key] = dict(form)
+        result = list(combined.values())
+        result.sort(key=lambda x: (bool(x.get("active")), float(x.get("weight", 0.0))), reverse=True)
+        return result
 
 
     def identity_profiles(self, entity_type: str | None = None) -> list[dict[str, Any]]:
@@ -5026,6 +5117,98 @@ class GraphStore:
         )
         return bool(int(rows[0].get("count") or 0)) if rows else False
 
+    def purge_denied_uncurated_research_findings_for_user(
+        self,
+        canonical_user_id: str,
+        finding_ids: list[str],
+    ) -> dict[str, int]:
+        """Remove only uncurated user provenance after a definitive live-ACL denial.
+
+        Curated Findings are preserved. A Finding is eligible only when it has
+        no per-Finding curator status/suppression, no CURATED_ENTITY edge and no
+        RelationObservation derived from it. User-specific PRODUCED edges are
+        removed first; the shared Finding node is garbage-collected only when no
+        ResearchRun for any user still references it.
+        """
+        user_id = str(canonical_user_id or "").strip()
+        ids = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in (finding_ids or [])
+            if str(value or "").strip()
+        ))
+        if not user_id or not ids:
+            return {
+                "requested": len(ids),
+                "detached_edges": 0,
+                "detached_findings": 0,
+                "deleted_findings": 0,
+            }
+
+        eligible_rows = self._run(
+            """
+            MATCH (run:ResearchRun {canonical_user_id:$canonical_user_id})-[p:PRODUCED]->(f:ResearchFinding)
+            WHERE f.finding_id IN $finding_ids
+              AND coalesce(properties(f)['curator_status'],'')=''
+              AND size(coalesce(properties(f)['suppressed_entity_texts'],[]))=0
+              AND NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }
+              AND NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }
+            RETURN count(p) AS edge_count, collect(DISTINCT f.finding_id) AS finding_ids
+            """,
+            canonical_user_id=user_id,
+            finding_ids=ids,
+        )
+        eligible = dict(eligible_rows[0]) if eligible_rows else {}
+        eligible_ids = [
+            str(value or "").strip()
+            for value in (eligible.get("finding_ids") or [])
+            if str(value or "").strip()
+        ]
+        detached_edges = int(eligible.get("edge_count") or 0)
+        if eligible_ids:
+            self._run(
+                """
+                MATCH (run:ResearchRun {canonical_user_id:$canonical_user_id})-[p:PRODUCED]->(f:ResearchFinding)
+                WHERE f.finding_id IN $finding_ids
+                DELETE p
+                """,
+                canonical_user_id=user_id,
+                finding_ids=eligible_ids,
+            )
+
+        orphan_rows = self._run(
+            """
+            MATCH (f:ResearchFinding)
+            WHERE f.finding_id IN $finding_ids
+              AND coalesce(properties(f)['curator_status'],'')=''
+              AND size(coalesce(properties(f)['suppressed_entity_texts'],[]))=0
+              AND NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }
+              AND NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }
+              AND NOT EXISTS { MATCH (:ResearchRun)-[:PRODUCED]->(f) }
+            RETURN f.finding_id AS finding_id
+            """,
+            finding_ids=eligible_ids,
+        ) if eligible_ids else []
+        orphan_ids = [
+            str(row.get("finding_id") or "").strip()
+            for row in orphan_rows
+            if str(row.get("finding_id") or "").strip()
+        ]
+        if orphan_ids:
+            self._run(
+                """
+                MATCH (f:ResearchFinding)
+                WHERE f.finding_id IN $finding_ids
+                DETACH DELETE f
+                """,
+                finding_ids=orphan_ids,
+            )
+        return {
+            "requested": len(ids),
+            "detached_edges": detached_edges,
+            "detached_findings": len(eligible_ids),
+            "deleted_findings": len(orphan_ids),
+        }
+
     def research_run_detail(self, run_id: str) -> dict[str, Any] | None:
         runs = self._run(
             """
@@ -6917,6 +7100,21 @@ class GraphStore:
             keep_id=keep_entity_id,
             merge_id=merge_entity_id,
         )
+        carried_equivalents = self._run(
+            """
+            MATCH (old:Entity {entity_id:$merge_id})-[r]-(x:Entity)
+            WHERE type(r)='SAME_AS'
+              AND x.entity_id <> $keep_id
+              AND coalesce(properties(r)['active'],true)=true
+              AND coalesce(properties(x)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(x)['identity_status'],'') <> 'orphaned'
+            RETURN DISTINCT x.entity_id AS entity_id,
+                   coalesce(properties(r)['reason'],'carried_from_merge') AS reason
+            """,
+            keep_id=keep_entity_id,
+            merge_id=merge_entity_id,
+        )
+
 
         # Preserve every real name and search alias on the survivor as a
         # manual-merge form. Original source relationships remain on the
@@ -7137,6 +7335,53 @@ class GraphStore:
                     reason=str(row.get("reason") or "carried_from_merged_entity"),
                 )
 
+        # Preserve non-destructive identity equivalence when one member is later
+        # explicitly consolidated.  A contradictory NOT_SAME_AS on the survivor
+        # wins and prevents carrying that equivalence.
+        for row in carried_equivalents:
+            other_id = str(row.get("entity_id") or "")
+            if not other_id or other_id == keep_entity_id:
+                continue
+            blocked = self._run(
+                """
+                MATCH (a:Entity {entity_id:$keep_id})
+                MATCH (b:Entity {entity_id:$other_id})
+                OPTIONAL MATCH (a)-[n]-(b)
+                WHERE type(n)='NOT_SAME_AS'
+                RETURN n IS NOT NULL AS blocked
+                """,
+                keep_id=keep_entity_id,
+                other_id=other_id,
+            )
+            if blocked and bool(blocked[0].get("blocked")):
+                continue
+            a_id, b_id = sorted([keep_entity_id, other_id])
+            self._run(
+                """
+                MATCH (a:Entity {entity_id:$a_id})
+                MATCH (b:Entity {entity_id:$b_id})
+                MERGE (a)-[r:SAME_AS]->(b)
+                ON CREATE SET r.created_at=datetime()
+                SET r.active=true,
+                    r.reason=$reason,
+                    r.decided_by='manual_merge_carry',
+                    r.source_merge_entity_id=$merge_id,
+                    r.updated_at=datetime()
+                """,
+                a_id=a_id,
+                b_id=b_id,
+                reason=str(row.get("reason") or "carried_from_merge"),
+                merge_id=merge_entity_id,
+            )
+        self._run(
+            """
+            MATCH (old:Entity {entity_id:$merge_id})-[r]-()
+            WHERE type(r)='SAME_AS'
+            DELETE r
+            """,
+            merge_id=merge_entity_id,
+        )
+
         # Remove stale candidate edges involving the retired entity, record the
         # irreversible semantic decision as a reversible tombstone redirect.
         self._run(
@@ -7236,6 +7481,81 @@ class GraphStore:
             "carried_merge_candidates": carried_count,
         }
 
+    def confirm_same_as_preview(
+        self, left_entity_id: str, right_entity_id: str, *, reason: str = "manual_identity_confirmation"
+    ) -> dict[str, Any]:
+        """Validate a non-destructive identity-equivalence decision."""
+        if left_entity_id == right_entity_id:
+            raise ValueError("Eine Entity ist bereits mit sich selbst identisch")
+        left = self._entity_curation_summary(left_entity_id)
+        right = self._entity_curation_summary(right_entity_id)
+        if left is None or right is None:
+            raise ValueError("Mindestens eine Entity wurde nicht gefunden")
+        for label, entity in (("A", left), ("B", right)):
+            if str(entity.get("identity_status") or "") in {"merged", "orphaned"}:
+                raise ValueError(f"Entity {label} ist nicht aktiv (merged/orphaned)")
+        left_labels = set(left.get("labels") or [])
+        right_labels = set(right.get("labels") or [])
+        left_type = "Organization" if "Organization" in left_labels else "Person" if "Person" in left_labels else ""
+        right_type = "Organization" if "Organization" in right_labels else "Person" if "Person" in right_labels else ""
+        if not left_type or left_type != right_type or "OrganizationalUnit" in left_labels or "OrganizationalUnit" in right_labels:
+            raise ValueError("SAME_AS ist nur zwischen zwei aktiven Personen oder zwei aktiven Organisationen zulässig")
+        return {
+            "action": "same_as",
+            "entity_type": left_type,
+            "left": left,
+            "right": right,
+            "reason": str(reason or "manual_identity_confirmation"),
+            "note": (
+                "Beide Entities bleiben aktiv und behalten eigene ContactRecords, Namen und Provenienz. "
+                "Es wird kein Survivor gewählt und nichts umgehängt."
+            ),
+        }
+
+    def confirm_same_as(
+        self, left_entity_id: str, right_entity_id: str, *, reason: str = "manual_identity_confirmation"
+    ) -> dict[str, Any]:
+        """Persist manual identity equivalence without merging either Entity."""
+        preview = self.confirm_same_as_preview(left_entity_id, right_entity_id, reason=reason)
+        a_id, b_id = sorted([left_entity_id, right_entity_id])
+        self._run(
+            """
+            MATCH (a:Entity {entity_id:$a_id})-[r]-(b:Entity {entity_id:$b_id})
+            WHERE type(r) IN ['POSSIBLE_SAME_AS','NOT_SAME_AS']
+            DELETE r
+            """,
+            a_id=a_id,
+            b_id=b_id,
+        )
+        self._run(
+            """
+            MATCH (a:Entity {entity_id:$a_id})
+            MATCH (b:Entity {entity_id:$b_id})
+            MERGE (a)-[r:SAME_AS]->(b)
+            ON CREATE SET r.created_at=datetime()
+            SET r.active=true,
+                r.reason=$reason,
+                r.decided_by='manual_curator',
+                r.decided_at=datetime(),
+                r.updated_at=datetime()
+            """,
+            a_id=a_id,
+            b_id=b_id,
+            reason=str(reason or "manual_identity_confirmation"),
+        )
+        # Rebuild only machine suggestions around the pair. SAME_AS itself is
+        # a blocking curator decision and is never replaced by this refresh.
+        self.refresh_possible_same_as(left_entity_id)
+        self.refresh_possible_same_as(right_entity_id)
+        return {
+            "status": "same_as",
+            "left_entity_id": left_entity_id,
+            "left_name": preview["left"].get("display_name"),
+            "right_entity_id": right_entity_id,
+            "right_name": preview["right"].get("display_name"),
+            "reason": str(reason or "manual_identity_confirmation"),
+        }
+
     def reject_merge_candidate(self, left_entity_id: str, right_entity_id: str, *, reason: str = "manual_rejection") -> dict[str, Any]:
         """Persist a negative identity decision so similarity cannot re-suggest it."""
         if left_entity_id == right_entity_id:
@@ -7247,7 +7567,8 @@ class GraphStore:
         a_id, b_id = sorted([left_entity_id, right_entity_id])
         self._run(
             """
-            MATCH (a:Entity {entity_id:$a_id})-[c:POSSIBLE_SAME_AS]-(b:Entity {entity_id:$b_id})
+            MATCH (a:Entity {entity_id:$a_id})-[c]-(b:Entity {entity_id:$b_id})
+            WHERE type(c) IN ['POSSIBLE_SAME_AS','SAME_AS']
             DELETE c
             """,
             a_id=a_id,
@@ -7274,8 +7595,16 @@ class GraphStore:
             "reason": str(reason or "manual_rejection"),
         }
 
-    def list_merge_candidates(self) -> list[dict[str, Any]]:
-        return self._run(
+    def list_merge_candidates(self, *, source_user_id: str = "") -> list[dict[str, Any]]:
+        """List open identity candidates grouped by active SAME_AS components.
+
+        SAME_AS is an equivalence relation even though we persist only the
+        curator-confirmed edges.  The review queue therefore collapses all raw
+        POSSIBLE_SAME_AS edges between the same two equivalence components into
+        one actionable row.  ContactRecord provenance is attached for
+        administration and optional per-user filtering.
+        """
+        raw = self._run(
             """
             MATCH (a:Entity)-[r]->(b:Entity)
             WHERE type(r)='POSSIBLE_SAME_AS'
@@ -7295,8 +7624,194 @@ class GraphStore:
                    properties(r)['matched_left_form'] AS matched_left_form,
                    properties(r)['matched_right_form'] AS matched_right_form,
                    properties(r)['carried_from_merge_entity_id'] AS carried_from_merge_entity_id
-            ORDER BY properties(r)['score'] DESC, a.display_name, b.display_name
             """
+        )
+        if not raw:
+            return []
+
+        identity_decisions = self._run(
+            """
+            MATCH (a:Entity)-[r]-(b:Entity)
+            WHERE type(r) IN ['SAME_AS','NOT_SAME_AS']
+              AND (type(r) <> 'SAME_AS' OR coalesce(properties(r)['active'],true)=true)
+              AND coalesce(properties(a)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(a)['identity_status'],'') <> 'orphaned'
+              AND coalesce(properties(b)['identity_status'],'') <> 'merged'
+              AND coalesce(properties(b)['identity_status'],'') <> 'orphaned'
+            RETURN a.entity_id AS left_entity_id, b.entity_id AS right_entity_id,
+                   type(r) AS relation_type
+            """
+        )
+
+        parent: dict[str, str] = {}
+
+        def find(entity_id: str) -> str:
+            parent.setdefault(entity_id, entity_id)
+            while parent[entity_id] != entity_id:
+                parent[entity_id] = parent[parent[entity_id]]
+                entity_id = parent[entity_id]
+            return entity_id
+
+        def union(left_id: str, right_id: str) -> None:
+            left_root = find(left_id)
+            right_root = find(right_id)
+            if left_root == right_root:
+                return
+            keep, merge = sorted((left_root, right_root))
+            parent[merge] = keep
+
+        for row in raw:
+            find(str(row.get("left_entity_id") or ""))
+            find(str(row.get("right_entity_id") or ""))
+        for row in identity_decisions:
+            if str(row.get("relation_type") or "") != "SAME_AS":
+                continue
+            left_id = str(row.get("left_entity_id") or "")
+            right_id = str(row.get("right_entity_id") or "")
+            if left_id and right_id:
+                union(left_id, right_id)
+
+        blocked_component_pairs: set[tuple[str, str]] = set()
+        for row in identity_decisions:
+            if str(row.get("relation_type") or "") != "NOT_SAME_AS":
+                continue
+            left_id = str(row.get("left_entity_id") or "")
+            right_id = str(row.get("right_entity_id") or "")
+            if left_id and right_id:
+                left_root, right_root = find(left_id), find(right_id)
+                if left_root != right_root:
+                    blocked_component_pairs.add(tuple(sorted((left_root, right_root))))
+
+        entity_ids = sorted(entity_id for entity_id in parent if entity_id)
+        metadata_rows = self._run(
+            """
+            MATCH (e:Entity)
+            WHERE e.entity_id IN $entity_ids
+            OPTIONAL MATCH (c:ContactRecord)-[cr]->(e)
+            WHERE type(cr)='DESCRIBES'
+            WITH e, [x IN collect(CASE WHEN c IS NULL THEN null ELSE {
+                contact_id:c.contact_id,
+                cloud_id:coalesce(c.cloud_id,''),
+                source_user_id:coalesce(c.source_user_id,''),
+                addressbook_name:coalesce(c.addressbook_name,''),
+                addressbook_slug:coalesce(c.addressbook_slug,'')
+            } END) WHERE x IS NOT NULL] AS sources
+            RETURN e.entity_id AS entity_id,
+                   e.display_name AS display_name,
+                   labels(e) AS labels,
+                   sources
+            """,
+            entity_ids=entity_ids,
+        )
+        metadata = {
+            str(row.get("entity_id") or ""): dict(row)
+            for row in metadata_rows
+            if str(row.get("entity_id") or "")
+        }
+
+        components: dict[str, list[str]] = {}
+        for entity_id in entity_ids:
+            components.setdefault(find(entity_id), []).append(entity_id)
+
+        def component_summary(root: str) -> dict[str, Any]:
+            ids = sorted(components.get(root) or [root])
+            names: list[str] = []
+            sources: list[dict[str, Any]] = []
+            seen_names: set[str] = set()
+            seen_sources: set[tuple[str, str, str, str]] = set()
+            for entity_id in ids:
+                meta = metadata.get(entity_id) or {}
+                name = str(meta.get("display_name") or "").strip()
+                if name and name.casefold() not in seen_names:
+                    seen_names.add(name.casefold())
+                    names.append(name)
+                for source in meta.get("sources") or []:
+                    source = dict(source or {})
+                    key = (
+                        str(source.get("source_user_id") or ""),
+                        str(source.get("addressbook_name") or ""),
+                        str(source.get("cloud_id") or ""),
+                        str(source.get("contact_id") or ""),
+                    )
+                    if key in seen_sources:
+                        continue
+                    seen_sources.add(key)
+                    sources.append(source)
+            sources.sort(key=lambda item: (
+                str(item.get("source_user_id") or "").casefold(),
+                str(item.get("addressbook_name") or "").casefold(),
+                str(item.get("contact_id") or ""),
+            ))
+            return {
+                "component_ids": ids,
+                "component_names": names,
+                "sources": sources,
+                "source_users": sorted({
+                    str(item.get("source_user_id") or "")
+                    for item in sources
+                    if str(item.get("source_user_id") or "")
+                }, key=str.casefold),
+            }
+
+        component_cache = {
+            root: component_summary(root)
+            for root in components
+        }
+        selected_user = str(source_user_id or "").strip().casefold()
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for raw_row in raw:
+            row = dict(raw_row)
+            raw_left_id = str(row.get("left_entity_id") or "")
+            raw_right_id = str(row.get("right_entity_id") or "")
+            if not raw_left_id or not raw_right_id:
+                continue
+            raw_left_root = find(raw_left_id)
+            raw_right_root = find(raw_right_id)
+            if raw_left_root == raw_right_root:
+                continue
+
+            key = tuple(sorted((raw_left_root, raw_right_root)))
+            if key in blocked_component_pairs:
+                continue
+            swapped = raw_left_root != key[0]
+            if swapped:
+                row["left_entity_id"], row["right_entity_id"] = raw_right_id, raw_left_id
+                row["left_name"], row["right_name"] = row.get("right_name"), row.get("left_name")
+                row["left_labels"], row["right_labels"] = row.get("right_labels"), row.get("left_labels")
+                row["matched_left_form"], row["matched_right_form"] = (
+                    row.get("matched_right_form"), row.get("matched_left_form")
+                )
+
+            left_summary = component_cache.get(key[0]) or component_summary(key[0])
+            right_summary = component_cache.get(key[1]) or component_summary(key[1])
+            visible_users = {
+                str(value).casefold()
+                for value in (left_summary["source_users"] + right_summary["source_users"])
+                if str(value).strip()
+            }
+            if selected_user and selected_user not in visible_users:
+                continue
+
+            row.update({
+                "left_component_ids": left_summary["component_ids"],
+                "left_component_names": left_summary["component_names"],
+                "left_sources": left_summary["sources"],
+                "right_component_ids": right_summary["component_ids"],
+                "right_component_names": right_summary["component_names"],
+                "right_sources": right_summary["sources"],
+            })
+            previous = grouped.get(key)
+            if previous is None or float(row.get("score") or 0.0) > float(previous.get("score") or 0.0):
+                grouped[key] = row
+
+        return sorted(
+            grouped.values(),
+            key=lambda row: (
+                -float(row.get("score") or 0.0),
+                str(row.get("left_name") or "").casefold(),
+                str(row.get("right_name") or "").casefold(),
+            ),
         )
 
     def stats(self) -> dict[str, int]:
@@ -7327,13 +7842,14 @@ class GraphStore:
         mail_attachments = self._run("MATCH (:Document)-[r]->(:MailMessage) WHERE type(r)='ATTACHMENT_OF' RETURN count(r) AS count")
         rejected_observations = self._run("MATCH (o:EntityObservation {status:'rejected'}) RETURN count(o) AS count")
         unresolved_observations = self._run("MATCH (o:EntityObservation {status:'unresolved'}) RETURN count(o) AS count")
-        merge_candidates = self._run("MATCH ()-[r]->() WHERE type(r)='POSSIBLE_SAME_AS' AND coalesce(properties(r)['status'],'candidate')='candidate' RETURN count(r) AS count")
+        merge_candidates = len(self.list_merge_candidates())
         merged_entities = self._run("MATCH (e:Entity {identity_status:'merged'}) RETURN count(e) AS count")
         confirmed_entities = self._run("MATCH (e:Entity {identity_status:'confirmed'}) RETURN count(e) AS count")
         orphaned_entities = self._run("MATCH (e:Entity {identity_status:'orphaned'}) RETURN count(e) AS count")
         manual_non_entity_observations = self._run("MATCH (o:EntityObservation {curator_status:'manual_not_entity'}) RETURN count(o) AS count")
         corrected_observations = self._run("MATCH (o:EntityObservation {curator_status:'corrected_observation'}) RETURN count(o) AS count")
         not_same_as = self._run("MATCH ()-[r]->() WHERE type(r) = 'NOT_SAME_AS' RETURN count(r) AS count")
+        same_as = self._run("MATCH ()-[r]->() WHERE type(r) = 'SAME_AS' RETURN count(r) AS count")
         return {
             "nodes": int(rows[0]["nodes"] if rows else 0),
             "relationships": int(rels[0]["relationships"] if rels else 0),
@@ -7357,13 +7873,14 @@ class GraphStore:
             "mail_attachments": int(mail_attachments[0]["count"] if mail_attachments else 0),
             "rejected_entity_observations": int(rejected_observations[0]["count"] if rejected_observations else 0),
             "unresolved_entity_observations": int(unresolved_observations[0]["count"] if unresolved_observations else 0),
-            "merge_candidates": int(merge_candidates[0]["count"] if merge_candidates else 0),
+            "merge_candidates": int(merge_candidates),
             "merged_entities": int(merged_entities[0]["count"] if merged_entities else 0),
             "confirmed_entities": int(confirmed_entities[0]["count"] if confirmed_entities else 0),
             "orphaned_entities": int(orphaned_entities[0]["count"] if orphaned_entities else 0),
             "manual_non_entity_observations": int(manual_non_entity_observations[0]["count"] if manual_non_entity_observations else 0),
             "corrected_observations": int(corrected_observations[0]["count"] if corrected_observations else 0),
             "not_same_as_decisions": int(not_same_as[0]["count"] if not_same_as else 0),
+            "same_as_decisions": int(same_as[0]["count"] if same_as else 0),
         }
 
 

@@ -194,3 +194,13 @@ def test_curation_session_absolute_expiry_does_not_slide(monkeypatch, tmp_path):
     touched = store.get_curation_session(token, touch=True)
     assert touched is not None
     assert touched.expires_at == expires
+
+
+def test_security_admin_lists_internal_trust_zone_keys_without_values():
+    root = Path(__file__).resolve().parents[1]
+    admin = (root / "rag" / "admin_ui.py").read_text(encoding="utf-8")
+    template = (root / "rag" / "templates" / "admin" / "security.html").read_text(encoding="utf-8")
+    assert '"RAG_INTERNAL_API_KEY"' in admin
+    assert '"RAG_PROVIDER_INTERNAL_KEY"' in admin
+    assert "{{ item.name }}" in template
+    assert "{{ item.value }}" not in template

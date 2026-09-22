@@ -1,6 +1,6 @@
 # Privacy architecture and trust boundary
 
-**Reference:** 0.8.5-rc4.3
+**Reference:** 0.8.5-rc5
 
 The middleware deliberately separates access to the complete private corpus from
 processing of already selected evidence. Privacy is therefore not defined as
@@ -57,6 +57,8 @@ The current 0.8.5 reference can route four LLM roles independently:
 
 Unset role settings inherit the canonical `LLM_*` backend for compatibility. Each role can override backend, URL, model, API key, TLS verification
 and trust scope through `<ROLE>_LLM_*` variables.
+
+The `evidence` role remains available even though the **Evidence Control** stage is disabled by default. `config.yaml: evidence_control.mode` is `"off"` in the reference configuration; `review` opt-in runs the evidence model only after live ACL and Candidate Verification. The Candidate Verifier is a separate stage and is unaffected by this switch. `EVIDENCE_DECISION_MODE` is a legacy fallback for installations whose preserved configuration predates the YAML setting.
 
 A practical `private-retrieval` deployment keeps embedding, Qdrant, reranking
 and ACL local while using a capable remote model for verifier/evidence/answer.
@@ -149,6 +151,8 @@ CanonicalUser -> ResearchRun -> ResearchFinding -> Document
 The ResearchRun retains the user/query/runtime provenance. Before Findings evidence is shown in RAG Admin or self-service curation, the supporting Document is re-authorized through the selected/current user's live Nextcloud credential. RAG Admin is a trusted operator surface: its administrator can choose another configured canonical-user context and is therefore not isolated by the administrator's own Nextcloud ACL. Self-service curation is separately gated and currently exposes only the authenticated user's own ResearchRuns.
 
 Shared curation remains intentional organization-level retrieval knowledge. A decision made by one authorized curator can be reused when another authorized user later reaches the same Finding, but it never grants access to the supporting document.
+
+RC5 additionally treats a successful Finding live-ACL denial as a narrow lifecycle signal for **uncurated user provenance**. In RAG Admin and self-service curation, a definitively denied numeric Nextcloud file can cause that user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge to be removed. The shared Finding is garbage-collected only if it remains uncurated and no user ResearchRun references it. Curated Findings and their document-grounded observations/claims remain stored and continue to rely on live ACL for per-user evidence visibility. Operational ACL failures or ambiguous/non-Nextcloud identifiers never trigger deletion.
 
 ## Data protection and lifecycle
 

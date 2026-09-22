@@ -118,6 +118,8 @@ Self-service authentication uses Nextcloud Login Flow v2 once per curation sessi
 
 The default absolute session lifetime is two hours. `session_max_seconds` is configurable; request activity does not extend it. Every request re-checks expiry, canonical-user enablement and the per-user curation permission.
 
+RAG Admin and self-service curation also use the live-ACL check as a **lazy cleanup point** for stale uncurated Finding provenance. After a successful ACL request definitively denies a numeric Nextcloud `files:<id>`, AKI removes only the selected/current canonical user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge for Findings that have never been curated. A shared uncurated Finding is deleted only when no ResearchRun for any user still references it. Curated Findings are retained. ACL/backend/TLS/network/credential errors never trigger this cleanup.
+
 At logout/expiry the session is invalidated locally before Nextcloud app-password revocation is attempted. Failed revocations stay `revocation_pending` and cannot authorize requests. On every API start all surviving temporary curation sessions are invalidated and their app passwords are submitted for revocation again.
 
 The self-service cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and scoped to `/curation/`. State-changing operations additionally carry a server-side session-bound CSRF token.
@@ -305,6 +307,24 @@ Missing credential, disabled source or an empty address book is a no-op rather t
 a stack failure. The Admin UI starts synchronization as a background job and shows a progress page with processed/total, written, repaired, removed and error counts. **Adressbücher ermitteln** shows both CardDAV display names and technical slugs. Full successful scans reconcile source deletions; limited/dry-run/failed scans never delete unseen contacts. `NEXTCLOUD_USERNAME` /
 `NEXTCLOUD_APP_PASSWORD` remains a legacy single-user compatibility path only.
 
+
+### Global identity curation vs. source provenance
+
+Contact records remain source-specific (`cloud_id`, `source_user_id`, address book and import-run provenance), while Entity identity decisions are shared Graph-Lite curation. The **Identitäts-Kandidaten** page therefore defaults to the global queue but also offers an optional canonical-user context to keep large multi-user installations manageable. That filter selects candidates whose CardDAV provenance includes the chosen Nextcloud login and shows the relevant user/address-book sources; it is an administrative work-queue filter, not an ACL or tenant-isolation boundary.
+
+Open `POSSIBLE_SAME_AS` rows are grouped by the transitive active `SAME_AS` component on each side. If A and C have already been confirmed as `SAME_AS`, candidate edges A↔B and C↔B appear as one identity-group candidate rather than two redundant decisions.
+
+RC5 distinguishes four identity relationships:
+
+- `POSSIBLE_SAME_AS`: machine-generated review candidate only;
+- `SAME_AS`: curator-confirmed equivalence. Both Entities remain active with their own ContactRecords, names and source lifecycle; query/entity resolution may use forms from the equivalence component;
+- `NOT_SAME_AS`: persisted negative decision so the pair is not re-suggested;
+- `MERGED_INTO`: explicit stronger consolidation. One Entity becomes a tombstone and evidence/identity references are redirected to the chosen survivor.
+
+The normal candidate queue offers **Identisch** (non-destructive `SAME_AS`) and **Verschieden**. A technical merge remains a separate operation in Entity details and should be used only when two AKI identity nodes are themselves redundant, not merely because two independent users/address books contain records for the same real person or organization.
+
+This global Entity curation is separate from **Research Findings** curation. The `research_findings.curation.admin_user_context` and `user_self_service` switches govern Finding/ResearchRun review and its live-ACL user context; they do not turn the global Entity/alias/identity layer into a per-user graph. End-user self-service for `SAME_AS` / `NOT_SAME_AS` is not exposed in RC5: a future user-facing implementation must filter provenance so it cannot reveal that a contact exists only in another user's private address book.
+
 ## 6. Elasticsearch credentials
 
 `config.yaml` contains the username and secret reference only:
@@ -436,8 +456,29 @@ The resulting candidate lists are fused, deduplicated and optionally reranked.
 Live Nextcloud ACL then removes unauthorized candidates. No lower-ranked
 candidates are adaptively fetched/backfilled after an ACL denial. This means a
 narrowly authorized user may receive fewer results even when an authorized
-candidate existed just below the final ranking window. A fixed pre-rerank ACL
-pool is a possible future optimization; it is not the current path. The optional Candidate Verifier
+candidate existed just below the final ranking window.
+
+RC5 adds an optional pre-rerank ACL-metadata prefilter. Existing installations preserve their `config.yaml` on installer reruns, so this and other newly introduced optional keys are **not auto-merged** into an older configuration; add them manually when the feature is wanted:
+
+```yaml
+acl:
+  enabled: true
+  prefilter:
+    enabled: false
+```
+
+When enabled, v1 resolves the authenticated user's actual Nextcloud UID and
+current group IDs server-side through the OCS current-user endpoint using the stored
+Nextcloud app credential. It matches that UID against `owner` / `users` and the
+server-derived group IDs against `groups` in Elasticsearch and Qdrant. Prefiltering
+therefore does not depend on AKI Recherche or another frontend supplying group
+headers. If the OCS identity lookup is unavailable or malformed, only the metadata
+prefilter is skipped for that request and retrieval falls back to the established
+unfiltered path; final live WebDAV ACL still applies. Circles are intentionally not
+evaluated in v1; keep the feature disabled where Circle-only shares are relevant.
+
+The prefilter is a recall/performance optimization only. Final live WebDAV ACL
+remains mandatory and is the sole document-authorization boundary. The optional Candidate Verifier
 checks only the administrator-controlled authorized-candidate window. For a
 requested document type the document itself must be of that type; a bank
 statement that merely mentions an invoice is not an invoice match.
@@ -602,7 +643,7 @@ retrieval arm. A super-light system can therefore use Neo4j aliases and AKI
 research findings while `retrieval_policy.internal.graph: disabled` and
 `graph_retrieval.enabled: false`.
 
-## AKI Recherche 0.2.4
+## AKI Recherche 0.2.6
 
 The Nextcloud client is under `clients/nextcloud/akirag`. It is intentionally a
 thin search frontend: Nextcloud session → server-side proxy → OpenAI-compatible
@@ -610,7 +651,13 @@ provider. It sends the current Nextcloud UID as `X-RAG-User-ID`; the provider ke
 never reaches browser JavaScript.
 
 AKI Recherche renders a safe Markdown subset without raw HTML and adds per-user-message
-controls:
+controls. Saved conversations are written as readable `.md` files in the user's visible
+`AKI-Chats/` folder; the machine state remains in hidden `.<chat-id>.akirag.json`
+sidecars. New/updated Markdown archives persist `source_origin=chat_archive` plus the
+stable Nextcloud `files:<id>` and register that origin immediately through the trusted
+provider/API path; the existing path classifier remains a recovery fallback.
+
+It adds per-user-message controls:
 
 - **Erneut senden**: rerun exactly that question from that conversation point.
 - **Bearbeiten & erneut senden**: load the question into the composer, edit it,

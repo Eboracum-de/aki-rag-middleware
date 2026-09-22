@@ -13,7 +13,7 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc4.3` — current release-candidate baseline. RC4.3 hardens the internal API trust boundary with a dedicated machine credential between the provider/trusted reverse proxy and FastAPI, closes direct access to Graph/planner/retrieval/Login-Flow routes, and includes the installer/rerun fixes found during rc9→rc4.x field testing. Blank-VM acceptance has been completed for both supported deployment mappings: Standard/native and Super-Light/dockerized; see `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.5-rc5` — current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline. RC5 adds conservative ACL-aware prefiltering, maintenance/backup/restore, follow-up evidence continuity, identity/Findings lifecycle hardening and Markdown chat archives while retaining live Nextcloud ACL as the final document-authorization boundary. See `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
 
 ## Why this project exists
 
@@ -140,7 +140,7 @@ sudo ./install/install.sh \
   --plan
 ```
 
-Then install with the same arguments, removing `--plan` and adding the components you want. For an internal PKI, use repeatable `--ca-certificate FILE` arguments rather than disabling TLS verification.
+Then install with the same arguments, removing `--plan` and adding the components you want. For an internal PKI, use repeatable `--ca-certificate FILE` arguments rather than disabling TLS verification. Fresh installs and installer reruns enter an explicit **maintenance mode** first: the OpenAI-compatible provider remains reachable and authenticates trusted client keys, but returns a maintenance message without loading the normal RAG/LLM pipeline. After configuration and checks, use `sudo /opt/nextcloud-rag/install/maintenance-mode.sh off` to start normal operation.
 
 Detailed installation and acceptance steps are in `install/INSTALL.md` and `docs/BETA-OPERATIONS.md`.
 
@@ -186,10 +186,12 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/ROADMAP.md` — explicitly deferred RC5 / 0.8.6 work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
+- `RELEASE-NOTES-0.8.5-rc5.md` — current release-candidate notes
+- `CHANGELOG.md` — detailed development/change history
 - `CONTRIBUTING.md` — contribution and licensing policy
 - `CLA.md` / `docs/CLA-PROCESS.md` — contributor rights without copyright assignment
 - `CODE_OF_CONDUCT.md` — community conduct expectations
-- `RELEASE-NOTES-0.8.5-rc4.3.md` — current release-candidate notes
+- `RELEASE-NOTES-0.8.5-rc4.3.md` — preceding accepted/public release-candidate notes
 - `RELEASE-NOTES-0.8.5-rc4.2.md` — previous hotfix release notes
 - `RELEASE-NOTES-0.8.5-rc4.1.md` — previous hotfix release notes
 - `RELEASE-NOTES-0.8.5-rc4.md` — previous release-candidate notes
