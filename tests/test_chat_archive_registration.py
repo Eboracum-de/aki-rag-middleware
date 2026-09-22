@@ -4,8 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from rag import api
-from rag.acl import AclDecision
-
 
 def _request(user_id: str | None):
     headers = {}
@@ -32,10 +30,10 @@ def test_chat_archive_registration_denied_by_live_acl_never_writes_registry(monk
     class FakeAcl:
         enabled = True
 
-        def authorize(self, results, *, rag_user_id=None):
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
             assert rag_user_id == "alice"
-            assert results == [{"document_id": "files:42"}]
-            return AclDecision(True, [], 1, 0)
+            assert document_id == "files:42"
+            return None
 
     monkeypatch.setattr(api, "live_acl", FakeAcl())
     monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
@@ -54,9 +52,10 @@ def test_chat_archive_registration_writes_only_after_live_acl_authorization(monk
     class FakeAcl:
         enabled = True
 
-        def authorize(self, results, *, rag_user_id=None):
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
             assert rag_user_id == "alice"
-            return AclDecision(True, list(results), 1, 1)
+            assert document_id == "files:42"
+            return "AKI-Chats/2026-09-22 - Test - deadbeef.md"
 
     calls = []
 
@@ -85,6 +84,42 @@ def test_chat_archive_registration_writes_only_after_live_acl_authorization(monk
             "classification_source": "chat_archive_write",
         },
     )]
+
+
+def test_chat_archive_registration_rejects_fabricated_client_path(monkeypatch):
+    class FakeAcl:
+        enabled = True
+
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
+            return "Documents/visible.pdf"
+
+    monkeypatch.setattr(api, "live_acl", FakeAcl())
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(
+        api,
+        "register_document",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not register")),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        api.register_chat_archive_source(_body(), _request("alice"))
+    assert exc.value.status_code == 400
+
+
+def test_chat_archive_registration_rejects_path_mismatch(monkeypatch):
+    class FakeAcl:
+        enabled = True
+
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
+            return "AKI-Chats/server-derived.md"
+
+    monkeypatch.setattr(api, "live_acl", FakeAcl())
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+
+    with pytest.raises(HTTPException) as exc:
+        api.register_chat_archive_source(_body(), _request("alice"))
+    assert exc.value.status_code == 400
+    assert "does not match Nextcloud" in str(exc.value.detail)
 
 
 def test_chat_archive_registration_route_uses_user_zone():
