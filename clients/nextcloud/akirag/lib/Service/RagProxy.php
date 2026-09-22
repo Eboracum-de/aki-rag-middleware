@@ -152,8 +152,8 @@ class RagProxy {
                     'document_id' => $documentId,
                     'path' => $path,
                 ]),
-                'timeout' => 20,
-                'connect_timeout' => 10,
+                'timeout' => 3,
+                'connect_timeout' => 2,
             ]);
             $status = (int)$response->getStatusCode();
             return $status >= 200 && $status < 300;
