@@ -49,8 +49,30 @@ class ChatStore {
         return '.' . $id . '.akirag.json';
     }
 
-    private function htmlName($id) {
+    private function legacyHtmlName($id) {
         return $id . '.html';
+    }
+
+    private function cleanArchiveTitle($title) {
+        $value = preg_replace('/[\\x00-\\x1F\\x7F\\/\\\\:*?"<>|#%]+/u', ' ', (string)$title);
+        $value = preg_replace('/\\s+/u', ' ', trim((string)$value));
+        if ($value === '') {
+            $value = 'Recherche';
+        }
+        if (function_exists('mb_substr')) {
+            return mb_substr($value, 0, 48);
+        }
+        return substr($value, 0, 48);
+    }
+
+    private function markdownName($record) {
+        $date = substr((string)($record['created_at'] ?? ''), 0, 10);
+        if (!preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $date)) {
+            $date = gmdate('Y-m-d');
+        }
+        $title = $this->cleanArchiveTitle($record['title'] ?? 'Recherche');
+        $shortId = substr((string)$record['id'], 0, 8);
+        return $date . ' - ' . $title . ' - ' . $shortId . '.md';
     }
 
     private function writeFile($folder, $name, $content) {
@@ -60,6 +82,7 @@ class ChatStore {
             $file = $folder->newFile($name);
         }
         $file->putContent((string)$content);
+        return $file;
     }
 
     private function normalizeScopes($scopes) {
@@ -101,6 +124,12 @@ class ChatStore {
                     // Ignore malformed client timestamps; older chats have none.
                 }
             }
+            if ($role === 'assistant' && isset($message['source_scopes'])) {
+                $sourceScopes = $this->normalizeScopes($message['source_scopes']);
+                if ($sourceScopes) {
+                    $item['source_scopes'] = $sourceScopes;
+                }
+            }
             if ($role === 'assistant' && isset($message['sources']) && is_array($message['sources'])) {
                 $sources = [];
                 foreach ($message['sources'] as $source) {
@@ -137,27 +166,65 @@ class ChatStore {
         return 'Neue Recherche';
     }
 
-    private function renderHtml($record) {
-        $title = htmlspecialchars((string)$record['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    private function renderMarkdown($record) {
+        $title = preg_replace('/\\s+/u', ' ', trim((string)($record['title'] ?? 'Recherche')));
         $parts = [
-            '<!doctype html>', '<html><head><meta charset="utf-8">',
-            '<title>' . $title . '</title></head><body>',
-            '<h1>' . $title . '</h1>',
-            '<p><small>AKI Recherche · ' . htmlspecialchars((string)$record['updated_at'], ENT_QUOTES, 'UTF-8') . '</small></p>'
+            '# ' . $title,
+            '',
+            '**AKI Recherche**',
+            '',
+            '- Erstellt: ' . (string)($record['created_at'] ?? ''),
+            '- Aktualisiert: ' . (string)($record['updated_at'] ?? ''),
+            '- Chat-ID: ' . (string)($record['id'] ?? ''),
+            '',
+        ];
+        $scopeLabels = [
+            'documents' => 'Dokumente',
+            'mailarchive' => 'Mailarchiv',
+            'webarchive' => 'Webarchiv',
+            'chatarchive' => 'Chatarchiv',
+            'web' => 'Web',
         ];
         foreach ($record['messages'] as $message) {
             $role = ($message['role'] ?? '') === 'user' ? 'Benutzer' : 'AKI';
+            $parts[] = '## ' . $role;
+            $parts[] = '';
+
+            $meta = [];
             $stamp = isset($message['created_at']) ? trim((string)$message['created_at']) : '';
-            $heading = '<section><h2>' . $role . '</h2>';
             if ($stamp !== '') {
-                $heading .= '<p><small>' . htmlspecialchars($stamp, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</small></p>';
+                $meta[] = $stamp;
             }
-            $parts[] = $heading . '<pre>' .
-                htmlspecialchars((string)($message['content'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') .
-                '</pre></section>';
+            $messageScopes = $this->normalizeScopes($message['source_scopes'] ?? []);
+            if ($messageScopes) {
+                $labels = array_map(function ($scope) use ($scopeLabels) {
+                    return $scopeLabels[$scope] ?? $scope;
+                }, $messageScopes);
+                $meta[] = 'Quellen: ' . implode(', ', $labels);
+            }
+            if ($meta) {
+                $parts[] = '*' . implode(' · ', $meta) . '*';
+                $parts[] = '';
+            }
+
+            $parts[] = (string)($message['content'] ?? '');
+            $parts[] = '';
+
+            if (!empty($message['sources']) && is_array($message['sources'])) {
+                $parts[] = '### Quellen';
+                $parts[] = '';
+                foreach ($message['sources'] as $source) {
+                    $index = (int)($source['index'] ?? 0);
+                    $reference = trim((string)($source['reference'] ?? ''));
+                    if ($reference !== '') {
+                        $prefix = $index > 0 ? '[' . $index . '] ' : '';
+                        $parts[] = '- ' . $prefix . $reference;
+                    }
+                }
+                $parts[] = '';
+            }
         }
-        $parts[] = '</body></html>';
-        return implode("\n", $parts);
+        return rtrim(implode("\n", $parts)) . "\n";
     }
 
     public function save($id, $messages, $scopes = [], $title = '') {
@@ -173,9 +240,34 @@ class ChatStore {
             'updated_at' => $now,
             'scopes' => $this->normalizeScopes($scopes),
             'messages' => $normalized,
+            'source_origin' => 'chat_archive',
+            'format' => 'markdown',
         ];
-        $this->writeFile($folder, $this->metaName($id), json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
-        $this->writeFile($folder, $this->htmlName($id), $this->renderHtml($record));
+
+        $previousArchiveFile = is_array($existing) ? trim((string)($existing['archive_file'] ?? '')) : '';
+        // Keep the readable file name stable after first creation so normal
+        // chat title edits do not replace the Nextcloud file and change fileid.
+        $archiveFile = (
+            $previousArchiveFile !== ''
+            && substr($previousArchiveFile, -3) === '.md'
+            && $folder->nodeExists($previousArchiveFile)
+        ) ? $previousArchiveFile : $this->markdownName($record);
+
+        $markdown = $this->writeFile($folder, $archiveFile, $this->renderMarkdown($record));
+        $record['archive_file'] = $archiveFile;
+        $record['archive_path'] = self::FOLDER . '/' . $archiveFile;
+        $record['document_id'] = 'files:' . (string)$markdown->getId();
+
+        $legacyHtml = $this->legacyHtmlName($id);
+        if ($folder->nodeExists($legacyHtml)) {
+            $folder->get($legacyHtml)->delete();
+        }
+
+        $this->writeFile(
+            $folder,
+            $this->metaName($id),
+            json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT)
+        );
         return $record;
     }
 
@@ -243,7 +335,12 @@ class ChatStore {
         if ($folder === null) {
             return;
         }
-        foreach ([$this->metaName($id), $this->htmlName($id)] as $name) {
+        $record = $this->load($id, false);
+        $names = [$this->metaName($id), $this->legacyHtmlName($id)];
+        if (is_array($record) && !empty($record['archive_file'])) {
+            $names[] = (string)$record['archive_file'];
+        }
+        foreach (array_unique($names) as $name) {
             if ($folder->nodeExists($name)) {
                 $folder->get($name)->delete();
             }

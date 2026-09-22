@@ -1,18 +1,61 @@
 {% extends "base.html" %}
-{% block title %}Merge-Kandidaten · RAG Admin{% endblock %}
+{% block title %}Identitäts-Kandidaten · RAG Admin{% endblock %}
 {% block content %}
-<h1>Merge-Kandidaten</h1>
-<p class="muted">String-Ähnlichkeit ist nur ein Hinweis. Jede Entscheidung bleibt manuell.</p>
-{% if not candidates %}<div class="alert success">Keine offenen Merge-Kandidaten.</div>{% endif %}
+<h1>Identitäts-Kandidaten</h1>
+<p class="muted">String-Ähnlichkeit ist nur ein Hinweis. <strong>Identisch</strong> speichert eine nicht-destruktive SAME_AS-Verknüpfung: beide Entities und ihre Quellen bleiben eigenständig. Bereits bestätigte SAME_AS-Entities werden hier als eine Identitätsgruppe behandelt. <strong>Verschieden</strong> speichert NOT_SAME_AS. Ein technischer Merge mit Survivor bleibt eine separate, stärkere Aktion in den Entity-Details.</p>
+
+<form method="get" action="{{ request.app.url_path_for('admin_candidates') }}" class="filter-form">
+  <label for="candidate-user">Nutzerkontext</label>
+  <select id="candidate-user" name="canonical_user_id">
+    <option value="">Alle Benutzer</option>
+    {% for user in candidate_users %}
+    <option value="{{ user.canonical_user_id }}" {{ 'selected' if canonical_user_id == user.canonical_user_id else '' }}>{{ user.nextcloud_login }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="secondary">Filtern</button>
+</form>
+
+{% if not candidates %}<div class="alert success">Keine offenen Identitäts-Kandidaten im gewählten Kontext.</div>{% endif %}
 {% for c in candidates %}
 <div class="candidate">
-  <div class="candidate-side"><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=c.left_entity_id) }}"><strong>{{ c.left_name }}</strong></a><div class="mono smalltext">{{ c.left_entity_id }}</div><div class="muted">{{ c.matched_left_form or '' }}</div></div>
+  <div class="candidate-side">
+    <a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=c.left_entity_id) }}"><strong>{{ c.left_name }}</strong></a>
+    {% if c.left_component_ids|length > 1 %}
+    <div class="muted">Identitätsgruppe: {{ c.left_component_names|join(' · ') }}</div>
+    {% endif %}
+    <div class="mono smalltext">{{ c.left_entity_id }}</div>
+    <div class="muted">{{ c.matched_left_form or '' }}</div>
+    {% if c.left_sources %}
+    <div class="smalltext">
+      {% for source in c.left_sources %}
+      <div>{{ source.source_user_id or '—' }} · {{ source.addressbook_name or source.addressbook_slug or 'Adressbuch' }}</div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="muted smalltext">Keine CardDAV-Provenienz</div>
+    {% endif %}
+  </div>
   <div class="candidate-score"><strong>{{ '%.3f'|format(c.score or 0) }}</strong><div class="muted">{{ c.reason or '' }}</div></div>
-  <div class="candidate-side"><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=c.right_entity_id) }}"><strong>{{ c.right_name }}</strong></a><div class="mono smalltext">{{ c.right_entity_id }}</div><div class="muted">{{ c.matched_right_form or '' }}</div></div>
+  <div class="candidate-side">
+    <a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=c.right_entity_id) }}"><strong>{{ c.right_name }}</strong></a>
+    {% if c.right_component_ids|length > 1 %}
+    <div class="muted">Identitätsgruppe: {{ c.right_component_names|join(' · ') }}</div>
+    {% endif %}
+    <div class="mono smalltext">{{ c.right_entity_id }}</div>
+    <div class="muted">{{ c.matched_right_form or '' }}</div>
+    {% if c.right_sources %}
+    <div class="smalltext">
+      {% for source in c.right_sources %}
+      <div>{{ source.source_user_id or '—' }} · {{ source.addressbook_name or source.addressbook_slug or 'Adressbuch' }}</div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="muted smalltext">Keine CardDAV-Provenienz</div>
+    {% endif %}
+  </div>
   <div class="candidate-actions">
-    <form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form"><input type="hidden" name="keep_id" value="{{ c.left_entity_id }}"><input type="hidden" name="merge_id" value="{{ c.right_entity_id }}"><input type="hidden" name="alias_policy" value="contextual"><input type="hidden" name="cancel_url" value="{{ request.app.url_path_for('admin_candidates') }}"><button>A behalten …</button></form>
-    <form method="post" action="{{ request.app.url_path_for('admin_merge') }}" class="inline-form"><input type="hidden" name="keep_id" value="{{ c.right_entity_id }}"><input type="hidden" name="merge_id" value="{{ c.left_entity_id }}"><input type="hidden" name="alias_policy" value="contextual"><input type="hidden" name="cancel_url" value="{{ request.app.url_path_for('admin_candidates') }}"><button>B behalten …</button></form>
-    <form method="post" action="{{ request.app.url_path_for('admin_candidate_reject') }}" class="inline-form"><input type="hidden" name="left_id" value="{{ c.left_entity_id }}"><input type="hidden" name="right_id" value="{{ c.right_entity_id }}"><input type="hidden" name="reason" value="manual_rejection"><button class="secondary">Verschieden …</button></form>
+    <form method="post" action="{{ request.app.url_path_for('admin_candidate_same') }}" class="inline-form"><input type="hidden" name="left_id" value="{{ c.left_entity_id }}"><input type="hidden" name="right_id" value="{{ c.right_entity_id }}"><input type="hidden" name="reason" value="manual_identity_confirmation"><input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}"><button>Identisch …</button></form>
+    <form method="post" action="{{ request.app.url_path_for('admin_candidate_reject') }}" class="inline-form"><input type="hidden" name="left_id" value="{{ c.left_entity_id }}"><input type="hidden" name="right_id" value="{{ c.right_entity_id }}"><input type="hidden" name="reason" value="manual_rejection"><input type="hidden" name="canonical_user_id" value="{{ canonical_user_id }}"><button class="secondary">Verschieden …</button></form>
   </div>
 </div>
 {% endfor %}

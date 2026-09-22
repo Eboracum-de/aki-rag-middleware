@@ -1,6 +1,6 @@
 # Beta operations runbook
 
-**Reference:** `0.8.5-rc4.3`  
+**Reference:** `0.8.5-rc5`  
 **Target:** controlled beta deployment behind an administrator-managed network boundary
 
 This document is the short operational path for the current beta candidate. For
@@ -102,18 +102,25 @@ URLs, CA files or optional component switches from memory.
 
 Before a rerun, review the stored command and run the equivalent command with `--plan`
 first. The Super-Light installer performs an early preflight for required source paths,
-the installation prefix, CA files and Docker availability. If an existing stack is
-detected it reports running services; stopped application containers are warned about,
-not rejected, because a rerun may legitimately be used to repair/rebuild them. Missing
-input files or an unreachable installed Docker daemon fail before the source tree is
+the installation prefix, CA files and Docker availability. If an existing stack is detected, the preflight inspects its Compose services. **Any
+running AKI RAG service is a hard preflight error** and no installation changes are made;
+stop the complete Super-Light Compose stack before a rerun. A recognized installation
+whose stack is fully stopped is allowed through the repair/rerun path. Missing input
+files or an unreachable installed Docker daemon also fail before the source tree is
 replaced.
+
+A rerun preserves the site's existing `config.yaml`; it does **not** merge newly introduced optional configuration keys into that file automatically. After updating to a newer RC, compare the shipped reference configuration/changelog and add desired new options manually. For RC5 this includes, for example, `acl.prefilter.enabled` (off by default when absent/preserved).
 
 ## 3. First post-install configuration
 
-The installer prints the RAG Admin credential and provider API key and records the
-local runtime values in `/opt/nextcloud-rag/runtime.env`. Treat that file as a
-secret. Configure the actual LLM and optional Web Search credentials before user
-acceptance.
+The installer prints the RAG Admin credential and provider API key and records the local runtime values in `/opt/nextcloud-rag/runtime.env`. Treat that file as a secret. Fresh installs and reruns enter maintenance mode: the provider authenticates trusted client keys but returns only the maintenance response, while normal API/background workers remain stopped. Configure the actual LLM and optional Web Search credentials before user acceptance, then leave maintenance mode with:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+```
+
+Use `maintenance-mode.sh on` again before key rotation, restore work or comparable maintenance.
 
 Useful Super-Light commands:
 
@@ -129,7 +136,47 @@ docker-compose logs -f mail-worker
 Do not edit credential rows in `runtime/users.sqlite` with ad-hoc SQL. Use the
 Admin UI or supplied CLIs.
 
-## 4. AKI Recherche 0.2.4
+### 3.1 Backup and restore
+
+RC5 provides the console-first recovery tool `install/backup-restore.sh`. Create and restore operations require AKI maintenance mode; `verify` is read-only. Use a backup target **outside** the installation prefix:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/backup-restore.sh create /srv/aki-backups
+```
+
+`create` writes a timestamped directory such as `aki-rag-backup-20260922-123702Z` and verifies it before publishing it. The recovery set contains AKI-owned configuration/runtime state, SQLite state including `runtime/users.sqlite`, the matching credential master key, private CA/TLS/operator state below the installation prefix and bundled Neo4j when selected. It deliberately does not back up Nextcloud, Elasticsearch, rebuildable Qdrant, external Neo4j, OpenWebUI/Playwright state or model caches.
+
+Treat the recovery directory as a secret: it contains service credentials and the credential master key. Store it with restrictive permissions and, where appropriate, encrypted/off-host.
+
+Verify an existing recovery set independently with:
+
+```bash
+sudo /opt/nextcloud-rag/install/backup-restore.sh verify \
+  /srv/aki-backups/aki-rag-backup-YYYYMMDD-HHMMSSZ
+```
+
+Restore only after verifying the selected set and while maintenance mode is active:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
+sudo /opt/nextcloud-rag/install/backup-restore.sh restore \
+  /srv/aki-backups/aki-rag-backup-YYYYMMDD-HHMMSSZ --yes
+```
+
+Restore is intentionally conservative: the supported deployment profile/mode and installation prefix must match the recovery set. Existing SQLite main/WAL/SHM state covered by the set is replaced coherently; bundled Neo4j is restored when included. A successful restore **leaves AKI in maintenance mode**. Run smoke/health/live-ACL checks and at least one authenticated document query before returning to normal service:
+
+```bash
+sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+```
+
+The RC5 Super-Light acceptance test exercised a real `users.sqlite` loss: the provider failed closed with an invalid-client 401, then the verified restore recovered the registered provider-client/user credential state and normal authenticated requests. The same recovery set included the bundled Neo4j snapshot/restore step.
+
+On Super-Light, a warning that `/app/runtime/ca/...` is an external `ca_file` can currently be path-normalization noise: `runtime/ca/` is explicitly included in the recovery set. Confirm the expected CA file is present in `files.tar`; genuinely external CA paths remain operator-owned dependencies.
+
+For cross-system recovery order, key/master-key pairing and deletion/lifecycle scope, see `DATA-LIFECYCLE.md`.
+
+## 4. AKI Recherche 0.2.6
 
 AKI is the preferred slim Nextcloud UI for this beta. It targets Nextcloud 23+.
 Install the `akirag` app in Nextcloud, enable it, then configure **Middleware URL**
@@ -231,16 +278,18 @@ different ACLs.
 3. User 1 completes Login Flow and can query an authorized document.
 4. User 2 cannot receive evidence for a document they cannot access.
 5. Kontakt-DB sync succeeds for one user; Neo4j shows ContactRecords/provenance.
-6. A normal document question works with the Super-Light 10-candidate verifier window.
-7. A Web Research run archives a source as desktop/Landscape PDF plus hidden metadata.
-8. Stop Elasticsearch temporarily and verify the friendly unavailable response.
-9. Restore Elasticsearch and verify retrieval recovers without state repair.
-10. Verify that `/health` reports `live_acl.enabled=true` on a shared beta instance.
-11. If shared alias/Graph-Lite is enabled, verify that User 2 may benefit from a curated alias without receiving the protected source document as evidence.
-12. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
-13. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
+6. Review one identity candidate: **Identisch** must create non-destructive `SAME_AS` with both Entities still active; **Verschieden** must create `NOT_SAME_AS`. Use technical merge separately only for a true redundant AKI Entity.
+7. With two files that have the same valid extracted-content hash, verify they consume one duplicate group while live ACL still checks both file IDs and can promote the authorized copy if the ranked representative is denied.
+8. A normal document question works with the Super-Light 10-candidate verifier window.
+9. A Web Research run archives a source as desktop/Landscape PDF plus hidden metadata.
+10. Stop Elasticsearch temporarily and verify the friendly unavailable response.
+11. Restore Elasticsearch and verify retrieval recovers without state repair.
+12. Verify that `/health` reports `live_acl.enabled=true` on a shared beta instance.
+13. If shared alias/Graph-Lite is enabled, verify that User 2 may benefit from a curated alias without receiving the protected source document as evidence.
+14. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
+15. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
 
-The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and RAG Admin checks with Playwright active by default. Standard/native passed installation, document search and RAG Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout.
+The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and RAG Admin checks with Playwright active by default. Standard/native passed installation, document search and RAG Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout. RC5 incremental field acceptance additionally covers the ACL prefilter/two-user unspecific behavior, Markdown chat continuation and the Super-Light backup/restore roundtrip described above.
 
 ## 9. Resource reference
 
@@ -260,7 +309,7 @@ will be used. Nextcloud, Elasticsearch and the LLM are external in this figure.
 
 ## 10. Beta freeze
 
-0.8.5-rc4.3 is the consolidated deployment/operations baseline for the current release candidate.
+0.8.5-rc5 is the current deployment/operations release-candidate baseline; 0.8.5-rc4.3 remains the preceding accepted/public baseline.
 Expected follow-up work before broader feature expansion is security/curation
 hardening, documentation consistency and adversarial code-vs-docs tests (ACL,
 aliases, Findings, archive boundaries and untrusted content). A change that alters

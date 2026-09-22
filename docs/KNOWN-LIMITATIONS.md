@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc4.3`
+**Reference:** `0.8.5-rc5`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
@@ -9,14 +9,18 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 - Only `standard + native` and `super-light + dockerized` are supported/tested
   deployment mappings in 0.8.5.
-- Installer/rerun preflight now validates the install source, non-empty install
+- Installer/rerun preflight validates the install source, non-empty install
   prefix, CA files and Docker availability before destructive refresh steps, and
-  refuses a running existing AKI stack. It still cannot prove that external
-  Nextcloud/Elasticsearch/model endpoints will remain reachable after install;
-  use the smoke/acceptance checks and archive the generated
-  `install/last-install-command.sh` for reproducible reruns.
+  refuses a running existing AKI stack. Explicitly supplied Nextcloud and
+  Elasticsearch URLs receive a best-effort, non-fatal host-`curl` reachability/TLS
+  probe after prerequisites are available. This is an early typo/connectivity
+  diagnostic only and cannot prove that an authenticated endpoint, model backend
+  or later runtime path will remain usable; use the smoke/acceptance checks and
+  archive the generated `install/last-install-command.sh` for reproducible reruns.
 - Super-Light intentionally relies on external Nextcloud, Elasticsearch and LLM
   services. Their availability and backup are outside the local Compose stack.
+- Super-Light still supplies several global service secrets through Compose environment files. A non-root account that can operate the Docker daemon/Compose stack can therefore render or inspect those values (for example with `docker-compose config`). Treat Docker-daemon access as privileged/root-equivalent, do not share full rendered Compose output, and restrict membership/access accordingly. Moving routine service-secret delivery to Docker secrets or file-mounted credentials is deferred hardening rather than an RC5 release blocker.
+- The RC5 backup inventory may report a configured Super-Light CA path such as `/app/runtime/ca/nextcloud-ca-bundle.pem` as an external `ca_file`, because the configuration uses the container path while inventory runs against the host installation prefix. `runtime/ca/` is nevertheless an explicit recovery-set member and is verified with the archive. Treat this specific `/app/runtime/ca/...` warning as path-normalization noise after confirming the file is present in `files.tar`; other genuinely external CA paths remain operator-owned dependencies.
 - Bundled nginx and OpenWebUI are opt-in in Super-Light. AKI Recherche is the
   reference user UI for the current beta.
 - The locally built Playwright renderer pins Playwright/Python package versions and the
@@ -43,12 +47,17 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Super-Light has no local reranker. Deduplication is independent and remains
   active, but Elasticsearch ranking plus verifier behavior can still be less
   precise than a well-tuned reranked standard deployment on difficult corpora.
-- Exact duplicate grouping in the retrieval path currently relies on path/format
-  variants and normalized retrieved text. Nextcloud FullTextSearch's per-document
-  `hash` (MD5 of extracted FullTextSearch content, not a raw-file byte hash) is
-  already available to synchronization code but is not yet the primary cross-file
-  duplicate key during retrieval. Using it ACL-safely across distinct Nextcloud
-  file IDs is planned for RC5; see `ROADMAP.md`.
+- Exact duplicate grouping can use Nextcloud FullTextSearch's valid 32-hex
+  `hash` (MD5 of extracted FullTextSearch content, not a raw-file byte hash) as
+  the primary exact-content signal. Distinct Nextcloud file IDs remain separate ACL
+  variants; an authorized identical copy may be promoted when the ranked variant is
+  denied. Near-text/OCR and same-stem format variants remain secondary signals.
+- Conversational reference resolution is LLM-based and language-neutral rather than
+  gated by a German keyword list. When prior chat is actually required, up to three
+  documents from the immediately preceding answer context are re-resolved through
+  the current user's live ACL and current source-scope policy before joining the
+  normal verifier pool. This is short-lived turn continuity, not persistent entity
+  memory; structured conversation entity state remains a later enhancement.
 - Query rewriting is intentionally conservative. The model emits a small SearchSpec with a Nextcloud-compatible `elastic_query` and a natural
   `semantic_query`; it never emits raw Elasticsearch JSON DSL. Grammatical normalization is allowed,
   but factual synonyms must not be invented and explicit names/identifiers/years must
@@ -60,9 +69,10 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   then live ACL. A fixed bounded pre-rerank ACL pool is a possible future
   optimization, but "keep fetching until N authorized results exist" is not part of
   the design because it creates variable work and another inference/timing surface.
-  RC5 is expected to evaluate a separately configurable, bounded ACL metadata
-  **prefilter** for Elasticsearch/Qdrant (including owner/users/groups/circles)
-  while retaining the live WebDAV check as the final authorization boundary.
+- The optional RC5 ACL metadata prefilter evaluates owner/direct-user/group
+  metadata. Nextcloud Circles are not considered in this first version; Circle
+  support may be added in a later update. Leave the prefilter disabled where
+  Circle-only shares must remain discoverable.
 - Shared Neo4j names/aliases can influence retrieval across users by design. They are
   retrieval knowledge, not answer evidence. The current search API still exposes
   fairly rich entity-resolution diagnostics (matched forms/candidates/search forms);
@@ -86,7 +96,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## AKI Recherche
 
-- AKI 0.2.4 targets Nextcloud 23+. Saved chats live in the user-owned `AKI-Chats/` Nextcloud folder. They are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
+- AKI 0.2.6 targets Nextcloud 23+. Saved chats live as readable Markdown in the user-owned visible `AKI-Chats/` Nextcloud folder, with hidden `.akirag.json` sidecars for machine state. Chats last written by older app versions remain HTML until that conversation is saved or renamed again. Chat archives are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
 - The app is deliberately thin. Advanced provider diagnostics and administration
   remain in RAG Admin rather than being duplicated in AKI.
 
@@ -125,14 +135,17 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 - There is no unified cross-store `purge-document` / data-subject workflow that
   proves deletion across Elasticsearch, Qdrant, Neo4j, optional RetrievalRecords
-  and retained archive derivatives. Live ACL prevents unauthorized answer evidence;
-  it is not a physical-deletion mechanism. See `DATA-LIFECYCLE.md`.
-- Backup/restore is not orchestrated across Nextcloud, users.sqlite/master key,
-  Neo4j and optional Qdrant. Manual Graph/Findings curation makes Neo4j non-disposable
-  once operators rely on that work. Master-key rotation also lacks a dedicated
-  documented zero-downtime command.
-- `/health` reports whether live ACL is enabled, but the human-facing status/admin
-  surfaces do not yet display a prominent warning banner when ACL is disabled.
+  and retained archive derivatives. RC5 does perform lazy Neo4j self-cleanup when
+  a successful live-ACL check definitively denies a user's numeric Nextcloud file:
+  only that user's provenance edges for still-uncurated ResearchFindings are
+  removed, and globally orphaned uncurated Findings are garbage-collected.
+  Curated Findings are preserved, and ACL/backend/credential errors never trigger
+  deletion. See `DATA-LIFECYCLE.md`.
+- The RC5 console recovery workflow covers AKI-owned configuration, SQLite,
+  credential/master-key state and bundled Neo4j. It does not back up Nextcloud,
+  Elasticsearch, Qdrant, external Neo4j, OpenWebUI/Playwright state or model
+  caches. Restore currently requires the same supported deployment profile/mode
+  and installation prefix. Master-key rotation remains a separate follow-up.
 - Global service secrets such as provider/backend API keys still live in protected
   environment files rather than a dedicated external secret manager.
 - The measured 4 GiB Super-Light success point is not a hard upper bound. Chromium
@@ -156,6 +169,15 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## Identity administration
 
+- Open identity candidates are grouped by transitive active `SAME_AS` component,
+  so several source-specific ContactRecords for one confirmed identity do not
+  create a combinatorial review queue. RAG Admin can filter the queue by canonical
+  Nextcloud user and shows CardDAV user/address-book provenance for both sides.
+  The filter is an administrative work-queue view, not an ACL boundary.
+- End-user `/curation/` currently covers Research Findings only. Self-service
+  `SAME_AS` / `NOT_SAME_AS` identity decisions are not yet exposed because a
+  user-facing implementation must avoid revealing ContactRecords that exist only
+  in another user's private address book.
 - Nextcloud Login Flow must be completed by the actual target user. Nextcloud impersonation/"Nachahmen" does not safely pre-create another user's app password and can bind an external client identity to the impersonator's Nextcloud account. Revoke erroneous Nextcloud app passwords and remove the corresponding binding before reuse.
 - The current Admin UI does not yet expose a dedicated per-binding delete button in RAG Admin.
 

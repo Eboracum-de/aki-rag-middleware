@@ -372,7 +372,7 @@ def test_super_light_runtime_env_repairs_buggy_literal_newline_upgrade_state():
     assert "repair_legacy_runtime_env_newline_bug" in installer
     assert "RAG_PROVIDER_INTERNAL_KEY" in installer
     assert "gsub(/\\\\nRAG_/, \"\\nRAG_\")" in installer
-    assert "repair_legacy_runtime_env_newline_bug\n\nNEO4J_PASSWORD=" in installer
+    assert "repair_legacy_runtime_env_newline_bug\n\n# Every install/update" in installer
 
 
 def test_super_light_runtime_env_repair_preserves_unrelated_literal_newlines():
@@ -390,3 +390,13 @@ def test_super_light_runtime_env_repair_preserves_unrelated_literal_newlines():
         "RAG_INTERNAL_API_KEY=replace-me\n"
         "OTHER_VALUE=x\\ny\n"
     )
+
+
+def test_installers_warn_on_unreachable_configured_services_without_failing_install():
+    standard = (ROOT / "install/profiles/install-standard.sh").read_text(encoding="utf-8")
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
+    for installer in (standard, super_light):
+        assert 'probe_service_url "Nextcloud" "$NEXTCLOUD_URL"' in installer
+        assert 'probe_service_url "Elasticsearch" "$ELASTICSEARCH_URL"' in installer
+        assert 'curl -sS --max-time 5 -o /dev/null "$url"' in installer
+        assert "Installation will continue; verify the configured URL/service before using AKI." in installer

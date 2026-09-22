@@ -109,6 +109,39 @@ def test_greeting_does_not_call_retrieval_or_query_rewrite(monkeypatch):
     assert response["choices"][0]["message"]["content"] == "Hallo!"
 
 
+def test_passive_source_scopes_do_not_disable_direct_gate(monkeypatch):
+    monkeypatch.setattr(provider, "_check_auth", lambda authorization: "test-client")
+
+    async def connected(user_id):
+        return {"status": "connected"}
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("passive source scopes must not force retrieval/query rewrite")
+
+    async def answer(messages, *args, **kwargs):
+        assert messages[-1]["content"] == "Hallo"
+        return "Hallo!"
+
+    monkeypatch.setattr(provider, "_ensure_nextcloud_binding", connected)
+    monkeypatch.setattr(provider, "_rewrite_query_if_needed", forbidden)
+    monkeypatch.setattr(provider, "_rag_search", forbidden)
+    monkeypatch.setattr(provider, "_ollama_complete", answer)
+    monkeypatch.setattr(provider, "_research_call", lambda *args, **kwargs: None)
+
+    body = provider.ChatCompletionRequest(
+        messages=[{"role": "user", "content": "/documents /mailarchive Hallo"}],
+        stream=False,
+    )
+    response = asyncio.run(
+        provider.chat_completions(
+            body,
+            _request({"x-openwebui-user-id": "user-1"}),
+            authorization="Bearer ignored",
+        )
+    )
+    assert response["choices"][0]["message"]["content"] == "Hallo!"
+
+
 def test_time_question_gets_runtime_context_without_retrieval(monkeypatch):
     monkeypatch.setattr(provider, "_check_auth", lambda authorization: "test-client")
 

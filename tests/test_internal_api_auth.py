@@ -228,6 +228,7 @@ def test_core_routes_declare_machine_readable_security_zones():
         ("/web/search", "POST"): "USER",
         ("/web/archive/finalize", "POST"): "USER",
         ("/query-context", "POST"): "TRUSTED_PROVIDER",
+        ("/source-origin/register-chat", "POST"): "TRUSTED_PROVIDER",
         ("/plan", "POST"): "TRUSTED_PROVIDER",
         ("/graph/stats", "GET"): "ADMIN",
         ("/graph/document", "POST"): "ADMIN",

@@ -1,6 +1,6 @@
 # Neo4j application schema
 
-This is the canonical internal reference for the Neo4j schema supported by AKI RAG Middleware 0.8.5-rc4.3. It describes the application contract derived from all Cypher access in the private development repository. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
+This is the canonical internal reference for the Neo4j schema supported by AKI RAG Middleware 0.8.5-rc5. It describes the application contract derived from all Cypher access in the private development repository. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
 
 ## Contract rules
 
@@ -64,9 +64,10 @@ Relationship properties are optional. Endpoint keys and labels provide identity;
 | `WORKS_IN` | `Person -> OrganizationalUnit` | active, source contact, updated timestamp |
 | `PART_OF` | `OrganizationalUnit -> Organization/Unit` | active, source contact, updated timestamp |
 | `SUPPLIES_ORG_UNIT` | Contact provenance for units | unit key, level, active, updated timestamp |
-| `POSSIBLE_SAME_AS` | Review-only merge candidate | score, reason, status, suggested_by, matched forms/types, carried-from-merge ID, timestamps |
-| `NOT_SAME_AS` | Persisted negative merge decision | reason, decided_by, decided_at, updated_at |
-| `MERGED_INTO` | Retired `Entity -> Entity` | method, merged_at, updated_at |
+| `POSSIBLE_SAME_AS` | Review-only identity-equivalence candidate | score, reason, status, suggested_by, matched forms/types, carried-from-merge ID, timestamps |
+| `SAME_AS` | Curator-confirmed non-destructive identity equivalence; both Entities remain active | active, reason, decided_by, decided_at, created_at, updated_at |
+| `NOT_SAME_AS` | Persisted negative identity decision | reason, decided_by, decided_at, updated_at |
+| `MERGED_INTO` | Stronger technical consolidation: retired `Entity -> survivor Entity` | method, merged_at, updated_at |
 | `TOUCHED` | `ContactImportRun -> ContactRecord` | first/last touched timestamps |
 | `HAS_ENTITY_OBSERVATION` | `Document -> EntityObservation` | extractor, updated_at |
 | `RESOLVED_TO` | `EntityObservation -> Entity` | resolved_by, merged-from ID, updated_at |

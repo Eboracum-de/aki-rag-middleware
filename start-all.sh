@@ -4,6 +4,11 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$BASE_DIR"
 
+set -a
+[[ -f provider.env ]] && source provider.env
+[[ -f runtime.env ]] && source runtime.env
+set +a
+
 # If invoked as root, drop privileges to the owner of the install tree.
 if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
   owner="$(stat -c '%U' "$BASE_DIR")"
@@ -43,6 +48,15 @@ start_one() {
     return 1
   fi
 }
+
+maintenance_mode="${RAG_MAINTENANCE_MODE:-false}"
+maintenance_mode="$(printf '%s' "$maintenance_mode" | tr '[:upper:]' '[:lower:]')"
+if [[ "$maintenance_mode" == "1" || "$maintenance_mode" == "true" || "$maintenance_mode" == "yes" || "$maintenance_mode" == "on" ]]; then
+  start_one provider start-openwebui-provider.sh
+  printf '\nMaintenance mode is enabled: API/workers are intentionally not started.\n'
+  printf 'Set RAG_MAINTENANCE_MODE=false in runtime.env, then run ./start-all.sh for normal operation.\n'
+  exit 0
+fi
 
 start_one api start-api.sh
 start_one provider start-openwebui-provider.sh

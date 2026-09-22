@@ -53,6 +53,9 @@ def check_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
     research_findings_enabled = _truthy(_get(cfg, "research_findings.enabled", False), False)
     graph_doc_enabled = neo4j_enabled and _truthy(_get(cfg, "graph_retrieval.enabled", True), True)
     deployment_mode = str(_get(cfg, "deployment.mode", "native") or "native").strip().lower()
+    evidence_control_mode = str(
+        _get(cfg, "evidence_control.mode", "off") or "off"
+    ).strip().lower()
 
     policy_modes = {
         arm: str(_get(cfg, f"retrieval_policy.internal.{arm}", default) or default).strip().lower()
@@ -69,6 +72,12 @@ def check_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
 
     if deployment_mode not in {"native", "dockerized"}:
         issues.append(ConfigIssue("error", f"unknown deployment.mode={deployment_mode!r}; allowed: native, dockerized"))
+
+    if evidence_control_mode not in {"off", "review"}:
+        issues.append(ConfigIssue(
+            "error",
+            "evidence_control.mode must be off or review",
+        ))
 
     for arm, mode in policy_modes.items():
         if mode not in {"required", "optional", "disabled"}:

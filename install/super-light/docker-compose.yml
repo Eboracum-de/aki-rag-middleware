@@ -36,13 +36,11 @@ services:
       PROVIDER_HOST: "127.0.0.1"
       PROVIDER_PORT: "8766"
       RAG_MIDDLEWARE_URL: "http://127.0.0.1:8765"
-    command: ["python", "-m", "uvicorn", "rag.openai_provider:app", "--host", "127.0.0.1", "--port", "8766"]
+    command: ["python", "-m", "rag.provider_entrypoint"]
     volumes:
       - ../../config.yaml:/app/config.yaml:ro
       - ../../web.yaml:/app/web.yaml:ro
       - ../../runtime:/app/runtime
-    depends_on:
-      - api
 
   mail-worker:
     image: aki-rag:0.8.5-rc4.3

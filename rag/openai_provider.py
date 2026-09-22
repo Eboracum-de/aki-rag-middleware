@@ -86,6 +86,7 @@ from rag.search_spec import (
     positive_lexical_terms,
     query_frame_from_search_spec,
 )
+from rag.source_origin import source_scope_allows_record
 
 
 log = get_logger("provider")
@@ -263,6 +264,9 @@ WEB_AFTER_CONTEXT_MAX_CHARS = max(2000, int(os.getenv("WEB_AFTER_CONTEXT_MAX_CHA
 WEB_AFTER_MAX_QUERIES = min(3, max(1, int(os.getenv("WEB_AFTER_MAX_QUERIES", "3"))))
 FOLLOWUP_HISTORY_MESSAGES = int(os.getenv("FOLLOWUP_HISTORY_MESSAGES", "0"))
 FOLLOWUP_HISTORY_MAX_CHARS = int(os.getenv("FOLLOWUP_HISTORY_MAX_CHARS", "8000"))
+FOLLOWUP_EVIDENCE_DOCUMENTS = min(
+    5, max(0, int(os.getenv("FOLLOWUP_EVIDENCE_DOCUMENTS", "3")))
+)
 LOG_RETRIEVAL_QUERY = os.getenv("LOG_RETRIEVAL_QUERY", "true").lower() in {
     "1", "true", "yes", "on"
 }
@@ -337,10 +341,17 @@ RESEARCH_LOG_STORE_ANSWER = os.getenv("RESEARCH_LOG_STORE_ANSWER", "false").lowe
     "1", "true", "yes", "on"
 }
 
-# Optional evidence-control pass. 'review' lets the LLM decide whether the
-# current hits are coherent enough to answer, should be retried with a sharper
-# query, or require a clarification from the user.
-EVIDENCE_DECISION_MODE = os.getenv("EVIDENCE_DECISION_MODE", "review").strip().lower()
+# Optional post-ACL/post-verifier evidence-control pass. config.yaml is
+# canonical for the mode. EVIDENCE_DECISION_MODE remains a legacy fallback for
+# installations whose preserved config.yaml predates the evidence_control block.
+_evidence_control_cfg = dict(PROVIDER_CONFIG.get("evidence_control") or {})
+_configured_evidence_decision_mode = str(
+    _evidence_control_cfg.get("mode") or ""
+).strip().lower()
+EVIDENCE_DECISION_MODE = (
+    _configured_evidence_decision_mode
+    or os.getenv("EVIDENCE_DECISION_MODE", "off").strip().lower()
+)
 EVIDENCE_DECISION_PROMPT_FILE = os.getenv("EVIDENCE_DECISION_PROMPT_FILE", "evidence_decision.txt")
 # Evidence already had its own model switch; keep LLM_MODEL as fallback.
 EVIDENCE_MODEL = os.getenv("EVIDENCE_MODEL", LLM_MODEL)
@@ -424,6 +435,16 @@ WEB_GATE_SYSTEM_PROMPT = _load_prompt(WEB_GATE_PROMPT_FILE)
 RETRIEVAL_PLANNER_SYSTEM_PROMPT = _load_prompt(RETRIEVAL_PLANNER_PROMPT_FILE)
 QUERY_REWRITER_SYSTEM_PROMPT = _load_prompt(QUERY_REWRITER_PROMPT_FILE)
 CANDIDATE_VERIFIER_SYSTEM_PROMPT = _load_prompt(CANDIDATE_VERIFIER_PROMPT_FILE)
+
+FOLLOWUP_REWRITE_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "use_history": {"type": "boolean"},
+        "standalone_query": {"type": "string"},
+    },
+    "required": ["use_history", "standalone_query"],
+    "additionalProperties": False,
+}
 
 NATURAL_INSTRUCTION_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -819,6 +840,11 @@ class ChatCompletionRequest(BaseModel):
     # by OpenWebUI on our behalf.
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any | None = None
+
+
+class ChatArchiveRegisterRequest(BaseModel):
+    document_id: str
+    path: str
 
 
 class SearchResult(BaseModel):
@@ -1714,75 +1740,10 @@ def _history_as_text(messages: list[dict[str, Any]]) -> str:
     return "\n\n".join(selected)
 
 
-# Deliberately conservative. A standalone named query such as
-# "musterfall hausverbot" should not inherit old chat context.
-_FOLLOWUP_RE = re.compile(
-    r"\b("
-    r"dazu|davon|damit|dabei|darauf|darüber|hierzu|hierbei|"
-    r"dies(?:e|er|es|en|em)?|jene(?:r|s|n|m)?|"
-    r"der\s+vorgang|dieser\s+vorgang|die\s+sache|dieses\s+thema|"
-    r"und\s+(?:wer|was|wie|wann|wo|warum)|"
-    r"was\s+ist\s+mit|wer\s+war\s+das|wie\s+ging\s+es\s+weiter|"
-    r"noch\s+mehr|genauer|weiter(?:hin)?|nun"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# Corrections are a special kind of follow-up.  Without the immediately
-# preceding answer, phrases such as "Das ist falsch" are semantically
-# under-specified and can make a small reasoning model loop.
-_CORRECTION_RE = re.compile(
-    r"(?:"
-    r"^\s*(?:nein[,.!;:]?\s*)?"
-    r"(?:das\s+(?:ist|war)\s+falsch|das\s+stimmt\s+(?:so\s+)?nicht|"
-    r"stimmt\s+(?:so\s+)?nicht|falsch[,.!;:]|"
-    r"korrekt\s+ist|richtig\s+ist|richtig\s+wäre|"
-    r"ich\s+meinte|gemeint\s+war)"
-    r"|\bnicht\s+.+?\s+sondern\s+.+"
-    r"|\bdu\s+hast\b.{0,80}\bverwechselt\b"
-    r")",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
-def _probable_correction(question: str) -> bool:
-    return bool(_CORRECTION_RE.search(question))
-
-
-def _probable_followup(question: str) -> bool:
-    compact = question.strip().casefold()
-    if compact in {
-        "1", "2", "3", "4", "a", "b", "c", "d",
-        "erste", "erster", "der erste", "die erste", "den ersten",
-        "zweite", "zweiter", "der zweite", "die zweite", "den zweiten",
-        "dritte", "dritter", "der dritte", "die dritte", "den dritten",
-    }:
-        return True
-    return bool(
-        _FOLLOWUP_RE.search(question)
-        or _probable_correction(question)
-    )
-
-
-_SHORT_ACRONYM_RE = re.compile(r"^[A-ZÄÖÜ][A-ZÄÖÜ0-9&.+-]{1,5}$")
-
-
-def _short_acronym_continues_prior_user(
-    request_messages: list[dict[str, Any]],
-    question: str,
-) -> bool:
-    """Narrow web-only continuation such as FLG after a prior FLG Automation query."""
-    token = str(question or "").strip()
-    if not _SHORT_ACRONYM_RE.fullmatch(token):
-        return False
-    for item in reversed(_prior_conversation(request_messages)):
-        if item.get("role") != "user":
-            continue
-        previous = str(item.get("content") or "").strip()
-        if previous.casefold() == token.casefold():
-            return False
-        return bool(re.search(rf"(?<!\w){re.escape(token)}(?!\w)", previous, re.IGNORECASE))
-    return False
+# Follow-up/reference resolution is deliberately delegated to the configured
+# planner LLM. Conversation language is therefore not constrained by a
+# language-specific trigger regex; /new remains the deterministic context
+# boundary and invalid/failed rewrites fall back to the current query.
 
 
 def _auxiliary_task_kind(request: Request, question: str) -> str | None:
@@ -1887,73 +1848,81 @@ async def _ollama_complete(
     return content
 
 
+async def _rewrite_query_with_context(
+    request_messages: list[dict[str, Any]],
+    question: str,
+) -> tuple[str, bool]:
+    """Return a standalone retrieval query and whether prior chat was required.
+
+    In followup mode the model is also the reference classifier. If it says
+    the current query is standalone, the original user text is kept byte-for-byte
+    rather than accepting an unsolicited paraphrase. This avoids topic bleed
+    while keeping reference resolution language-neutral.
+    """
+    history = _history_as_text(request_messages)
+    if not history or QUERY_REWRITE_MODE not in {"always", "followup"}:
+        return question, False
+
+    user_prompt = (
+        f"MODE: {QUERY_REWRITE_MODE}\n\n"
+        "CHAT_HISTORY:\n"
+        f"{history}\n\n"
+        "CURRENT_QUERY:\n"
+        f"{question}"
+    )
+    try:
+        raw = await _ollama_complete(
+            [
+                {"role": "system", "content": FOLLOWUP_REWRITE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=320,
+            think=False,
+            model=FOLLOWUP_MODEL,
+            role="planner",
+            response_format=FOLLOWUP_REWRITE_RESPONSE_SCHEMA,
+        )
+        value = _extract_json_object(raw)
+    except Exception as exc:
+        log.warning(
+            "Follow-up reference resolution failed; using original question: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return question, False
+
+    use_history = bool(value.get("use_history"))
+    rewritten = normalize_query_quotes(
+        str(value.get("standalone_query") or "")
+    ).strip()
+    rewritten = re.sub(r"<!--.*?-->", "", rewritten, flags=re.DOTALL)
+    rewritten = re.sub(r"\[(?:W)?\d+\]", "", rewritten)
+    rewritten = re.sub(r"\s+", " ", rewritten).strip()
+
+    if QUERY_REWRITE_MODE == "followup" and not use_history:
+        return question, False
+    if not rewritten:
+        return question, False
+
+    log.info(
+        "Follow-up reference resolution: use_history=%s original=%r standalone=%r",
+        use_history,
+        question[:180],
+        rewritten[:240],
+    )
+    return rewritten, use_history
+
+
 async def _rewrite_query_if_needed(
     request_messages: list[dict[str, Any]],
     question: str,
     *,
     allow_short_acronym_context: bool = False,
 ) -> str:
-    # 0.5.7: context membership is explicit.  Every turn after the first one in
-    # the active /new segment may use that segment for rewrite; a heuristic no
-    # longer decides whether older turns are relevant.
-    history = _history_as_text(request_messages)
-    if not history or QUERY_REWRITE_MODE not in {"always", "followup"}:
-        return question
-    if QUERY_REWRITE_MODE == "followup" and not _probable_followup(question):
-        # A standalone query such as a person's name must remain standalone.
-        # Otherwise old chat topics leak into retrieval and, indirectly, web.
-        # Web-only gets one narrow exception for an exact short acronym repeated
-        # from the immediately preceding user query in the active segment.
-        if not (
-            allow_short_acronym_context
-            and _short_acronym_continues_prior_user(request_messages, question)
-        ):
-            return question
-
-    correction_note = ""
-    if _probable_correction(question):
-        correction_note = (
-            "\n\nKORREKTUR-HINWEIS:\n"
-            "Die aktuelle Nachricht korrigiert wahrscheinlich die unmittelbar "
-            "vorherige Antwort. Formuliere deshalb eine NEUTRALE Prüf-Suchfrage. "
-            "Wenn aus dem Verlauf zwei konkurrierende Aussagen erkennbar sind, "
-            "erhalte beide in der Suchfrage; behandle weder die alte Antwort noch "
-            "die Benutzerkorrektur ungeprüft als Tatsache."
-        )
-
-    user_prompt = (
-        "CHATVERLAUF:\n"
-        f"{history}\n\n"
-        "AKTUELLE FRAGE:\n"
-        f"{question}"
-        f"{correction_note}\n\n"
-        "SUCHANFRAGE:"
-    )
-    try:
-        rewritten = await _ollama_complete(
-            [
-                {"role": "system", "content": FOLLOWUP_REWRITE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-            max_tokens=240,
-            think=False,
-            model=FOLLOWUP_MODEL,
-            role="planner",
-        )
-    except httpx.HTTPError as exc:
-        log.warning("Follow-up rewrite failed; using original question: %s", exc)
-        return question
-
-    rewritten = rewritten.strip().strip('"').strip("'").splitlines()[0].strip()
-
-    # A rewrite is a search query, not a rendered answer: citation markers from
-    # previous assistant messages have no retrieval meaning.
-    rewritten = re.sub(r"\[(\d+)\]", "", rewritten)
-    rewritten = re.sub(r"\s+", " ", rewritten).strip()
-
-    if not rewritten:
-        return question
+    """Compatibility wrapper returning only the standalone query."""
+    del allow_short_acronym_context
+    rewritten, _ = await _rewrite_query_with_context(request_messages, question)
     return rewritten
 
 
@@ -3476,6 +3445,85 @@ async def _rag_resolve_documents(
     return payload, parsed
 
 
+async def _resolve_followup_evidence(
+    messages: list[dict[str, Any]],
+    *,
+    query: str,
+    user_id: str | None,
+    user_groups: str | None,
+    source_scopes: set[str] | None,
+    request_id: str | None,
+) -> list[SearchResult]:
+    """Re-resolve a small previous-answer evidence set through current live ACL."""
+    references = _previous_supporting_document_ids(
+        messages,
+        limit=FOLLOWUP_EVIDENCE_DOCUMENTS,
+    )
+    if not references:
+        return []
+    try:
+        _, resolved = await _rag_resolve_documents(
+            query,
+            references,
+            user_id,
+            user_groups,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        # Continuity is a recall aid, never an authorization or availability
+        # dependency. Normal retrieval continues if the optional lane fails.
+        log.warning(
+            "Follow-up evidence continuity unavailable; normal retrieval continues: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return []
+
+    allowed: list[SearchResult] = []
+    for result in resolved:
+        raw = dict(result.raw)
+        document_id = str(raw.get("document_id") or "").strip()
+        path = str(raw.get("path") or raw.get("title") or result.title or "").strip()
+        if not source_scope_allows_record(
+            document_id,
+            path,
+            source_scopes,
+            indexed_origin=str(raw.get("source_origin") or "").strip() or None,
+        ):
+            continue
+        raw["_followup_evidence"] = True
+        allowed.append(
+            SearchResult(
+                index=result.index,
+                title=result.title,
+                text=result.text,
+                raw=raw,
+            )
+        )
+    return allowed
+
+
+def _merge_followup_evidence(
+    continuity: list[SearchResult],
+    ranked: list[SearchResult],
+) -> list[SearchResult]:
+    """Put prior authorized evidence in front without duplicating document IDs."""
+    merged: list[SearchResult] = []
+    seen: set[str] = set()
+    for result in [*continuity, *ranked]:
+        document_id = str(result.raw.get("document_id") or "").strip()
+        fallback_key = f"{result.title}\n{result.text[:200]}"
+        key = document_id or fallback_key
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(result)
+    return [
+        SearchResult(index=i, title=result.title, text=result.text, raw=result.raw)
+        for i, result in enumerate(merged, start=1)
+    ]
+
+
 def _eligible_entity_recall_backoff(payload: dict[str, Any]) -> bool:
     """Return True only for a single-entity, non-relation retrieval plan."""
     if not ENTITY_RECALL_BACKOFF_ENABLED:
@@ -4493,6 +4541,51 @@ def _previous_source_map(messages: list[dict[str, Any]]) -> dict[int, str]:
     return result
 
 
+def _previous_supporting_document_ids(
+    messages: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[str]:
+    """Prefer cited documents from the immediately preceding answer.
+
+    Hidden source handoff markers may include every document that reached the
+    answer model. Explicit citation numbers are therefore preferred, then the
+    remaining handoff documents fill the small continuity budget.
+    """
+    if limit <= 0:
+        return []
+    mapping = _previous_source_map(messages)
+    if not mapping:
+        return []
+
+    text = _previous_assistant_text(messages)
+    answer_text = re.split(
+        r"\n\s*\n\*\*(?:Interne\s+)?Quellen:\*\*",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    ordered_numbers: list[int] = []
+    seen_numbers: set[int] = set()
+    for match in re.finditer(r"\[(\d+)\]", answer_text):
+        number = int(match.group(1))
+        if number in mapping and number not in seen_numbers:
+            seen_numbers.add(number)
+            ordered_numbers.append(number)
+    for number in sorted(mapping):
+        if number not in seen_numbers:
+            ordered_numbers.append(number)
+
+    result: list[str] = []
+    for number in ordered_numbers:
+        document_id = str(mapping.get(number) or "").strip()
+        if document_id and document_id not in result:
+            result.append(document_id)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def _previous_web_source_map(messages: list[dict[str, Any]]) -> dict[int, str]:
     """Map W1/W2/... in the previous web answer to archived text paths.
 
@@ -5467,6 +5560,44 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
     }
 
 
+@app.post("/v1/archive/chat/register")
+async def register_chat_archive(
+    body: ChatArchiveRegisterRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _check_auth(authorization)
+    document_id = str(body.document_id or "").strip()
+    path = str(body.path or "").strip()
+    if not document_id or not path:
+        raise HTTPException(status_code=400, detail="document_id and path are required")
+
+    try:
+        async with _middleware_client(timeout=min(float(HTTP_TIMEOUT), 30.0)) as client:
+            response = await client.post(
+                f"{RAG_MIDDLEWARE_URL}/source-origin/register-chat",
+                json={"document_id": document_id, "path": path},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"ok": True}
+    except httpx.HTTPStatusError as exc:
+        detail = ""
+        try:
+            value = exc.response.json()
+            detail = str(value.get("detail") or "") if isinstance(value, dict) else ""
+        except Exception:
+            detail = ""
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=detail or "chat archive registration failed",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"chat archive registration failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(
     body: ChatCompletionRequest,
@@ -5677,10 +5808,18 @@ async def chat_completions(
                 body.stream,
             )
 
-        # Conservative direct-answer gate. Explicit retrieval/web/use/list
-        # controls always win. Ordinary or ambiguous questions still use RAG.
+        # Conservative direct-answer gate. Pure internal source-scope
+        # directives may be injected by a frontend checkbox selection and must
+        # not turn greetings/time/date/arithmetic into document searches.
+        # Explicit workflow/retrieval controls (/web, /files, /vector, /graph,
+        # /elastic, /list, /use, /force, /new, ...) still win.
+        direct_blocking_directives = [
+            value
+            for value in retrieval_directives
+            if value not in {"documents", "mailarchive", "webarchive", "chatarchive"}
+        ]
         if (
-            not retrieval_directives
+            not direct_blocking_directives
             and natural_workflow is None
             and retrieval_arms is None
             and list_mode is None
@@ -5760,6 +5899,7 @@ async def chat_completions(
         )
 
     retrieval_query = question
+    followup_uses_history = False
     explicit_filename = extract_complete_filename(question)
     if explicit_filename:
         # A complete filename is already a deterministic document selector.
@@ -5780,8 +5920,8 @@ async def chat_completions(
             and not elastic_mode
             and not explicit_filename
         ):
-            retrieval_query = await _rewrite_query_if_needed(
-                body.messages, question, allow_short_acronym_context=bool(web_only)
+            retrieval_query, followup_uses_history = await _rewrite_query_with_context(
+                body.messages, question
             )
         else:
             retrieval_query = question
@@ -5792,9 +5932,9 @@ async def chat_completions(
         and not elastic_mode
         and not explicit_filename
     ):
-        retrieval_query = await _rewrite_query_if_needed(
-                body.messages, question, allow_short_acronym_context=bool(web_only)
-            )
+        retrieval_query, followup_uses_history = await _rewrite_query_with_context(
+            body.messages, question
+        )
 
     policy_default_arms = RETRIEVAL_POLICY.fallback_arms(CONFIGURED_INTERNAL_ARMS)
     files_arm_available = (
@@ -6285,6 +6425,8 @@ async def chat_completions(
         planner_previous_doc_ids: set[str] = set()
         active_search_spec: dict[str, Any] | None = None
         rewrite_model = RETRIEVAL_PLANNER.model or ANSWER_MODEL
+        followup_evidence_results: list[SearchResult] = []
+        followup_evidence_loaded = False
 
         query_seed_context: dict[str, Any] = {}
         if rewrite_enabled_task:
@@ -6393,6 +6535,27 @@ async def chat_completions(
                 )
                 raise HTTPException(status_code=502, detail=f"RAG middleware error: {exc}") from exc
 
+            if followup_uses_history and not followup_evidence_loaded:
+                followup_evidence_results = await _resolve_followup_evidence(
+                    body.messages,
+                    query=retrieval_query,
+                    user_id=user_id,
+                    user_groups=user_groups,
+                    source_scopes=source_scopes,
+                    request_id=completion_id,
+                )
+                followup_evidence_loaded = True
+                if followup_evidence_results:
+                    log.info(
+                        "Follow-up evidence continuity: reauthorized=%d documents",
+                        len(followup_evidence_results),
+                    )
+            if followup_evidence_results:
+                ranked_results = _merge_followup_evidence(
+                    followup_evidence_results,
+                    ranked_results,
+                )
+
             round_id = _research_call(
                 "start_round",
                 query_id=completion_id,
@@ -6482,12 +6645,20 @@ async def chat_completions(
                 else:
                     verification_limit = RETRIEVAL_PLANNER.verification_candidate_limit
                 preverification_count = len(ranked_results)
+                continuity_extra = sum(
+                    1
+                    for result in ranked_results
+                    if bool(result.raw.get("_followup_evidence"))
+                )
+                effective_verification_limit = min(
+                    60, verification_limit + continuity_extra
+                )
                 verified_results, uncertain_results, verification = await _verify_exhaustive_candidates(
                     retrieval_query,
                     ranked_results,
                     query_frame=planner_query_frame,
                     verification_requirements=list((active_search_spec or {}).get("verification_requirements") or []),
-                    candidate_limit=verification_limit,
+                    candidate_limit=effective_verification_limit,
                     # Completeness changes the candidate budget, not the verifier
                     # output vocabulary.  Keep the compact classification schema
                     # for exhaustive runs as well: they review more documents and
@@ -6516,7 +6687,7 @@ async def chat_completions(
                 if retrieval_limit_notice:
                     log.info(
                         "Request %s candidate verification window limited: ranked=%d checked=%d configured_window=%d",
-                        completion_id, preverification_count, verified_count, verification_limit,
+                        completion_id, preverification_count, verified_count, effective_verification_limit,
                     )
                 log.info(
                     "RC8 candidate verify: mode=%s checked=%d match=%d uncertain=%d rejected=%d format=%s errors=%d retries=%d elapsed_ms=%d",

@@ -18,6 +18,7 @@ style('akirag', 'style');
             <div>
                 <h2>AKI Recherche</h2>
                 <p class="akirag-help-hint"><code>/help</code> zeigt die Hilfe und die verfügbaren Befehle an.</p>
+                <p class="akirag-context-hint">Chats sind kontextsensitiv. Wenn Sie ein Thema bearbeiten wollen, das nicht in Zusammenhang mit diesem Chat steht, nutzen Sie bitte einen neuen Chat.</p>
                 <p>Interaktive Recherche in den ausgewählten Quellen. Explizite Slash-Directives in der Anfrage übersteuern die Auswahl.</p>
             </div>
         </header>

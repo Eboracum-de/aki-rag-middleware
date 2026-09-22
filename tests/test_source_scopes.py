@@ -56,8 +56,53 @@ def test_aki_client_has_scope_ui_and_server_side_chat_archive():
     main = (root / 'templates' / 'main.php').read_text(encoding='utf-8')
     proxy = (root / 'lib' / 'Service' / 'RagProxy.php').read_text(encoding='utf-8')
     store = (root / 'lib' / 'Service' / 'ChatStore.php').read_text(encoding='utf-8')
+    controller = (root / 'lib' / 'Controller' / 'ChatController.php').read_text(encoding='utf-8')
     for scope in ['documents', 'mailarchive', 'webarchive', 'chatarchive', 'web']:
         assert f'value="{scope}"' in main
     assert 'explicit user source selection wins over UI state' in proxy
     assert "const FOLDER = 'AKI-Chats'" in store
     assert '.akirag.json' in store
+    assert "'source_origin' => 'chat_archive'" in store
+    assert "'format' => 'markdown'" in store
+    assert "'.md'" in store
+    assert "renderMarkdown" in store
+    assert "renderHtml" not in store
+    assert "/v1/archive/chat/register" in proxy
+    assert "registerChatArchive" in controller
+
+
+def test_chat_archive_registration_writes_registry_before_es_mirror(monkeypatch):
+    import rag.api as api
+
+    calls = []
+    monkeypatch.setattr(api, 'chat_archive_roots', lambda: ('AKI-Chats',))
+    monkeypatch.setattr(
+        api,
+        'register_document',
+        lambda document_id, source_origin, **kwargs: calls.append(
+            (document_id, source_origin, kwargs)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        api,
+        'auto_mirror_registry_to_elasticsearch',
+        lambda **kwargs: {'checked': 1, 'updated': 0, 'missing': 1},
+    )
+
+    result = api.register_chat_archive_source(
+        api.ChatArchiveRegisterRequest(
+            document_id='files:74710',
+            path='AKI-Chats/2026-09-22 - Vogelsang 280 - abcdef12.md',
+        )
+    )
+
+    assert result['ok'] is True
+    assert result['source_origin'] == 'chat_archive'
+    assert calls == [(
+        'files:74710',
+        'chat_archive',
+        {
+            'source_path': 'AKI-Chats/2026-09-22 - Vogelsang 280 - abcdef12.md',
+            'classification_source': 'chat_archive_write',
+        },
+    )]

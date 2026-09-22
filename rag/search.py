@@ -218,6 +218,54 @@ def _apply_source_scope_to_es(bool_query: dict, source_scopes=None) -> set[str] 
     return scopes
 
 
+def _es_acl_identity_clauses(field: str, value: str) -> list[dict]:
+    """Mapping-tolerant ACL identity clauses.
+
+    False positives are acceptable because live WebDAV ACL remains mandatory.
+    The prefilter must never be treated as authorization.
+    """
+    clean = str(value or "").strip()
+    if not clean:
+        return []
+    return [
+        {"term": {field: clean}},
+        {"term": {field + ".keyword": clean}},
+        {"match": {field: clean}},
+    ]
+
+
+def _apply_acl_prefilter_to_es(
+    bool_query: dict,
+    *,
+    user: str | None,
+    groups: list[str] | tuple[str, ...] | None,
+) -> bool:
+    """Prefilter by Nextcloud owner/direct-user/group metadata.
+
+    groups=None means group context is unavailable, so the request deliberately
+    falls back to the unfiltered retrieval path. An empty list is valid known
+    context for a user with no groups.
+    """
+    username = str(user or "").strip()
+    if not username or groups is None:
+        return False
+
+    should: list[dict] = []
+    should.extend(_es_acl_identity_clauses("owner", username))
+    should.extend(_es_acl_identity_clauses("users", username))
+    for group in groups:
+        should.extend(_es_acl_identity_clauses("groups", str(group or "").strip()))
+
+    if not should:
+        return False
+    bool_query.setdefault("filter", []).append({
+        "bool": {
+            "should": should,
+            "minimum_should_match": 1,
+        }
+    })
+    return True
+
 def _heal_source_origin_from_hit(document_id: str, title: str, indexed_origin: str | None) -> str | None:
     """Register archive origin discovered through a legacy/path fallback.
 
@@ -924,6 +972,7 @@ RESULT_METADATA_KEYS = (
     "content_type",
     "content_kind",
     "content_available",
+    "content_hash",
     "source",
     "provider",
     "share_names",
@@ -1142,7 +1191,14 @@ def _escape_wildcard_literal(value: str) -> str:
     )
 
 
-def filename_lookup(filename: str, limit: int = 20, source_scopes=None) -> list[dict]:
+def filename_lookup(
+    filename: str,
+    limit: int = 20,
+    source_scopes=None,
+    *,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
+) -> list[dict]:
     """Sucht einen Basename deterministisch am Ende des Nextcloud-Titels."""
 
     filename = str(filename or "").strip()
@@ -1163,6 +1219,7 @@ def filename_lookup(filename: str, limit: int = 20, source_scopes=None) -> list[
             "circles",
             "attachment.date",
             "attachment.content_type",
+            "hash",
             "source_origin",
         ],
         "query": {
@@ -1204,6 +1261,11 @@ def filename_lookup(filename: str, limit: int = 20, source_scopes=None) -> list[
     filename_bool.setdefault("must_not", [])
     filename_bool.setdefault("filter", [])
     _apply_source_scope_to_es(filename_bool, source_scopes)
+    _apply_acl_prefilter_to_es(
+        filename_bool,
+        user=acl_prefilter_user,
+        groups=acl_prefilter_groups,
+    )
 
     endpoint = f"{ES_URL}/{ES_INDEX}/_search"
     log.debug(
@@ -1262,6 +1324,7 @@ def filename_lookup(filename: str, limit: int = 20, source_scopes=None) -> list[
             "nextcloud_openfile_id": openfile_id(document_id),
             "document_date": attachment.get("date"),
             "content_type": attachment.get("content_type"),
+            "content_hash": source.get("hash"),
             "source": source.get("source", ""),
             "provider": source.get("provider", ""),
             "share_names": source.get("share_names") or {},
@@ -1305,6 +1368,7 @@ _DOCUMENT_LOOKUP_SOURCE_FIELDS = [
     "circles",
     "attachment.date",
     "attachment.content_type",
+    "hash",
 ]
 
 
@@ -1330,6 +1394,7 @@ def _document_lookup_result(
         "nextcloud_openfile_id": openfile_id(document_id),
         "document_date": attachment.get("date"),
         "content_type": attachment.get("content_type"),
+        "content_hash": source.get("hash"),
         "source": source.get("source", ""),
         "provider": source.get("provider", ""),
         "share_names": source.get("share_names") or {},
@@ -1650,6 +1715,8 @@ def elastic_exact_search(
     limit: int = 50,
     diagnostics: dict | None = None,
     source_scopes=None,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
 ) -> list[dict]:
     """Direct Nextcloud-style Elasticsearch Files search, without RAG planning.
 
@@ -1672,6 +1739,11 @@ def elastic_exact_search(
     # stable substrate for this direct compatibility path.
 
     _apply_source_scope_to_es(bool_query, source_scopes)
+    prefilter_applied = _apply_acl_prefilter_to_es(
+        bool_query,
+        user=acl_prefilter_user,
+        groups=acl_prefilter_groups,
+    )
 
     # Hidden mail metadata sidecars are machine-control data.  Exclude them at
     # query time as well as in the local post-filter so they cannot consume the
@@ -1711,7 +1783,7 @@ def elastic_exact_search(
         "track_total_hits": True,
         "_source": [
             "title", "source", "provider", "share_names", "owner", "users",
-            "groups", "circles", "attachment.date", "attachment.content_type",
+            "groups", "circles", "attachment.date", "attachment.content_type", "hash",
         ],
         "query": {"bool": bool_query},
         "highlight": {
@@ -1758,6 +1830,7 @@ def elastic_exact_search(
             "total_relation": total_relation,
             "tokens": tokens,
             "requested_size": size,
+            "acl_prefilter_applied": prefilter_applied,
         })
 
     raw_hits = list((data.get("hits") or {}).get("hits", []))
@@ -1806,6 +1879,7 @@ def elastic_exact_search(
             "nextcloud_openfile_id": openfile_id(document_id),
             "document_date": attachment.get("date"),
             "content_type": attachment.get("content_type"),
+            "content_hash": source.get("hash"),
             "source": source.get("source", ""),
             "provider": source.get("provider", ""),
             "share_names": source.get("share_names") or {},
@@ -1813,7 +1887,7 @@ def elastic_exact_search(
             "users": source.get("users") or [],
             "groups": source.get("groups") or [],
             "circles": source.get("circles") or [],
-            "source_origin": source.get("source_origin"),
+            "source_origin": indexed_origin,
         })
     add_source_urls(results)
     return results
@@ -1828,6 +1902,9 @@ def elastic_search(
     plan,
     diagnostics: dict | None = None,
     source_scopes=None,
+    *,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
 ):
 
     bool_query = {
@@ -1838,6 +1915,11 @@ def elastic_search(
     }
 
     _apply_source_scope_to_es(bool_query, source_scopes)
+    _apply_acl_prefilter_to_es(
+        bool_query,
+        user=acl_prefilter_user,
+        groups=acl_prefilter_groups,
+    )
 
     # Hidden mail metadata sidecars are machine-control data.  Exclude them at
     # query time as well as in the local post-filter so they cannot consume the
@@ -2067,6 +2149,7 @@ def elastic_search(
             "circles",
             "attachment.date",
             "attachment.content_type",
+            "hash",
             "source_origin",
         ],
 
@@ -2213,7 +2296,7 @@ def elastic_search(
     raw_hits = list((data.get("hits") or {}).get("hits") or [])
     if str(getattr(plan, "search_mode", "")) == "search_spec" and raw_hits:
         log.info(
-            "elasticsearch hits: %s",
+            "elasticsearch raw hits (before source-scope post-filter): %s",
             json.dumps([
                 {
                     "rank": index,
@@ -2292,6 +2375,9 @@ def elastic_search(
                 "content_type":
                     attachment.get("content_type"),
 
+                "content_hash":
+                    source.get("hash"),
+
                 "source":
                     source.get("source", ""),
 
@@ -2314,7 +2400,7 @@ def elastic_search(
                     source.get("circles") or [],
 
                 "source_origin":
-                    source.get("source_origin"),
+                    indexed_origin,
             }
         )
         if len(results) >= ES_LIMIT:
@@ -2335,6 +2421,9 @@ def vector_search(
     timings,
     diagnostics: dict | None = None,
     source_scopes=None,
+    *,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
 ):
 
     if not plan.semantic_query:
@@ -2377,6 +2466,8 @@ def vector_search(
                 sorted(source_origins_for_scopes(source_scopes) or [])
                 if source_scopes is not None else None
             ),
+            acl_user=acl_prefilter_user,
+            acl_groups=acl_prefilter_groups,
         ),
         timings,
     )
@@ -2510,6 +2601,9 @@ def vector_search(
 
                 "content_available":
                     payload.get("content_available"),
+
+                "content_hash":
+                    payload.get("content_hash") or payload.get("hash"),
 
                 "source":
                     payload.get(
@@ -2961,6 +3055,18 @@ def _same_filename_variant(
     )
 
 
+def _dedup_content_hash(item: dict) -> str:
+    """Return a trusted exact extracted-content hash, or empty string.
+
+    Nextcloud FullTextSearch currently exposes a 32-hex MD5 over extracted
+    indexed content.  Treat only that exact shape as an equality signal; an
+    absent or differently shaped field falls back to the existing conservative
+    filename/text duplicate checks.
+    """
+    value = str(item.get("content_hash") or item.get("hash") or "").strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{32}", value) else ""
+
+
 def _near_duplicate_text(
     left_texts: list[str],
     right_texts: list[str],
@@ -3105,6 +3211,9 @@ def _duplicate_variant(
                 item.get("title", "")
             )["filename"],
 
+        "nextcloud_es_id":
+            item.get("nextcloud_es_id") or item.get("document_id"),
+
         "nextcloud_openfile_id":
             openfile,
 
@@ -3119,6 +3228,45 @@ def _duplicate_variant(
 
         "content_type":
             item.get("content_type"),
+
+        "content_hash":
+            item.get("content_hash"),
+
+        "source":
+            item.get("source"),
+
+        "provider":
+            item.get("provider"),
+
+        "share_names":
+            item.get("share_names") or {},
+
+        "owner":
+            item.get("owner"),
+
+        "users":
+            item.get("users") or [],
+
+        "groups":
+            item.get("groups") or [],
+
+        "circles":
+            item.get("circles") or [],
+
+        "source_origin":
+            item.get("source_origin"),
+
+        "snippet":
+            item.get("snippet", ""),
+
+        "es_snippet":
+            item.get("es_snippet", ""),
+
+        "vector_snippet":
+            item.get("vector_snippet", ""),
+
+        "graph_snippet":
+            item.get("graph_snippet", ""),
 
         "reason":
             reason,
@@ -3287,6 +3435,7 @@ def deduplicate_for_reranker(
         candidate = dict(original)
         candidate_signature = _dedup_filename_signature(candidate)
         candidate_texts = _dedup_candidate_texts(candidate)
+        candidate_hash = _dedup_content_hash(candidate)
         matched = False
 
         for representative in representatives:
@@ -3295,8 +3444,12 @@ def deduplicate_for_reranker(
             representative_signature = representative.get(
                 "_dedup_filename_signature"
             )
+            representative_hash = representative.get("_dedup_content_hash", "")
 
-            if _same_filename_variant(
+            if candidate_hash and candidate_hash == representative_hash:
+                reason = "exact_extracted_content_hash"
+                similarity = 1.0
+            elif _same_filename_variant(
                 candidate_signature,
                 representative_signature,
             ):
@@ -3335,6 +3488,7 @@ def deduplicate_for_reranker(
         )
         candidate["_dedup_filename_signature"] = candidate_signature
         candidate["_dedup_texts"] = candidate_texts
+        candidate["_dedup_content_hash"] = candidate_hash
         representatives.append(candidate)
 
         if len(representatives) >= max_unique:
@@ -3343,6 +3497,7 @@ def deduplicate_for_reranker(
     for representative in representatives:
         representative.pop("_dedup_filename_signature", None)
         representative.pop("_dedup_texts", None)
+        representative.pop("_dedup_content_hash", None)
 
     return representatives
 
@@ -3382,13 +3537,18 @@ def deduplicate_retrieval_arm(
 
         candidate_signature = _dedup_filename_signature(probe)
         candidate_texts = _dedup_candidate_texts(probe)
+        candidate_hash = _dedup_content_hash(candidate)
         matched = False
 
         for representative in representatives:
             reason = None
             similarity = None
+            representative_hash = representative.get("_dedup_content_hash", "")
 
-            if _same_filename_variant(
+            if candidate_hash and candidate_hash == representative_hash:
+                reason = "exact_extracted_content_hash"
+                similarity = 1.0
+            elif _same_filename_variant(
                 candidate_signature,
                 representative.get("_dedup_filename_signature"),
             ):
@@ -3424,12 +3584,14 @@ def deduplicate_retrieval_arm(
         candidate["duplicate_count"] = 1 + len(candidate["duplicate_variants"])
         candidate["_dedup_filename_signature"] = candidate_signature
         candidate["_dedup_texts"] = candidate_texts
+        candidate["_dedup_content_hash"] = candidate_hash
         representatives.append(candidate)
 
     for rank, representative in enumerate(representatives, start=1):
         representative["rank"] = rank
         representative.pop("_dedup_filename_signature", None)
         representative.pop("_dedup_texts", None)
+        representative.pop("_dedup_content_hash", None)
 
     return representatives
 
@@ -4069,6 +4231,8 @@ def perform_search(
     search_spec: dict | None = None,
     entity_context_override: dict | None = None,
     source_scopes=None,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
 ):
 
     # ``retrieval_arms`` controls only the document-retrieval arms. Entity
@@ -4093,6 +4257,7 @@ def perform_search(
             explicit_arm_selection = True
 
     normalized_source_scopes = normalize_source_scopes(source_scopes)
+    acl_prefilter_active = bool(acl_prefilter_user and acl_prefilter_groups is not None)
 
     total_started = (
         time.perf_counter()
@@ -4131,10 +4296,20 @@ def perform_search(
 
             exact_results = run_timed(
                 "filename_lookup",
-                lambda: filename_lookup(
-                    requested_filename,
-                    limit=limit,
-                    source_scopes=normalized_source_scopes,
+                lambda: (
+                    filename_lookup(
+                        requested_filename,
+                        limit=limit,
+                        source_scopes=normalized_source_scopes,
+                        acl_prefilter_user=acl_prefilter_user,
+                        acl_prefilter_groups=acl_prefilter_groups,
+                    )
+                    if acl_prefilter_active
+                    else filename_lookup(
+                        requested_filename,
+                        limit=limit,
+                        source_scopes=normalized_source_scopes,
+                    )
                 ),
                 timings,
             )
@@ -4280,10 +4455,31 @@ def perform_search(
                 es_results = run_timed(
                     "elasticsearch",
                     lambda: (
-                        elastic_search(question, plan, es_diagnostics)
-                        if normalized_source_scopes is None
-                        else elastic_search(
-                            question, plan, es_diagnostics, source_scopes=normalized_source_scopes
+                        (
+                            elastic_search(
+                                question,
+                                plan,
+                                es_diagnostics,
+                                acl_prefilter_user=acl_prefilter_user,
+                                acl_prefilter_groups=acl_prefilter_groups,
+                            )
+                            if normalized_source_scopes is None
+                            else elastic_search(
+                                question,
+                                plan,
+                                es_diagnostics,
+                                source_scopes=normalized_source_scopes,
+                                acl_prefilter_user=acl_prefilter_user,
+                                acl_prefilter_groups=acl_prefilter_groups,
+                            )
+                        )
+                        if acl_prefilter_active
+                        else (
+                            elastic_search(question, plan, es_diagnostics)
+                            if normalized_source_scopes is None
+                            else elastic_search(
+                                question, plan, es_diagnostics, source_scopes=normalized_source_scopes
+                            )
                         )
                     ),
                     timings,
@@ -4389,10 +4585,31 @@ def perform_search(
         if "vector" in active_arms and QDRANT_ENABLED:
             try:
                 vector_results = (
-                    vector_search(plan, timings, vector_diagnostics)
-                    if normalized_source_scopes is None
-                    else vector_search(
-                        plan, timings, vector_diagnostics, source_scopes=normalized_source_scopes
+                    (
+                        vector_search(
+                            plan,
+                            timings,
+                            vector_diagnostics,
+                            acl_prefilter_user=acl_prefilter_user,
+                            acl_prefilter_groups=acl_prefilter_groups,
+                        )
+                        if normalized_source_scopes is None
+                        else vector_search(
+                            plan,
+                            timings,
+                            vector_diagnostics,
+                            source_scopes=normalized_source_scopes,
+                            acl_prefilter_user=acl_prefilter_user,
+                            acl_prefilter_groups=acl_prefilter_groups,
+                        )
+                    )
+                    if acl_prefilter_active
+                    else (
+                        vector_search(plan, timings, vector_diagnostics)
+                        if normalized_source_scopes is None
+                        else vector_search(
+                            plan, timings, vector_diagnostics, source_scopes=normalized_source_scopes
+                        )
                     )
                 )
                 vector_diagnostics.setdefault("available", True)
@@ -5005,8 +5222,9 @@ def perform_search(
         if not final_results and degraded:
             retrieval_mode = "degraded_no_results"
             retrieval_message = (
-                "Ein oder mehrere interne Suchdienste sind derzeit nicht verfügbar "
-                f"({', '.join(degraded)}). Die Anfrage wurde mit den verbleibenden Diensten bearbeitet."
+                "Nicht verfügbar: "
+                f"{', '.join(degraded)}. Die übrigen verfügbaren Suchdienste wurden weiterhin verwendet, "
+                "lieferten für diese Anfrage jedoch keinen verwertbaren Treffer."
             )
         else:
             retrieval_message = ""
@@ -5453,6 +5671,8 @@ def perform_multi_probe_search(
     *,
     required_results: list[dict] | None = None,
     force_unspecific: bool = False,
+    acl_prefilter_user: str | None = None,
+    acl_prefilter_groups: list[str] | None = None,
 ) -> dict:
     """Execute bounded RC8 probes, fuse them, then rerank once jointly.
 
@@ -5462,6 +5682,7 @@ def perform_multi_probe_search(
     the combined candidate field reranked against the *original* user question.
     """
     started = time.perf_counter()
+    acl_prefilter_active = bool(acl_prefilter_user and acl_prefilter_groups is not None)
     clean_probes: list[dict] = []
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for raw_probe in probes:
@@ -5503,10 +5724,20 @@ def perform_multi_probe_search(
     for probe_index, probe in enumerate(clean_probes, start=1):
         if _probe_uses_nextcloud_exact_files(probe):
             exact_diagnostics: dict = {}
-            ranking = elastic_exact_search(
-                probe["query"],
-                limit=per_probe_limit,
-                diagnostics=exact_diagnostics,
+            ranking = (
+                elastic_exact_search(
+                    probe["query"],
+                    limit=per_probe_limit,
+                    diagnostics=exact_diagnostics,
+                    acl_prefilter_user=acl_prefilter_user,
+                    acl_prefilter_groups=acl_prefilter_groups,
+                )
+                if acl_prefilter_active
+                else elastic_exact_search(
+                    probe["query"],
+                    limit=per_probe_limit,
+                    diagnostics=exact_diagnostics,
+                )
             )
             run = {
                 "plan": None,
@@ -5531,13 +5762,26 @@ def perform_multi_probe_search(
                 probe.get("kind"),
             )
         else:
-            run = perform_search(
-                probe["query"],
-                limit=per_probe_limit,
-                retrieval_arms=probe.get("retrieval_arms"),
-                raw_results=True,
-                force_unspecific=True,
-                semantic_query_override=probe.get("semantic_query"),
+            run = (
+                perform_search(
+                    probe["query"],
+                    limit=per_probe_limit,
+                    retrieval_arms=probe.get("retrieval_arms"),
+                    raw_results=True,
+                    force_unspecific=True,
+                    semantic_query_override=probe.get("semantic_query"),
+                    acl_prefilter_user=acl_prefilter_user,
+                    acl_prefilter_groups=acl_prefilter_groups,
+                )
+                if acl_prefilter_active
+                else perform_search(
+                    probe["query"],
+                    limit=per_probe_limit,
+                    retrieval_arms=probe.get("retrieval_arms"),
+                    raw_results=True,
+                    force_unspecific=True,
+                    semantic_query_override=probe.get("semantic_query"),
+                )
             )
             ranking = [dict(item) for item in (run.get("results") or [])]
 
@@ -5636,8 +5880,9 @@ def perform_multi_probe_search(
     if not final_results and degraded:
         retrieval_mode = "degraded_no_results"
         retrieval_message = (
-            "Ein oder mehrere interne Suchdienste sind derzeit nicht verfügbar "
-            f"({', '.join(degraded)})."
+            "Nicht verfügbar: "
+            f"{', '.join(degraded)}. Die übrigen verfügbaren Suchdienste wurden weiterhin verwendet, "
+            "lieferten für diese Anfrage jedoch keinen verwertbaren Treffer."
         )
     else:
         retrieval_mode = (

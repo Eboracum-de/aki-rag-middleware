@@ -10,6 +10,8 @@ Reversible per-user Nextcloud and IMAP credentials, together with pending Nextcl
 
 Global service secrets such as API keys and backend passwords remain environment-file configuration in the current release-candidate line. Keep `runtime.env`, live `provider.env`, `runtime/`, TLS private keys and backups out of source control.
 
+On Dockerized/Super-Light deployments, an account that is allowed to operate Docker/Compose can currently render or inspect container environment values, including service/API secrets (for example through `docker-compose config` or container inspection). Do not paste full rendered Compose output into issues, chats or support logs. Docker-daemon access must already be treated as a privileged/root-equivalent capability; RC5 additionally retains plaintext environment-file delivery for several global secrets. Reducing routine Compose/environment exposure through Docker secrets or file-mounted credentials is deferred hardening tracked in `docs/ROADMAP.md`.
+
 The FastAPI middleware on port 8765 is an **internal service boundary**. RC4.3 uses two installer-managed machine credentials: `RAG_INTERNAL_API_KEY` proves membership in the internal service plane, while `RAG_PROVIDER_INTERNAL_KEY` proves the narrower trusted-provider role. The provider supplies both on provider-originated middleware calls. Bundled nginx receives only the internal key and therefore cannot impersonate the provider merely by forwarding a request. These machine credentials do not replace provider Bearer authentication, RAG Admin authentication, Nextcloud live ACL or curation-session authentication.
 
 Direct exposure of port 8765 is unsupported. Native startup refuses a non-loopback `RAG_API_HOST` unless `RAG_ALLOW_REMOTE_INTERNAL_API=true` is deliberately set. An alternative reverse proxy that bypasses bundled nginx must both authenticate its clients and supply the internal machine credential to protected middleware routes.
@@ -32,7 +34,7 @@ Direct exposure of port 8765 is unsupported. Native startup refuses a non-loopba
 
 Do **not** publish credentials, private document contents, exploit details or sensitive deployment information in a public issue.
 
-Use GitHub private vulnerability reporting once it is enabled for the repository. Until a private reporting route is configured, open a minimal public issue asking the maintainer for a private contact channel without disclosing the vulnerability details.
+Use GitHub private vulnerability reporting when available. Security questions or reports that should not be public can also be sent to `rag@eboracum.de`; do not include secrets in public issues.
 
 ## LLM trust boundary
 

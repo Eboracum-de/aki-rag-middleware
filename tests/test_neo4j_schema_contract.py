@@ -110,6 +110,7 @@ def test_optional_relationship_reads_do_not_require_preexisting_type_tokens():
         GraphStore.backfill_manual_confirmations: {"MERGED_INTO"},
         GraphStore.backfill_form_policies: {"HAS_NAME", "HAS_SEARCH_ALIAS"},
         GraphStore.entity_forms: {"HAS_NAME", "HAS_SEARCH_ALIAS"},
+        GraphStore.name_forms: {"HAS_NAME", "HAS_SEARCH_ALIAS"},
         GraphStore.find_entities: {
             "HAS_NAME", "HAS_SEARCH_ALIAS", "MERGED_INTO", "MENTIONS", "RESOLVED_TO"
         },
@@ -120,10 +121,10 @@ def test_optional_relationship_reads_do_not_require_preexisting_type_tokens():
         GraphStore.list_observations: {"HAS_ENTITY_OBSERVATION"},
         GraphStore._observation_curation_summary: {"HAS_ENTITY_OBSERVATION"},
         GraphStore.entity_detail: {"MERGED_INTO"},
-        GraphStore.list_merge_candidates: {"POSSIBLE_SAME_AS"},
+        GraphStore.list_merge_candidates: {"POSSIBLE_SAME_AS", "SAME_AS", "NOT_SAME_AS", "DESCRIBES"},
         GraphStore.stats: {
             "MENTIONS", "MENTIONS_NAME", "REPLIES_TO", "REPRESENTS_MAIL",
-            "ATTACHMENT_OF", "POSSIBLE_SAME_AS", "NOT_SAME_AS",
+            "ATTACHMENT_OF", "NOT_SAME_AS",
         },
     }
     for method, relationship_types in guarded_methods.items():

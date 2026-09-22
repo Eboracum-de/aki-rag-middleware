@@ -1,6 +1,6 @@
 # Threat model and security boundaries
 
-**Reference:** `0.8.5-rc4.3`
+**Reference:** `0.8.5-rc5`
 
 This document states the security assumptions of AKI RAG Middleware as they exist in the current release-candidate line. It separates **retrieval knowledge**, **authorization**, and **answer evidence** because these have deliberately different sharing rules.
 
@@ -13,6 +13,7 @@ It is an engineering threat model, not a certification or a claim that every dep
 3. **ACL denial does not trigger adaptive backfill.** The current normal path ranks a bounded candidate set first, applies live ACL afterwards, removes denied results and returns fewer results if necessary.
 4. **Shared retrieval knowledge is not the same thing as shared evidence.** Names, aliases and curated identity work may improve retrieval for other users; this does not grant access to the source document that originally motivated that knowledge.
 5. **Graph observations remain provenance-bearing.** Document-grounded claims are not silently promoted to unqualified global truth edges.
+6. **ACL uncertainty must never become destructive.** Lazy Finding cleanup is permitted only after a successful live-ACL request definitively denies a numeric Nextcloud file; backend, network, TLS, credential or configuration failures do not authorize deletion.
 6. **Remote model roles are explicit trust-boundary choices.** Administrators decide which roles may send which bounded context to a remote provider.
 
 ## 2. Assets and trust zones
@@ -95,6 +96,8 @@ This separates three security concepts:
 - **curation state** is shared Graph-Lite knowledge.
 
 Neither a ResearchRun nor a previous successful observation grants continued access to the source. Before the Admin user-context view or end-user self-service exposes a Finding, the supporting Document is checked again with the selected/current user's Nextcloud credential. Unauthorized Findings are omitted from lists and counts rather than rendered as inaccessible placeholders.
+
+For still-uncurated Findings, RC5 can use that same **successful** ACL denial as a lazy cleanup signal. Only the denied user's `PRODUCED` provenance is removed; a shared Finding is deleted only when it is uncurated and no ResearchRun for any user still references it. Finding-level curator state/suppression, `CURATED_ENTITY` mappings and any Finding-derived RelationObservation prevent this lazy deletion. ACL errors or unavailable credentials remain fail-closed for visibility but non-destructive for stored Graph state.
 
 RAG Admin is a trusted operator surface. Its Basic-Auth administrator is not mapped to a personal Nextcloud ACL; instead the administrator explicitly selects a canonical-user context, and Evidence is authorized with that selected user's stored Nextcloud credential. This prevents cross-context leakage inside a selected view, but it is **not** a tenant-isolation guarantee against the RAG administrator, who can deliberately switch to another configured user. Ordinary users must use normal research frontends or the separately gated self-service curation surface.
 
@@ -187,7 +190,9 @@ A production acceptance test should use at least two Nextcloud users with delibe
 4. Graph retrieval cannot turn a protected supporting document into answer evidence;
 5. archived chat/mail/web files obey the ACL of their archive file;
 6. Finding evidence is not shown to an admin or end-user curator unless the selected/current user produced that Finding and the supporting file currently passes live ACL;
-7. expired or revoked self-service curation sessions fail closed, and an API restart leaves no surviving active curation session;
-8. `acl.enabled=false` is clearly detectable operationally.
+7. a definitive successful ACL denial may self-clean only uncurated provenance for that user, while curated/shared Findings remain intact;
+8. ACL/backend/TLS/network/credential failures never trigger Finding deletion;
+9. expired or revoked self-service curation sessions fail closed, and an API restart leaves no surviving active curation session;
+10. `acl.enabled=false` is clearly detectable operationally.
 
 See also `PRIVACY-ARCHITECTURE.md`, `GRAPHLIGHT-FINDINGS.md`, `KNOWN-LIMITATIONS.md` and `SECURITY.md`.

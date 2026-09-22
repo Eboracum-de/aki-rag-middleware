@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import Any
+import json
 import os
 import time
 from urllib.parse import urlparse
@@ -44,6 +45,8 @@ from rag.curation_ui import create_curation_router, cleanup_stale_curation_sessi
 from rag.web_research import WebResearchArm, load_web_config
 from rag.retrieval_planner import load_retrieval_planner_settings
 from rag.reranker import get_reranker_status
+from rag.source_origin import chat_archive_roots, path_is_under
+from rag.source_registry import register_document, auto_mirror_registry_to_elasticsearch
 from rag.acl import (
     NextcloudLiveAcl,
     AclBackendError,
@@ -71,6 +74,7 @@ from rag.search import (
     resolve_document_references,
     strict_filename_lookup,
     store,
+    UNSPECIFIC_RETRIEVAL_MESSAGE,
 )
 
 
@@ -92,6 +96,41 @@ _research_finding_schema_ready = False
 # thousands of documents merely to count them.
 ELASTIC_ACL_RESULT_SCAN_LIMIT = max(20, int(os.getenv("ELASTIC_ACL_RESULT_SCAN_LIMIT", "200")))
 RETRIEVAL_PLANNER_SETTINGS = load_retrieval_planner_settings(app_config)
+
+
+def _acl_prefilter_context(http_request: Request) -> tuple[str | None, list[str] | None]:
+    """Return a best-effort server-resolved owner/user/group prefilter identity.
+
+    The authenticated Nextcloud UID and current group list are resolved via the
+    OCS current-user endpoint using the stored app credential.  Client-supplied
+    group headers are deliberately not trusted.  Failure disables only the
+    metadata prefilter for this request; live WebDAV ACL remains mandatory.
+    """
+    if not bool(cfg_get(app_config, "acl.prefilter.enabled", default=False)):
+        return None, None
+    if not live_acl.enabled:
+        log.info("ACL prefilter configured but skipped: live ACL disabled")
+        return None, None
+
+    rag_user_id = str(http_request.headers.get("x-rag-user-id") or "").strip()
+    try:
+        uid, groups = live_acl.prefilter_identity(
+            None if live_acl.identity_mode == "single_user" else rag_user_id
+        )
+    except (AclIdentityError, AclConfigurationError, AclBackendError) as exc:
+        log.warning(
+            "ACL prefilter configured but skipped: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None, None
+
+    log.info(
+        "ACL prefilter: applied user=%r groups=%d source=nextcloud_ocs",
+        uid,
+        len(groups),
+    )
+    return uid, groups
 
 
 def _get_web_arm() -> WebResearchArm:
@@ -557,6 +596,12 @@ class GraphEvidenceRequest(BaseModel):
     entity_discovery: bool | None = None
     relation_discovery: bool | None = None
     documents: list[GraphEvidenceDocument] = Field(default_factory=list, max_length=8)
+
+
+class ChatArchiveRegisterRequest(BaseModel):
+
+    document_id: str = Field(..., min_length=1)
+    path: str = Field(..., min_length=1)
 
 
 class ResearchFindingDocument(BaseModel):
@@ -1282,6 +1327,49 @@ async def web_archive_finalize(request: WebArchiveFinalizeRequest, http_request:
 
 
 # ------------------------------------------------------------
+# Archive provenance registration
+# ------------------------------------------------------------
+
+@app.post(
+    "/source-origin/register-chat",
+    summary="Register a Nextcloud chat archive document",
+    **ZONE_TRUSTED_PROVIDER
+)
+def register_chat_archive_source(body: ChatArchiveRegisterRequest) -> dict[str, Any]:
+    document_id = str(body.document_id or "").strip()
+    path = str(body.path or "").strip().replace("\\", "/").strip("/")
+    if not document_id.startswith("files:") or not document_id[6:].isdigit():
+        raise HTTPException(status_code=400, detail="document_id must be files:<numeric-id>")
+    roots = tuple(chat_archive_roots())
+    if not path or not any(path_is_under(path, root) for root in roots):
+        raise HTTPException(status_code=400, detail="path is outside the configured chat archive root")
+
+    changed = register_document(
+        document_id,
+        "chat_archive",
+        source_path=path,
+        classification_source="chat_archive_write",
+    )
+    mirror = {"checked": 0, "updated": 0, "missing": 0}
+    try:
+        mirror = auto_mirror_registry_to_elasticsearch(retry_seconds=1.0)
+    except Exception as exc:
+        log.warning(
+            "chat archive source_origin mirror deferred for %s: %s: %s",
+            document_id,
+            type(exc).__name__,
+            exc,
+        )
+    return {
+        "ok": True,
+        "document_id": document_id,
+        "source_origin": "chat_archive",
+        "registered": bool(changed),
+        "mirror": mirror,
+    }
+
+
+# ------------------------------------------------------------
 # Query rewrite seed context
 # ------------------------------------------------------------
 
@@ -1741,11 +1829,14 @@ def elastic_search_endpoint(body: ElasticSearchRequest, http_request: Request):
             )
 
         diagnostics: dict[str, Any] = {}
+        prefilter_user, prefilter_groups = _acl_prefilter_context(http_request)
         raw_results = elastic_exact_search(
             body.query,
             limit=scan_limit,
             diagnostics=diagnostics,
             source_scopes=body.source_scopes,
+            acl_prefilter_user=prefilter_user,
+            acl_prefilter_groups=prefilter_groups,
         )
 
         acl = live_acl.authorize(
@@ -1958,12 +2049,15 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
         # The legacy request fields stay accepted for wire compatibility but
         # are intentionally not used as a natural-language completeness gate.
 
+        prefilter_user, prefilter_groups = _acl_prefilter_context(http_request)
         search_result = perform_multi_probe_search(
             original_question=body.original_query,
             probes=probes,
             limit=effective_limit,
             required_results=required_results,
             force_unspecific=body.force_unspecific,
+            acl_prefilter_user=prefilter_user,
+            acl_prefilter_groups=prefilter_groups,
         )
 
         # Final security boundary remains live Nextcloud authorization.  The
@@ -2055,6 +2149,7 @@ def search(
             else FINAL_LIMIT
         )
 
+        prefilter_user, prefilter_groups = _acl_prefilter_context(http_request)
         search_result = perform_search(
             question=body.query,
             limit=effective_limit,
@@ -2062,9 +2157,15 @@ def search(
             retrieval_arms=body.retrieval_arms,
             source_scopes=body.source_scopes,
             raw_results=body.raw_results,
-            force_unspecific=body.force_unspecific,
+            # With live ACL enabled the broad-field stop must not happen before
+            # authorization: otherwise "unspecific" itself becomes an oracle
+            # for hidden repository contents. Continue internally, then decide
+            # the user-visible outcome from the ACL-visible candidate set.
+            force_unspecific=(body.force_unspecific or live_acl.enabled),
             search_spec=(body.search_spec.model_dump() if body.search_spec is not None else None),
             entity_context_override=body.query_context,
+            acl_prefilter_user=prefilter_user,
+            acl_prefilter_groups=prefilter_groups,
         )
 
         # Security boundary: authorization is deliberately applied only after
@@ -2078,6 +2179,38 @@ def search(
             log.info("live_acl search: checked=%d authorized=%d", acl.checked, acl.authorized)
 
         results = [result_to_dict(item) for item in acl.results]
+
+        # The retrieval signal is computed on the index-wide candidate field.
+        # When live ACL is active, never expose a broad/unspecific judgment until
+        # at least one of the bounded final candidates is visible to this user.
+        # A user with zero authorized candidates gets the ordinary no-results
+        # path instead, so repository breadth cannot be inferred through wording.
+        signal_decision = dict(
+            (search_result.get("retrieval_signal") or {}).get("decision") or {}
+        )
+        acl_guarded_unspecific = bool(
+            acl.enabled
+            and not body.force_unspecific
+            and str(signal_decision.get("strategy") or "") == "unspecific"
+            and str(signal_decision.get("applied_strategy") or "") == "forced_fusion"
+        )
+        response_retrieval_mode = search_result.get("retrieval_mode")
+        response_retrieval_message = search_result.get("retrieval_message", "")
+        if acl_guarded_unspecific:
+            if results:
+                response_retrieval_mode = "unspecific"
+                response_retrieval_message = UNSPECIFIC_RETRIEVAL_MESSAGE
+                results = []
+                log.info(
+                    "ACL-gated unspecific feedback: authorized=%d -> unspecific",
+                    acl.authorized,
+                )
+            else:
+                response_retrieval_mode = "no_results"
+                response_retrieval_message = ""
+                log.info(
+                    "ACL-gated unspecific feedback: authorized=0 -> no_results"
+                )
 
         # Broad entity queries may carry Graph document ids only as private ACL
         # probes.  Never expose the candidate list itself: one authorized linked
@@ -2121,9 +2254,7 @@ def search(
                 ),
 
             "retrieval_mode":
-                search_result.get(
-                    "retrieval_mode"
-                ),
+                response_retrieval_mode,
 
             "retrieval_strategy":
                 search_result.get(
@@ -2131,10 +2262,7 @@ def search(
                 ),
 
             "retrieval_message":
-                search_result.get(
-                    "retrieval_message",
-                    "",
-                ),
+                response_retrieval_message,
 
             "retrieval_arms":
                 search_result.get("retrieval_arms", body.retrieval_arms),
@@ -2145,8 +2273,10 @@ def search(
             "raw_results":
                 bool(search_result.get("raw_results", body.raw_results)),
 
+            # Report the caller's explicit control flag, not the internal
+            # ACL-safety override used to defer broad-field feedback.
             "force_unspecific":
-                bool(search_result.get("force_unspecific", body.force_unspecific)),
+                bool(body.force_unspecific),
 
             "retrieval_signal": (
                 {}

@@ -78,7 +78,7 @@
 
 {% if not detail.is_tombstone %}
 <h3>Neuen Alias anlegen</h3>
-<p class="muted">Nur für eine zusätzliche Namensform. Wenn bereits eine zweite Entity existiert, stattdessen unten nach ihr suchen und einen Merge prüfen.</p>
+<p class="muted">Nur für eine zusätzliche Namensform. SAME_AS-Identitätsentscheidungen erfolgen unter „Identitäts-Kandidaten“. Der Merge unten ist die stärkere technische Konsolidierung mit Survivor/Tombstone.</p>
 <form method="post" action="{{ request.app.url_path_for('admin_entity_alias_add', entity_id=detail.entity.entity_id) }}" class="inline-form wide">
   <input name="alias" placeholder="Alias" required>
   <select name="policy"><option>contextual</option><option>exclusive</option><option>search_only</option></select>
@@ -163,6 +163,14 @@
 </tbody></table>
 {% else %}<p class="muted">Noch keine Relation Observations.</p>{% endif %}
 </section>
+
+{% if detail.same_as %}
+<section>
+<h2>Identisch verknüpfte Entities</h2>
+<p class="muted">SAME_AS bestätigt dieselbe reale Identität, ohne ContactRecords, Namen oder Provenienz zusammenzuführen.</p>
+<ul>{% for e in detail.same_as %}<li><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}">{{ e.display_name }}</a> <span class="muted">{{ e.identity_status or '—' }}{% if e.decided_at %} · {{ e.decided_at }}{% endif %}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
 
 {% if detail.merged_from %}
 <section><h2>In diese Entity gemergt</h2><ul>{% for e in detail.merged_from %}<li><a href="{{ request.app.url_path_for('admin_entity_detail', entity_id=e.entity_id) }}">{{ e.display_name }}</a> <span class="muted">{{ e.merged_at }}</span></li>{% endfor %}</ul></section>

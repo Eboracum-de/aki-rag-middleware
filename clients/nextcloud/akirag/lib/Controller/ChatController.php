@@ -47,8 +47,15 @@ class ChatController extends Controller {
             if (!empty($result['sources']) && is_array($result['sources'])) {
                 $assistant['sources'] = $result['sources'];
             }
+            if (!empty($result['source_scopes']) && is_array($result['source_scopes'])) {
+                $assistant['source_scopes'] = $result['source_scopes'];
+            }
             $stored[] = $assistant;
             $chat = $this->store->save($conversationId, $stored, $sourceScopes);
+            $this->proxy->registerChatArchive(
+                $chat['document_id'] ?? '',
+                $chat['archive_path'] ?? ''
+            );
             $result['message_created_at'] = $assistantCreatedAt;
             $result['conversation'] = [
                 'id' => $chat['id'],
@@ -96,6 +103,10 @@ class ChatController extends Controller {
     public function rename($id = '', $title = '') {
         try {
             $chat = $this->store->rename($id, $title);
+            $this->proxy->registerChatArchive(
+                $chat['document_id'] ?? '',
+                $chat['archive_path'] ?? ''
+            );
             return new DataResponse(['ok' => true, 'chat' => $chat]);
         } catch (\InvalidArgumentException $e) {
             return new DataResponse(['error' => $e->getMessage()], 400);

@@ -97,3 +97,16 @@ def test_policy_may_disable_installed_optional_capability():
         },
     })
     assert not any(level == "error" for level, _ in found)
+
+
+def test_rejects_unknown_evidence_control_mode():
+    found = messages({
+        "elasticsearch": {"enabled": True},
+        "qdrant": {"enabled": False},
+        "reranker": {"backend": "none"},
+        "evidence_control": {"mode": "automatic"},
+    })
+    assert any(
+        level == "error" and "evidence_control.mode must be off or review" in message
+        for level, message in found
+    )

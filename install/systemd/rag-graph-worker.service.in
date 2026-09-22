@@ -8,6 +8,7 @@ Type=simple
 User=@RAG_USER@
 Group=@RAG_GROUP@
 WorkingDirectory=@RAG_DIR@
+ExecCondition=/bin/bash -c '! grep -Eiq "^RAG_MAINTENANCE_MODE=(1|true|yes|on)$" "@RAG_DIR@/runtime.env"'
 Nice=15
 IOSchedulingClass=idle
 ExecStart=/bin/bash @RAG_DIR@/start-graph-worker.sh

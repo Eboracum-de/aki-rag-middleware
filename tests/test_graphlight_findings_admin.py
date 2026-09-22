@@ -185,6 +185,15 @@ def test_admin_findings_javascript_is_external_and_csp_allows_only_self_scripts(
     assert "confirm-submit" in admin_js
 
 
+def test_admin_layout_warns_when_live_acl_is_disabled():
+    root = Path(__file__).resolve().parents[1]
+    base = (root / "rag/templates/admin/base.html").read_text()
+    admin_ui = (root / "rag/admin_ui.py").read_text()
+    assert "acl_disabled_warning" in admin_ui
+    assert "Live Nextcloud ACL ist deaktiviert." in base
+    assert "aktuellen Nextcloud-Berechtigungen" in base
+
+
 def test_admin_js_asset_is_registered_and_backed_by_static_file():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
@@ -739,3 +748,51 @@ def test_admin_and_self_service_guards_do_not_use_global_2000_finding_scan():
     assert "list_research_findings(limit=2000)" not in admin_source
     assert "list_research_findings(limit=2000)" not in curation_source
     assert "_require_admin_findings_context(canonical_user_id, finding_ids)" in admin_source
+
+
+def test_acl_denied_uncurated_finding_cleanup_detaches_only_user_provenance_and_gc_orphans():
+    store = object.__new__(GraphStore)
+    calls = []
+
+    def fake_run(query: str, **params):
+        calls.append((query, params))
+        if "RETURN count(p) AS edge_count" in query:
+            return [{"edge_count": 2, "finding_ids": ["f1"]}]
+        if "RETURN f.finding_id AS finding_id" in query:
+            return [{"finding_id": "f1"}]
+        return []
+
+    store._run = fake_run  # type: ignore[method-assign]
+    result = store.purge_denied_uncurated_research_findings_for_user(
+        "user-a", ["f1", "f1"]
+    )
+
+    assert result == {
+        "requested": 1,
+        "detached_edges": 2,
+        "detached_findings": 1,
+        "deleted_findings": 1,
+    }
+    eligibility_query, eligibility_params = calls[0]
+    detach_query, detach_params = calls[1]
+    orphan_query, orphan_params = calls[2]
+    delete_query, delete_params = calls[3]
+    assert "canonical_user_id:$canonical_user_id" in eligibility_query
+    assert "NOT EXISTS { MATCH (f)-[:CURATED_ENTITY]->(:Entity) }" in eligibility_query
+    assert "NOT EXISTS { MATCH (:RelationObservation)-[:DERIVED_FROM_FINDING]->(f) }" in eligibility_query
+    assert "size(coalesce(properties(f)['suppressed_entity_texts'],[]))=0" in eligibility_query
+    assert eligibility_params["canonical_user_id"] == "user-a"
+    assert eligibility_params["finding_ids"] == ["f1"]
+    assert "DELETE p" in detach_query
+    assert detach_params["finding_ids"] == ["f1"]
+    assert "NOT EXISTS { MATCH (:ResearchRun)-[:PRODUCED]->(f) }" in orphan_query
+    assert orphan_params["finding_ids"] == ["f1"]
+    assert "DETACH DELETE f" in delete_query
+    assert delete_params["finding_ids"] == ["f1"]
+
+
+def test_acl_denied_cleanup_is_noop_without_user_or_findings():
+    store = object.__new__(GraphStore)
+    store._run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not query"))  # type: ignore[method-assign]
+    assert store.purge_denied_uncurated_research_findings_for_user("", ["f1"])["detached_edges"] == 0
+    assert store.purge_denied_uncurated_research_findings_for_user("user-a", [])["deleted_findings"] == 0

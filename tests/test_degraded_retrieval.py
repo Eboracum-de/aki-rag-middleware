@@ -27,6 +27,8 @@ def test_elasticsearch_failure_returns_degraded_payload_not_exception(monkeypatc
     assert payload["results"] == []
     assert payload["backend_status"]["files"]["available"] is False
     assert "files" in payload["retrieval_message"]
+    assert "keinen verwertbaren Treffer" in payload["retrieval_message"]
+    assert "mit den verbleibenden Diensten bearbeitet" not in payload["retrieval_message"]
 
 
 def test_disabled_vector_is_not_reported_as_failed(monkeypatch):

@@ -15,19 +15,21 @@ def test_standard_installer_waits_for_neo4j_and_runs_full_schema_upgrade():
     assert "exit 1" in script[init:init + 1200]
 
 
-def test_super_light_installer_waits_for_neo4j_and_retries_schema_upgrade():
+def test_super_light_install_stays_provider_only_until_maintenance_is_disabled():
     script = (ROOT / "install/profiles/install-super-light.sh").read_text()
-    stack_start = script.index('compose up -d --remove-orphans "${SERVICES[@]}"')
-    init = script.index("compose exec -T api python -m rag.graph --config /app/config.yaml init")
-    assert init > stack_start
-    window = script[stack_start:init + 1200]
-    assert "NEO4J_SCHEMA_READY=0" in window
-    assert "for attempt in $(seq 1 90)" in window
-    assert "Neo4j/schema: waiting" in window
-    assert "Neo4j/schema: ready" in script[init:init + 1800]
-    assert "Neo4j did not become ready or the AKI schema upgrade failed." in window
-    assert "sleep 2" in window
-    assert "exit 1" in window
+    compose = (ROOT / "install/super-light/docker-compose.yml").read_text()
+    maintenance = (ROOT / "install/maintenance-mode.sh").read_text()
+
+    assert "set_runtime_env_value RAG_MAINTENANCE_MODE true" in script
+    assert 'SERVICES=(provider)' in script
+    assert 'SERVICES=(api provider mail-worker neo4j playwright-renderer)' not in script
+    assert "compose exec -T api python -m rag.graph --config /app/config.yaml init" not in script
+    assert 'command: ["python", "-m", "rag.provider_entrypoint"]' in compose
+    assert "compose up -d neo4j playwright-renderer api mail-worker" in maintenance
+    assert "compose exec -T api python -m rag.graph --config /app/config.yaml init" in maintenance
+    assert "Neo4j/schema: waiting" in maintenance
+    assert "returning to maintenance mode" in maintenance
+    assert "compose up -d --no-deps --force-recreate provider" in maintenance
 
 
 def test_api_startup_has_nonfatal_schema_upgrade_fallback():
