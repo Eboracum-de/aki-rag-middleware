@@ -1,4 +1,4 @@
-# AKI Recherche 0.2.5
+# AKI Recherche 0.2.6
 
 Schlankes Nextcloud-23+-Frontend für RAG Middleware 0.8.5.
 
@@ -8,7 +8,7 @@ Schlankes Nextcloud-23+-Frontend für RAG Middleware 0.8.5.
 - pro Benutzerfrage: **Erneut senden** und **Bearbeiten & erneut senden**
 - sichtbarer Hinweis in jedem Chat, für thematisch unabhängige Fragen einen neuen Chat zu verwenden
 - pro AKI-Antwort persistierte und neben dem Zeitstempel angezeigte effektive Source Scopes (UI-Auswahl oder explizite Source-Directives)
-- persistente per-user Chat-Historie als strukturierte HTML/Metadaten unter `AKI-Chats/`; `/chatarchive` bleibt ein eigener Source Scope
+- persistente per-user Chat-Historie als Markdown plus Metadaten unter `AKI-Chats/`; beim Speichern wird eine vorhandene Legacy-HTML-Datei entfernt; `/chatarchive` bleibt ein eigener Source Scope
 
 Beim Bearbeiten wird der Verlauf ab der ausgewählten Benutzerfrage verzweigt. Die
 alte Frage und ihre späteren Antworten werden nicht zusammen mit der geänderten
@@ -18,6 +18,7 @@ Frage an die Middleware geschickt.
 - 0.2.3: sichere Markdown-Tabellen, Zeitstempel, persistente Saved-Chats/Sidebar, `/help`-Hinweis und Eingabe direkt unter dem Verlauf.
 - 0.2.4: Nextcloud-23-kompatible `@NoAdminRequired`-Docblocks für Chat-Historie, Laden, Umbenennen und Löschen; normale Benutzer erhalten keinen irrtümlichen 403 mehr.
 - 0.2.5: Kontext-Hinweis im Chat-Header sowie pro Antwort persistierte/angezeigte effektive Quellenbereiche; explizite Source-Directives werden gegenüber der Checkbox-Auswahl korrekt ausgewiesen.
+- 0.2.6: lesbare Markdown-Chatarchive mit stabiler Quellenprovenienz; Legacy-HTML wird beim Speichern entfernt.
 
 ## Installation
 
