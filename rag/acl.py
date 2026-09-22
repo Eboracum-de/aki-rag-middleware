@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import os
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -168,6 +168,49 @@ def build_fileid_search_xml(username: str, file_ids: list[str]) -> bytes:
     where.append(_nested_or(comparisons) if len(comparisons) > 1 else comparisons[0])
     ET.SubElement(basic, f"{{{DAV_NS}}}orderby")
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def parse_authorized_file_paths(
+    xml_body: str | bytes,
+    username: str,
+) -> dict[str, str]:
+    """Map visible Nextcloud file IDs to canonical user-relative DAV paths."""
+    try:
+        root = ET.fromstring(xml_body)
+    except ET.ParseError as exc:
+        raise AclBackendError(f"invalid WebDAV SEARCH response: {exc}") from exc
+
+    user = str(username or "").strip()
+    if not user:
+        return {}
+    encoded_user = quote(user, safe="")
+    prefixes = (
+        f"/remote.php/dav/files/{encoded_user}/",
+        f"/remote.php/dav/files/{user}/",
+        f"/files/{encoded_user}/",
+        f"/files/{user}/",
+    )
+    result: dict[str, str] = {}
+    for response in root.findall(f".//{{{DAV_NS}}}response"):
+        href_node = response.find(f"{{{DAV_NS}}}href")
+        if href_node is None or not href_node.text:
+            continue
+        parsed_path = urlparse(str(href_node.text)).path
+        decoded_path = unquote(parsed_path)
+        relative = ""
+        for prefix in prefixes:
+            decoded_prefix = unquote(prefix)
+            if decoded_path.startswith(decoded_prefix):
+                relative = decoded_path[len(decoded_prefix):].lstrip("/")
+                break
+        if not relative:
+            continue
+        for elem in response.iter(f"{{{OC_NS}}}fileid"):
+            file_id = str(elem.text or "").strip()
+            if file_id.isdigit():
+                result[file_id] = relative
+                break
+    return result
 
 
 def parse_authorized_fileids(xml_body: str | bytes) -> set[str]:
@@ -486,6 +529,55 @@ class NextcloudLiveAcl:
                     )
                 )
         return AclDecision(True, filtered, len(results), len(filtered))
+
+    def resolve_visible_file_path(
+        self,
+        document_id: str,
+        *,
+        rag_user_id: str | None = None,
+    ) -> str | None:
+        """Return the server-derived user-relative path for one visible file id."""
+        if not self.enabled:
+            raise AclConfigurationError("live ACL is disabled")
+        if not self.webdav_url:
+            raise AclConfigurationError("acl.webdav_url/nextcloud.base_url is not configured")
+        file_id = _file_id({"document_id": document_id})
+        if not file_id:
+            return None
+
+        credential = self._credential(rag_user_id)
+        verify: bool | str = self.ca_file if self.ca_file else self.verify_tls
+        body = build_fileid_search_xml(credential.username, [file_id])
+        try:
+            response = httpx.request(
+                "SEARCH",
+                self.webdav_url,
+                content=body,
+                headers={"Content-Type": "text/xml; charset=utf-8"},
+                auth=(credential.username, credential.password),
+                timeout=self.timeout,
+                verify=verify,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise AclIdentityError(
+                    f"Nextcloud rejected live ACL credentials (HTTP {status})"
+                ) from exc
+            raise AclBackendError(
+                f"Nextcloud live ACL SEARCH failed (HTTP {status})"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AclBackendError(
+                f"Nextcloud live ACL SEARCH failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        return parse_authorized_file_paths(
+            response.content,
+            credential.username,
+        ).get(file_id)
+
 
     def authorize(self, results: list[dict[str, Any]], *, rag_user_id: str | None = None) -> AclDecision:
         """Filter *already final* results against current Nextcloud visibility."""
