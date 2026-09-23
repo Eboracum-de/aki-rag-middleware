@@ -409,7 +409,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         async with httpx.AsyncClient(
             timeout=15.0,
             verify=_verify_tls(cfg),
-            headers={"User-Agent": f"AKI-RAG/{VERSION}", "Accept": "application/json"},
+            headers={"User-Agent": "SunaQ", "Accept": "application/json"},
         ) as client:
             response = await client.post(nextcloud_base + "/index.php/login/v2")
         response.raise_for_status()
@@ -446,7 +446,7 @@ def create_curation_router(cfg: dict[str, Any]) -> APIRouter:
         async with httpx.AsyncClient(
             timeout=15.0,
             verify=_verify_tls(cfg),
-            headers={"User-Agent": f"AKI-RAG/{VERSION}", "Accept": "application/json"},
+            headers={"User-Agent": "SunaQ", "Accept": "application/json"},
         ) as client:
             response = await client.post(
                 str(flow["poll_endpoint"]),

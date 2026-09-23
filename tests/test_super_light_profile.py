@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from rag.reranker import Reranker
+from rag.sunaq_models import load_model_registry
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -12,19 +13,22 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_super_light_profile_disables_vector_reranker_and_graph_documents():
     cfg = yaml.safe_load((ROOT / "install/super-light/config.super-light.yaml").read_text())
+    registry = load_model_registry(cfg)
     assert cfg["deployment"]["profile"] == "super-light"
     assert cfg["elasticsearch"]["enabled"] is True
     assert cfg["qdrant"]["enabled"] is False
     assert cfg["sync_worker"]["enabled"] is False
     assert cfg["neo4j"]["enabled"] is True
-    assert cfg["entity_resolution"]["enabled"] is True
-    assert cfg["graph_retrieval"]["enabled"] is False
     assert cfg["graph_queue"]["enabled"] is False
     assert cfg["graph_queue"]["worker"]["enabled"] is False
     assert cfg["graph_indexer"]["enabled"] is False
     assert cfg["graph_entity_discovery"]["enabled"] is False
     assert cfg["graph_relation_discovery"]["enabled"] is False
-    assert cfg["reranker"]["backend"] == "none"
+
+    for model in registry.list():
+        assert model.section("entity_resolution")["enabled"] is True
+        assert model.section("graph_retrieval")["enabled"] is False
+        assert model.section("reranker")["backend"] == "none"
 
 
 def test_super_light_requirements_have_no_model_or_vector_client_dependencies():
@@ -180,10 +184,19 @@ def test_super_light_installer_supports_x509_compatibility_without_disabling_tls
     assert "verify_tls: false" not in installer
 
 
-def test_super_light_uses_ten_verification_candidates_without_reranker():
+def test_super_light_uses_profile_specific_verification_budget_without_reranker():
     cfg = yaml.safe_load((ROOT / "install/super-light/config.super-light.yaml").read_text())
-    assert cfg["retrieval_planner"]["verification_candidate_limit"] == 10
-    assert cfg["reranker"]["backend"] == "none"
+    registry = load_model_registry(cfg)
+    standard = registry.get("sunaq-standard")
+    thorough = registry.get("sunaq-thorough")
+    deep = registry.get("sunaq-deep")
+
+    assert standard.section("retrieval_planner")["verification_candidate_limit"] == 10
+    assert thorough.section("retrieval_planner")["verification_candidate_limit"] == 30
+    assert deep.section("retrieval_planner")["verification_candidate_limit"] == 50
+    assert standard.section("reranker")["backend"] == "none"
+    assert thorough.section("reranker")["backend"] == "none"
+    assert deep.section("reranker")["backend"] == "none"
 
 
 def test_super_light_renderer_is_shared_landscape_desktop_component():
@@ -213,6 +226,9 @@ def test_super_light_smoke_test_does_not_require_host_venv_or_qdrant():
     assert 'Host Python venv not required' in smoke
     assert 'Qdrant disabled by configuration' in smoke
     assert 'Playwright renderer unavailable' in smoke
+    assert 'Neo4j deferred until maintenance mode is disabled' in smoke
+    assert 'Playwright renderer deferred until maintenance mode is disabled' in smoke
+    assert 'MAINTENANCE_ACTIVE=1' in smoke
 
 
 def test_super_light_installer_records_profile_state_for_diagnostics():
@@ -232,9 +248,11 @@ def test_playwright_renderer_stays_alive_in_degraded_browser_state():
 def test_installers_refuse_nonempty_foreign_prefixes():
     super_light = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(encoding="utf-8")
     standard = (ROOT / "install" / "profiles" / "install-standard.sh").read_text(encoding="utf-8")
-    marker = "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation"
+    marker = "Refusing to install into non-empty directory that is not recognized as a SunaQ installation"
     assert marker in super_light
     assert marker in standard
+    assert '.sunaq-installation' in super_light
+    assert '.sunaq-installation' in standard
     assert '.aki-rag-installation' in super_light
     assert '.aki-rag-installation' in standard
 
@@ -256,8 +274,8 @@ def test_install_profile_shell_scripts_are_syntax_valid():
 
 def test_super_light_rerun_aborts_for_running_stack_but_accepts_stopped_stack():
     installer = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(encoding="utf-8")
-    running = '[WARN] Existing AKI RAG services are running:'
-    stopped = '[INFO] Existing AKI RAG stack is stopped; rerun may rebuild/start it.'
+    running = '[WARN] Existing SunaQ services are running:'
+    stopped = '[INFO] Existing SunaQ stack is stopped; rerun may rebuild/start it.'
     assert running in installer
     assert stopped in installer
     block = installer[installer.index(running):installer.index(stopped)]
@@ -412,4 +430,56 @@ def test_installers_warn_on_unreachable_configured_services_without_failing_inst
         assert 'probe_service_url "Nextcloud" "$NEXTCLOUD_URL"' in installer
         assert 'probe_service_url "Elasticsearch" "$ELASTICSEARCH_URL"' in installer
         assert 'curl -sS --max-time 5 -o /dev/null "$url"' in installer
-        assert "Installation will continue; verify the configured URL/service before using AKI." in installer
+        assert "Installation will continue; verify the configured URL/service before using SunaQ." in installer
+
+
+def test_super_light_provider_image_packages_sunaq_models():
+    dockerfile = (ROOT / "install/super-light/Dockerfile.provider").read_text(encoding="utf-8")
+    assert "COPY models/ /app/models/" in dockerfile
+    assert (ROOT / "models" / "standard" / "profile.yaml").is_file()
+    assert (ROOT / "models" / "thorough" / "profile.yaml").is_file()
+    assert (ROOT / "models" / "deep" / "profile.yaml").is_file()
+
+
+
+def test_installers_seed_preserve_and_add_new_sunaq_model_packages():
+    standard = (ROOT / "install" / "profiles" / "install-standard.sh").read_text(
+        encoding="utf-8"
+    )
+    super_light = (ROOT / "install" / "profiles" / "install-super-light.sh").read_text(
+        encoding="utf-8"
+    )
+    for installer in (standard, super_light):
+        assert 'if [[ ! -d "$PREFIX/models" ]]; then' in installer
+        assert 'cp -a "$SOURCE_DIR/models" "$PREFIX/models"' in installer
+        assert 'for source_model in "$SOURCE_DIR"/models/*; do' in installer
+        assert 'if [[ ! -e "$PREFIX/models/$model_name" ]]; then' in installer
+        assert 'cp -a "$source_model" "$PREFIX/models/$model_name"' in installer
+        assert 'Added new SunaQ model package:' in installer
+    assert "for item in rag prompts models ontology" not in standard
+    assert "for item in rag prompts models ontology" not in super_light
+
+
+
+def test_fresh_install_defaults_to_opt_sunaq_but_legacy_prefix_is_still_recognized():
+    standard = (ROOT / "install/profiles/install-standard.sh").read_text(encoding="utf-8")
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
+    for installer in (standard, super_light):
+        assert 'PREFIX="/opt/sunaq"' in installer
+        assert 'LEGACY_PREFIX="/opt/nextcloud-rag"' in installer
+        assert 'PREFIX_EXPLICIT=0' in installer
+        assert 'Legacy SunaQ/AKI installation detected' in installer
+
+
+
+def test_optional_openwebui_uses_pinned_slim_image_and_hides_arena():
+    installer = (ROOT / "install/profiles/install-super-light.sh").read_text(
+        encoding="utf-8"
+    )
+    image = (
+        "ghcr.io/open-webui/open-webui:"
+        "v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e"
+    )
+    assert f"OPENWEBUI_IMAGE={image}" in installer
+    assert "${OPENWEBUI_IMAGE:-" + image + "}" in installer
+    assert 'ENABLE_EVALUATION_ARENA_MODELS: "false"' in installer

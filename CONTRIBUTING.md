@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking an interest in AKI RAG Middleware.
+Thanks for taking an interest in SunaQ.
 
 Bug reports, reproducible test cases, documentation corrections, operational feedback and feature discussions are especially useful during the public-beta phase.
 

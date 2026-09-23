@@ -1,11 +1,17 @@
-# Installation – 0.8.5-rc5
+# Installation – 0.8.6-rc1 (draft)
 
 All deployment variants use the single public entry point `install/install.sh`. Select `--profile standard` (default) or `--profile super-light`. The super-light profile is containerized and therefore does not require Python >=3.10 on the host; it is intended for older/smaller systems such as Leap 15.3.
 
-Functional profile and deployment mechanism are conceptually separate. In the 0.8.5 line the supported mappings are `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware. A future release may offer additional combinations such as `standard + dockerized` without duplicating retrieval/business logic.
+Functional profile and deployment mechanism are conceptually separate. In the 0.8.6-rc1 candidate the supported mappings remain `standard -> native` and `super-light -> dockerized`; the latter is not a fork of the middleware.
 
-`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` remains the preceding accepted baseline. It retains the Graph-Lite Findings curation model and adds the rc4.x authorization, installer, TLS and internal-service hardening, including explicit Standard Playwright lifecycle management and rerun safety. Graph-Lite curation remains manual and does not alter retrieval automatically. The 0.8.5 line uses the following security
-and user-configuration model:
+Fresh 0.8.6 installations default to **`/opt/sunaq`**. A recognized existing
+installation is deliberately kept at its current prefix (for example
+`/opt/sunaq`); the installer does not move site-owned runtime state.
+
+0.8.6-rc1 retains the rc5.1 authorization/Graph-Lite/backup baseline and adds
+SunaQ research profiles, per-user model access, the SunaQ Nextcloud client and
+client-neutral document-only source defaults. The security and
+user-configuration model remains:
 
 - multi-user + live Nextcloud ACL is the safe installation default;
 - Nextcloud TLS verification is on by default;
@@ -75,7 +81,7 @@ Standard install does not pre-download the local Hugging Face reranker model
 unless `--with-reranker-download` is supplied. TEI is an external/local-helper
 service and does not require that model cache in the middleware venv.
 
-The default prefix is `/opt/nextcloud-rag` and the service user is `rag`.
+The fresh-install default prefix is `/opt/sunaq` and the service user is `rag`. Recognized legacy prefixes are preserved on rerun.
 
 ## 2. Installation modes
 
@@ -85,7 +91,7 @@ The default prefix is `/opt/nextcloud-rag` and the service user is `rag`.
 --acl-off      explicit diagnostic mode; never use for a shared document set
 ```
 
-Common connection/frontend/proxy switches now use the same names in Standard and Super-Light. On a recognized Standard rerun, the installer reports the existing AKI installation and verifies that native AKI processes, systemd units and local Docker Compose services are stopped before modifying files. If the running state cannot be determined reliably, the rerun aborts without changes. On rerun, an existing OpenWebUI/proxy selection is retained unless explicitly overridden with `--no-openwebui` / `--no-proxy`. Standard also accepts `--nextcloud-url`, `--elasticsearch-url`, `--elasticsearch-index`, `--proxy-http-port` and `--proxy-https-port`, so deployment scripts do not need profile-specific spellings.
+Common connection/frontend/proxy switches now use the same names in Standard and Super-Light. On a recognized Standard rerun, the installer reports the existing SunaQ installation and verifies that native SunaQ processes, systemd units and local Docker Compose services are stopped before modifying files. If the running state cannot be determined reliably, the rerun aborts without changes. On rerun, an existing OpenWebUI/proxy selection is retained unless explicitly overridden with `--no-openwebui` / `--no-proxy`. Standard also accepts `--nextcloud-url`, `--elasticsearch-url`, `--elasticsearch-index`, `--proxy-http-port` and `--proxy-https-port`, so deployment scripts do not need profile-specific spellings.
 
 Other useful flags:
 
@@ -101,7 +107,17 @@ Other useful flags:
 -y                  non-interactive after plan review
 ```
 
-Fresh installs and installer reruns deliberately return to **maintenance mode**. The OpenAI-compatible provider is started in a minimal maintenance implementation that still validates registered provider-client Bearer keys, but does not load the RAG API, LLM backends, retrieval stores or workers. Normal API/workers stay stopped until site configuration and checks are complete. Selected infrastructure containers may already be prepared or running in the Standard profile; they do not receive user RAG traffic while the provider gate remains in maintenance mode.
+Fresh installs and installer reruns deliberately return to **maintenance mode**. The OpenAI-compatible provider is started in a minimal maintenance implementation that still validates registered provider-client Bearer keys, but does not load the normal SunaQ/LLM pipeline.
+
+For **Super-Light**, the initial maintenance start intentionally brings up only
+the provider plus optional OpenWebUI/nginx. Neo4j, Playwright, the normal API and
+mail worker are started by `maintenance-mode.sh off`. A smoke test run before
+that transition therefore reports Neo4j/Playwright as *deferred*, not failed.
+After maintenance mode is disabled those services are checked normally.
+
+Selected infrastructure containers may already be prepared or running in the
+Standard profile; they do not receive user SunaQ traffic while the provider gate
+remains in maintenance mode.
 
 All Docker images shipped by the installer are immutable digest-qualified pins.
 Human-readable tags remain in the image reference for clarity, but Docker resolves
@@ -110,9 +126,17 @@ explicit release changes, not side effects of a mutable tag.
 
 ## 3. Mandatory site configuration before first normal start
 
-Edit `/opt/nextcloud-rag/config.yaml`. During this phase the provider returns only `RAG ist im Maintenance-Modus. Bitte versuchen Sie es später erneut.` after successful provider-key authentication.
+Edit `/opt/sunaq/config.yaml`. During this phase the provider returns only `SunaQ ist im Maintenance-Modus. Bitte versuchen Sie es später erneut.` after successful provider-key authentication.
 
-The operator switch is:
+The operator switch uses the installation prefix reported by the installer plan. For a fresh 0.8.6 installation:
+
+```bash
+sudo /opt/sunaq/install/maintenance-mode.sh status
+sudo /opt/sunaq/install/maintenance-mode.sh on
+sudo /opt/sunaq/install/maintenance-mode.sh off
+```
+
+A recognized legacy installation keeps its retained prefix; for example:
 
 ```bash
 sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
@@ -120,9 +144,9 @@ sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
 sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
 ```
 
-`on` stops the normal API/background workers and restarts the minimal provider. `off` restarts the normal provider and normal services. This is also the intended envelope for master-key rotation, restore checks and other operations that must not race normal credential/RAG traffic.
+`on` stops the normal API/background workers and restarts the minimal provider. `off` restarts the normal provider and normal services. This is also the intended envelope for master-key rotation, restore checks and other operations that must not race normal credential/SunaQ traffic.
 
-Edit `/opt/nextcloud-rag/config.yaml`.
+Edit `/opt/sunaq/config.yaml`.
 
 At minimum check:
 
@@ -174,7 +198,7 @@ For a private Nextcloud CA, configure a trusted CA rather than disabling TLS
 verification. Both supported installer profiles accept repeatable
 `--ca-certificate FILE` options and build a Nextcloud-specific CA bundle. In a
 native Standard install this becomes
-`/opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem` and is written to
+`/opt/sunaq/runtime/ca/nextcloud-ca-bundle.pem` and is written to
 `nextcloud.ca_file`. This deliberately avoids global
 `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` overrides, which can otherwise replace
 the public trust used for OpenAI, Hugging Face and unrelated HTTPS endpoints.
@@ -182,15 +206,14 @@ the public trust used for OpenAI, Hugging Face and unrelated HTTPS endpoints.
 `security.allow_insecure_nextcloud=true` exists only as an explicit lab escape
 hatch.
 
-Edit `/opt/nextcloud-rag/provider.env` for the actual LLM backend/model names.
-The reference configuration uses OpenAI GPT-5.6 Luna for planner/verifier/answer; place `LLM_API_KEY` only in `runtime.env`. Embeddings remain independently configured in `config.yaml` and default to administrator-managed local Ollama with `qwen3-embedding:4b`.
+Edit `/opt/sunaq/provider.env` for the default backend connection and secrets, and review `models/` for the user-visible SunaQ profiles. The shipped rc1 profiles route planner/verifier/evidence/answer roles through the configured backend unless a profile supplies an explicit role override. Put API keys only in `runtime.env` or another configured secret environment. Embeddings remain independently configured in `config.yaml`.
 
 ## 4. Start and smoke test
 
 ```bash
-sudo -u rag /opt/nextcloud-rag/start-all.sh
-/opt/nextcloud-rag/status.sh
-/opt/nextcloud-rag/install/smoke-test.sh /opt/nextcloud-rag
+sudo -u rag /opt/sunaq/start-all.sh
+/opt/sunaq/status.sh
+/opt/sunaq/install/smoke-test.sh /opt/sunaq
 ```
 
 If systemd units were installed, start them only after site configuration is
@@ -201,8 +224,8 @@ The default nginx topology is:
 ```text
 client -> nginx :443 (TLS)
 HTTP :80 -> 308 HTTPS redirect
-             |-- /rag-admin/ -> RAG Admin UI 127.0.0.1:8765
-             |-- /rag-api/ -> RAG API 127.0.0.1:8765
+             |-- /rag-admin/ -> SunaQ Admin UI 127.0.0.1:8765
+             |-- /rag-api/ -> SunaQ API 127.0.0.1:8765
              |-- /auth/    -> Nextcloud Login Flow endpoints
              |-- /v1/      -> OpenAI-compatible provider 127.0.0.1:8766
              `-- /          -> selected user UI; without UI -> redirect to /rag-admin/
@@ -220,11 +243,11 @@ TCP 443 and, if the redirect should be reachable, TCP 80.
 
 ### Bundled OpenWebUI and HTTPS
 
-Existing Apache/reverse proxy deployments should preferably keep the bundled nginx on alternate loopback/internal ports and proxy the public paths through it. This preserves the tested TLS/rate-limit/authentication rules and RC4.3 security-zone handling. A deployment using `--no-proxy` may proxy directly to 8765 only as an advanced configuration: the external proxy must implement equivalent client authentication and may inject **only** the general `X-AKI-Internal-Key` value from `RAG_INTERNAL_API_KEY` for INTERNAL/ADMIN access. Do not give a generic reverse proxy `RAG_PROVIDER_INTERNAL_KEY`; TRUSTED_PROVIDER/USER calls should originate from the AKI provider. Never expose 8765/8766 directly to an untrusted network.
+Existing Apache/reverse proxy deployments should preferably keep the bundled nginx on alternate loopback/internal ports and proxy the public paths through it. This preserves the tested TLS/rate-limit/authentication rules and RC4.3 security-zone handling. A deployment using `--no-proxy` may proxy directly to 8765 only as an advanced configuration: the external proxy must implement equivalent client authentication and may inject **only** the general `X-AKI-Internal-Key` value from `RAG_INTERNAL_API_KEY` for INTERNAL/ADMIN access. Do not give a generic reverse proxy `RAG_PROVIDER_INTERNAL_KEY`; TRUSTED_PROVIDER/USER calls should originate from the SunaQ provider. Never expose 8765/8766 directly to an untrusted network.
 
 #### Same host as Nextcloud/Apache
 
-If Nextcloud's Apache already owns host ports 80/443, keep Apache as the public entry point and move only the bundled RAG nginx to unused internal host ports. Super-Light supports this directly:
+If Nextcloud's Apache already owns host ports 80/443, keep Apache as the public entry point and move only the bundled SunaQ nginx to unused internal host ports. Super-Light supports this directly:
 
 ```bash
 sudo ./install/install.sh \
@@ -238,11 +261,11 @@ sudo ./install/install.sh \
   --proxy-https-port 444
 ```
 
-The selected ports are part of the recorded `install/last-install-command.sh`, so an installer rerun reproduces the same topology. The RAG nginx still uses its normal TLS/Auth/rate-limit configuration; only the listen ports change. Keep 81/444 blocked from untrusted networks when they are used only as an Apache backend.
+The selected ports are part of the recorded `install/last-install-command.sh`, so an installer rerun reproduces the same topology. The SunaQ nginx still uses its normal TLS/Auth/rate-limit configuration; only the listen ports change. Keep 81/444 blocked from untrusted networks when they are used only as an Apache backend.
 
-The general machine credential injected by RAG nginx authenticates nginx to the INTERNAL service plane; it is **not** an end-user/admin login and it does not grant TRUSTED_PROVIDER/USER privileges. The provider-role secret remains confined to the API/provider runtime. Do not use `--no-proxy-basic-auth` unless an upstream proxy already provides equivalent authentication before requests reach RAG nginx.
+The general machine credential injected by SunaQ nginx authenticates nginx to the INTERNAL service plane; it is **not** an end-user/admin login and it does not grant TRUSTED_PROVIDER/USER privileges. The provider-role secret remains confined to the API/provider runtime. Do not use `--no-proxy-basic-auth` unless an upstream proxy already provides equivalent authentication before requests reach SunaQ nginx.
 
-In the Nextcloud HTTPS virtual host, proxy only the RAG path prefixes to nginx on loopback. Do **not** proxy `/`, because that would replace the Nextcloud application root. A minimal Apache example is:
+In the Nextcloud HTTPS virtual host, proxy only the SunaQ path prefixes to nginx on loopback. Do **not** proxy `/`, because that would replace the Nextcloud application root. A minimal Apache example is:
 
 ```apache
 ProxyPreserveHost On
@@ -277,7 +300,7 @@ ProxyPassReverse /curation/       https://127.0.0.1:444/curation/
 
 This requires Apache's proxy/proxy_http and SSL proxy support. Prefer trusting or replacing the nginx backend certificate where practical; `SSLProxyVerify none` above is appropriate only for the explicitly scoped loopback backend and must not be generalized to unrelated HTTPS proxies.
 
-Configure AKI with the **public Apache URL** (for example `https://cloud.example.org`), not `https://127.0.0.1:444`. Apache then forwards only the RAG paths internally. If bundled OpenWebUI is enabled, its `/` route cannot share the same Nextcloud virtual-host root; expose OpenWebUI through a separate hostname/vhost or keep it local.
+Configure SunaQ with the **public Apache URL** (for example `https://cloud.example.org`), not `https://127.0.0.1:444`. Apache then forwards only the SunaQ path prefixes internally. If bundled OpenWebUI is enabled, its `/` route cannot share the same Nextcloud virtual-host root; expose OpenWebUI through a separate hostname/vhost or keep it local.
 
 
 External clients always use nginx HTTPS (`https://HOST/v1`). The bundled
@@ -318,7 +341,7 @@ each frontend binding nevertheless retains its own Nextcloud app password.
 Create another trusted frontend with its own key:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.provider_clients \
   create openwebui-office --name "OpenWebUI Office"
 ```
@@ -338,7 +361,7 @@ connection to `/v1` with its own trusted-client key and add:
 This path has been validated on a blank VM: the external
 OpenWebUI supplied its stable user ID, triggered Nextcloud Login Flow v2,
 completed authentication, returned an answer and created the canonical user in
-the RAG Admin UI.
+the SunaQ Admin UI.
 
 ## 6. First-user onboarding
 
@@ -468,13 +491,13 @@ stored one-directory-per-mail with `mail.txt`, `.mailmeta.json` and attachments.
 automatically moved.
 
 For each account the worker obtains the canonical user's current Nextcloud app
-password and writes with that identity. A user whose canonical RAG account is
+password and writes with that identity. A user whose canonical SunaQ account is
 disabled or whose Nextcloud credential is absent is skipped.
 
 Manual diagnostics:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.mail_sync --config config.yaml --dry-run
 sudo -u rag ./.venv/bin/python -m rag.mail_sync --config config.yaml --user <nextcloud-login>
 ```
@@ -483,14 +506,14 @@ sudo -u rag ./.venv/bin/python -m rag.mail_sync --config config.yaml --user <nex
 
 Contact seed administration is keyed by the verified Nextcloud account. The
 internal `canonical_user_id` remains an implementation key and is not required
-for normal operation. After a user has completed Login Flow, RAG Admin → Users
+for normal operation. After a user has completed Login Flow, SunaQ Admin → Users
 → Kontakt-DB can synchronize the selected CardDAV address books with the stored
 Nextcloud credential. No separate CardDAV password needs to be configured.
 
 Dockerized super-light CLI:
 
 ```bash
-cd /opt/nextcloud-rag/install/super-light
+cd /opt/sunaq/install/super-light
 ./contacts.sh list
 ./contacts.sh status --user <nextcloud-login>
 ./contacts.sh books --user <nextcloud-login>
@@ -500,7 +523,7 @@ cd /opt/nextcloud-rag/install/super-light
 Native equivalent:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.contacts sync --user <nextcloud-login>
 ```
 
@@ -525,7 +548,7 @@ re-enable/re-auth rather than deleted automatically.
 
 ## 11. Graph and normal sync
 
-When local Neo4j is selected, both installation profiles wait for the database and run the idempotent AKI schema initialization. The same step runs on an installer rerun, so an existing database receives missing non-destructive constraints, indexes and deterministic backfills; a new database is not required. The API also attempts this migration at startup for deployments managed outside the installer. See [the canonical Neo4j schema reference](../docs/NEO4J-SCHEMA.md).
+When local Neo4j is selected, both installation profiles wait for the database and run the idempotent SunaQ schema initialization. The same step runs on an installer rerun, so an existing database receives missing non-destructive constraints, indexes and deterministic backfills; a new database is not required. The API also attempts this migration at startup for deployments managed outside the installer. See [the canonical Neo4j schema reference](../docs/NEO4J-SCHEMA.md).
 
 With Neo4j selected, graph retrieval and the asynchronous graph worker are
 available. Expensive whole-corpus graph extraction remains off during normal
@@ -540,7 +563,7 @@ sync:
 Explicit bulk graphing:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.sync --enqueue-graph
 ```
 
@@ -594,9 +617,9 @@ Then:
 1. set canonical Nextcloud HTTPS URL and Elasticsearch index;
 2. set LLM/embedding endpoint as required;
 3. while maintenance mode is still enabled, run configuration/preflight checks;
-4. leave maintenance mode with `sudo /opt/nextcloud-rag/install/maintenance-mode.sh off`;
+4. leave maintenance mode with `sudo /opt/sunaq/install/maintenance-mode.sh off`;
 5. verify `/rag-api/health` and `/rag-admin/`;
-6. install/open AKI Recherche (or another trusted frontend), complete Nextcloud Login Flow for two users and verify ACL separation;
+6. install/open SunaQ Recherche (or another trusted frontend), complete Nextcloud Login Flow for two users and verify ACL separation;
 7. synchronize one user's Kontakt-DB seed from the Admin UI and verify Neo4j source/provenance;
 8. add a second trusted frontend and verify its identity binding is isolated;
 9. configure one user's Web target, archive a public page and verify landscape/desktop PDF plus hidden metadata;
@@ -604,7 +627,7 @@ Then:
 11. stop Elasticsearch temporarily and verify the user receives a service-unavailable message rather than a generic 500/502;
 12. verify normal document sync leaves bulk graph enqueue disabled and backend degradation never turns into an ACL fail-open.
 
-Blank-VM acceptance for `0.8.5-rc4.3` has been completed for both supported mappings. Super-Light/dockerized installed successfully and passed document search plus RAG Admin checks. Standard/native also completed installation and passed document search plus RAG Admin checks, including automatic startup of the optional Playwright renderer when selected with `--with-playwright`. Repeat the same checklist on the intended deployment host before exposing it to users.
+Blank-VM acceptance for `0.8.5-rc4.3` has been completed for both supported mappings. Super-Light/dockerized installed successfully and passed document search plus SunaQ Admin checks. Standard/native also completed installation and passed document search plus SunaQ Admin checks, including automatic startup of the optional Playwright renderer when selected with `--with-playwright`. Repeat the same checklist on the intended deployment host before exposing it to users.
 
 
 ## 13. Administration reference
@@ -675,14 +698,14 @@ deployment without creating a fork.
 
 ### Reproducible installer reruns
 
-The installer also refuses a non-empty `--prefix` that is not recognized as an AKI RAG installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh installs should use a dedicated empty path; current installations carry `.aki-rag-installation` plus installer state for future reruns.
+The installer also refuses a non-empty `--prefix` that is not recognized as a SunaQ installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh installs should use a dedicated empty path; current installations carry `.aki-rag-installation` plus installer state for future reruns.
 
 
 Keep the exact installation command used for a host. The Super-Light installer now
 records the wrapper invocation in:
 
 ```text
-/opt/nextcloud-rag/install/last-install-command.sh
+/opt/sunaq/install/last-install-command.sh
 ```
 
 The file is mode `0600` because the command may contain internal URLs and certificate
@@ -692,7 +715,7 @@ again, especially after moving certificates or changing external service address
 On a rerun the installer performs an early preflight before modifying the installation:
 it checks the installer source tree, the existing prefix, supplied CA file paths/PEM
 shape and an available Docker daemon when Docker is already installed. For an existing
-Super-Light installation, any running AKI RAG service is a hard preflight error: stop
+Super-Light installation, any running SunaQ service is a hard preflight error: stop
 the stack before rerunning the installer so no refresh is attempted against live
 containers. A recognized but fully stopped stack is informational and remains the
 normal repair/rerun path. An unreachable Docker daemon or missing required input file
@@ -743,8 +766,8 @@ The compatibility alias `--no-x509-strict` is still accepted. Do not substitute
 `verify_tls: false` unless deliberately diagnosing a TLS issue; that disables the
 actual certificate verification rather than only the additional strict flag.
 
-These settings cover the direction **AKI middleware -> Nextcloud**. If the
-Nextcloud-hosted AKI Recherche app connects to an AKI HTTPS endpoint signed by an
+These settings cover the direction **SunaQ middleware -> Nextcloud**. If the
+Nextcloud-hosted SunaQ Recherche app connects to an SunaQ HTTPS endpoint signed by an
 internal CA, Nextcloud itself must also trust that CA in its own certificate
 store. A host-level `curl` succeeding does not prove that Nextcloud's outbound
 HTTP client trusts the same certificate chain.
@@ -778,7 +801,7 @@ Manual configuration remains possible:
 nextcloud:
   base_url: https://cloud.internal.example/nextcloud
   verify_tls: true
-  ca_file: /opt/nextcloud-rag/runtime/ca/nextcloud-ca-bundle.pem
+  ca_file: /opt/sunaq/runtime/ca/nextcloud-ca-bundle.pem
 ```
 
 Legacy `auth.verify_tls`, `acl.verify_tls`, `acl.ca_file` and

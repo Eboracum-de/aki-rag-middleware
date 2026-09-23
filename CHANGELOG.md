@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.6-rc1 – 2026-09-24
+
+- Introduce SunaQ user-facing research profiles `Schnell`, `Gründlich` and `Tief` with stable ordering and per-user model entitlements exposed through authenticated `/v1/models`.
+- Move request-local search/planner/evidence/retrieval-signal/entity-resolution/graph/reranker/context/answer-context settings into startup-loaded `models/<profile>/profile.yaml` packages with model-specific prompt packs and request-local LLM-role routing.
+- Keep the initial rc1 profile experiment budget-only: one retrieval round for all shipped profiles, Evidence Review off and planner thinking off; candidate/answer windows are 10/30/50 documents for Schnell/Gründlich/Tief.
+- Separate legacy remote safety caps from packaged SunaQ profile budgets and add administrator hard ceilings so stronger profiles are not silently flattened back to the legacy 10-candidate/8-document path.
+- Add near-capacity retrieval warnings distinct from hard known-overflow warnings; add verifier batch progress such as `Prüfe Dokumente 11–15 von 48 …`.
+- Add deterministic provider follow-up actions and render them in SunaQ Recherche; stronger-model reruns are offered only when a strictly stronger profile is currently allowed for the authenticated user, while broad/unspecific retrieval can offer `Anfrage präzisieren`.
+- Rename the bundled Nextcloud app to `sunaq` / **SunaQ Recherche 0.3.0**, keep legacy app/archive configuration readable, add a compact modern chat composer, source chips, collapsible research sidebar, model selector and request progress.
+- Make ordinary `documents` the client-neutral implicit source default. Mail/Web/chat archives are opt-in; the bundled SunaQ app intentionally sends Documents + Mail explicitly by default.
+- Change the fresh-install default prefix to `/opt/sunaq` while retaining recognized legacy installations at their existing prefix.
+- Pin optional bundled OpenWebUI to `v0.11.4-slim`, disable Arena models by default and stop emitting legacy document-id HTML comments in new provider answers.
+- Preserve administrator-owned existing model packages on installer rerun while adding missing newly shipped profiles; document that fresh rc1 acceptance avoids stale preserved profile packages.
+- Make Super-Light smoke diagnostics maintenance-aware: Neo4j and Playwright are reported as intentionally deferred until maintenance mode is disabled instead of producing a false post-install failure/warning.
+- Align Qdrant source-origin filtering with Elasticsearch semantics for explicit document/archive scopes while retaining path-based fallback for legacy untagged chunks.
+- Refresh 0.8.6 architecture/install/client/profile/release documentation and retain the live-Nextcloud-ACL security invariant.
+- Final rc1 hardening fixes request-local Graph/Entity/Reranker profile application, preserves explicit legacy remote-data caps on upgrades, prevents cross-owner progress-ID replacement, keeps explicit preserved result sets intact, aligns the Gründlich rerank window to 30, excludes `.sunaq.json` sidecars before Elasticsearch candidate limiting, and fixes retained legacy install/chat-archive paths.
+
 ## 0.8.5-rc5.1 – 2026-09-22
 
 - Reposition the public README around AKI's existing-estate use case: an AI gateway for established Nextcloud deployments that reuses the document store, FullTextSearch / Elasticsearch and live Nextcloud authorization instead of requiring migration into a separate AI knowledge base. Make the no-mandatory-full-corpus-vectorization path explicit and document that a typical Super-Light deployment can be up and running in under 10 minutes when the required external endpoints are already available; actual time remains dependent on network, host and site conditions.

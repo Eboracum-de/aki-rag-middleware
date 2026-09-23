@@ -27,6 +27,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-super-light.txt
 
 COPY rag/ /app/rag/
 COPY prompts/ /app/prompts/
+COPY models/ /app/models/
 COPY ontology/ /app/ontology/
 COPY config.yaml /app/config.yaml
 COPY web.yaml /app/web.yaml

@@ -15,12 +15,12 @@ def _request(user_id: str | None):
 def _body():
     return api.ChatArchiveRegisterRequest(
         document_id="files:42",
-        path="AKI-Chats/2026-09-22 - Test - deadbeef.md",
+        path="SunaQ-Chats/2026-09-22 - Test - deadbeef.md",
     )
 
 
 def test_chat_archive_registration_requires_user_identity(monkeypatch):
-    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
     with pytest.raises(HTTPException) as exc:
         api.register_chat_archive_source(_body(), _request(None))
     assert exc.value.status_code == 403
@@ -36,7 +36,7 @@ def test_chat_archive_registration_denied_by_live_acl_never_writes_registry(monk
             return None
 
     monkeypatch.setattr(api, "live_acl", FakeAcl())
-    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
     monkeypatch.setattr(
         api,
         "register_document",
@@ -55,7 +55,7 @@ def test_chat_archive_registration_writes_only_after_live_acl_authorization(monk
         def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
             assert rag_user_id == "alice"
             assert document_id == "files:42"
-            return "AKI-Chats/2026-09-22 - Test - deadbeef.md"
+            return "SunaQ-Chats/2026-09-22 - Test - deadbeef.md"
 
     calls = []
 
@@ -64,7 +64,7 @@ def test_chat_archive_registration_writes_only_after_live_acl_authorization(monk
         return True
 
     monkeypatch.setattr(api, "live_acl", FakeAcl())
-    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
     monkeypatch.setattr(api, "register_document", register)
     monkeypatch.setattr(
         api,
@@ -80,7 +80,7 @@ def test_chat_archive_registration_writes_only_after_live_acl_authorization(monk
         "files:42",
         "chat_archive",
         {
-            "source_path": "AKI-Chats/2026-09-22 - Test - deadbeef.md",
+            "source_path": "SunaQ-Chats/2026-09-22 - Test - deadbeef.md",
             "classification_source": "chat_archive_write",
         },
     )]
@@ -94,7 +94,7 @@ def test_chat_archive_registration_rejects_fabricated_client_path(monkeypatch):
             return "Documents/visible.pdf"
 
     monkeypatch.setattr(api, "live_acl", FakeAcl())
-    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
     monkeypatch.setattr(
         api,
         "register_document",
@@ -111,10 +111,10 @@ def test_chat_archive_registration_rejects_path_mismatch(monkeypatch):
         enabled = True
 
         def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
-            return "AKI-Chats/server-derived.md"
+            return "SunaQ-Chats/server-derived.md"
 
     monkeypatch.setattr(api, "live_acl", FakeAcl())
-    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("AKI-Chats",))
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
 
     with pytest.raises(HTTPException) as exc:
         api.register_chat_archive_source(_body(), _request("alice"))
@@ -130,3 +130,37 @@ def test_chat_archive_registration_route_uses_user_zone():
     block = source[start:start + 500]
     assert "**ZONE_USER" in block
     assert "**ZONE_TRUSTED_PROVIDER" not in block
+
+
+
+def test_chat_archive_registration_still_accepts_legacy_aki_chat_root(monkeypatch):
+    body = api.ChatArchiveRegisterRequest(
+        document_id="files:77",
+        path="AKI-Chats/legacy.md",
+    )
+
+    class FakeAcl:
+        enabled = True
+
+        def resolve_visible_file_path(self, document_id, *, rag_user_id=None):
+            return "AKI-Chats/legacy.md"
+
+    calls = []
+    monkeypatch.setattr(api, "live_acl", FakeAcl())
+    monkeypatch.setattr(api, "chat_archive_roots", lambda: ("SunaQ-Chats", "AKI-Chats"))
+    monkeypatch.setattr(
+        api,
+        "register_document",
+        lambda document_id, source_origin, **kwargs: calls.append(
+            (document_id, source_origin, kwargs)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        api,
+        "auto_mirror_registry_to_elasticsearch",
+        lambda **kwargs: {"checked": 1, "updated": 1, "missing": 0},
+    )
+
+    result = api.register_chat_archive_source(body, _request("alice"))
+    assert result["ok"] is True
+    assert calls[0][0:2] == ("files:77", "chat_archive")

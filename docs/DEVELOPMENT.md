@@ -2,13 +2,14 @@
 
 ## Baseline
 
-`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline. RC5 builds on the rc4.x authorization, installer, TLS and internal-service hardening with conservative prefiltering, maintenance/recovery tooling and the current Graph-Lite/archive work. Earlier draft identifiers remain development snapshots rather than maintained upgrade targets. The 0.8.5 line keeps one codebase with two explicit axes: functional profile and deployment mode. Regression-tested mappings are `standard+native` and `super-light+dockerized`; both completed rc4.3 blank-VM acceptance, with RC5 changes covered by the current regression/field acceptance work.
+`0.8.6-rc1` is the current release-candidate baseline. The 0.8.6 line adds startup-loaded SunaQ research profiles, per-user entitlement and request-local profile/runtime routing while retaining the rc5.1 live-ACL and deployment security boundaries.
 
 ## Repository layout
 
 ```text
 rag/                 Python middleware, provider, workers and Admin UI
-prompts/             LLM prompt templates
+models/              user-visible SunaQ research profiles and prompt packs
+prompts/             common/legacy LLM prompt templates
 ontology/            graph relation ontology
 install/             installer, Docker Compose, nginx and systemd templates
 tests/               regression tests
@@ -43,7 +44,7 @@ python -m pytest
 
 Some graph/vector tests require the optional runtime client libraries listed in `requirements.txt`. The deployment regression tests also inspect Docker/installer/config files directly and therefore catch accidental changes to the supported topology.
 
-The rc4.2 hotfix baseline on 20 September 2026 completes **452 tests** under GitHub Actions (Python 3.13), plus Python compile and shipped-shell syntax checks. The Super-Light rerun path was additionally field-tested against an existing RC4 installation with its existing Neo4j store.
+GitHub Actions runs the complete pytest suite on Python 3.13 plus Python compile and shipped-shell syntax checks. The 0.8.6-rc1 branch is additionally validated on a fresh Super-Light VM against a real Nextcloud/Elasticsearch estate before public release.
 
 ## Release rule
 

@@ -1,8 +1,8 @@
 # Threat model and security boundaries
 
-**Reference:** `0.8.5-rc5`
+**Reference:** `0.8.6-rc1`
 
-This document states the security assumptions of AKI RAG Middleware as they exist in the current release-candidate line. It separates **retrieval knowledge**, **authorization**, and **answer evidence** because these have deliberately different sharing rules.
+This document states the security assumptions of SunaQ as they exist in the current release-candidate line. It separates **retrieval knowledge**, **authorization**, and **answer evidence** because these have deliberately different sharing rules.
 
 It is an engineering threat model, not a certification or a claim that every deployment is secure by construction.
 
@@ -46,7 +46,7 @@ A registered provider-client key is also a security boundary. It authenticates a
 
 ## 4. Shared alias and identity knowledge
 
-AKI deliberately treats a curated/shared identity lexicon differently from document evidence.
+SunaQ deliberately treats a curated/shared identity lexicon differently from document evidence.
 
 Example:
 
@@ -99,13 +99,13 @@ Neither a ResearchRun nor a previous successful observation grants continued acc
 
 For still-uncurated Findings, RC5 can use that same **successful** ACL denial as a lazy cleanup signal. Only the denied user's `PRODUCED` provenance is removed; a shared Finding is deleted only when it is uncurated and no ResearchRun for any user still references it. Finding-level curator state/suppression, `CURATED_ENTITY` mappings and any Finding-derived RelationObservation prevent this lazy deletion. ACL errors or unavailable credentials remain fail-closed for visibility but non-destructive for stored Graph state.
 
-RAG Admin is a trusted operator surface. Its Basic-Auth administrator is not mapped to a personal Nextcloud ACL; instead the administrator explicitly selects a canonical-user context, and Evidence is authorized with that selected user's stored Nextcloud credential. This prevents cross-context leakage inside a selected view, but it is **not** a tenant-isolation guarantee against the RAG administrator, who can deliberately switch to another configured user. Ordinary users must use normal research frontends or the separately gated self-service curation surface.
+SunaQ Admin is a trusted operator surface. Its Basic-Auth administrator is not mapped to a personal Nextcloud ACL; instead the administrator explicitly selects a canonical-user context, and Evidence is authorized with that selected user's stored Nextcloud credential. This prevents cross-context leakage inside a selected view, but it is **not** a tenant-isolation guarantee against the SunaQ administrator, who can deliberately switch to another configured user. Ordinary users must use normal research frontends or the separately gated self-service curation surface.
 
 A shared curation decision can affect later retrieval/entity resolution for other users. Curation is therefore a write privilege on shared retrieval knowledge, distinct from ordinary research permission. Self-service is disabled by default and can be enabled per canonical user. Curator identity is stored with shared decisions for audit provenance.
 
 ### Ephemeral self-service credential
 
-The optional `/curation/` surface does not create a RAG password and does not persist its Nextcloud app password in the ordinary provider credential namespace. A Nextcloud Login Flow creates an encrypted temporary `curation_sessions` credential with a hard absolute expiry (default two hours).
+The optional `/curation/` surface does not create a SunaQ password and does not persist its Nextcloud app password in the ordinary provider credential namespace. A Nextcloud Login Flow creates an encrypted temporary `curation_sessions` credential with a hard absolute expiry (default two hours).
 
 The browser receives only a random session token; the database stores its hash. State-changing operations require a session-bound CSRF token. The cookie is HttpOnly, Secure, SameSite=Strict and scoped to the curation path.
 
@@ -143,9 +143,9 @@ Particularly untrusted inputs include:
 - saved chats that may contain quoted external or model-generated text;
 - documents supplied by external parties.
 
-A passage such as "ignore previous instructions" is document content, not an instruction to AKI.
+A passage such as "ignore previous instructions" is document content, not an instruction to SunaQ.
 
-AKI is not a general tool-using agent. Model output is not executed as Elasticsearch JSON DSL, Cypher, SQL or shell code. Elasticsearch and Qdrant are candidate-retrieval backends; the normal LLM rewrite produces a constrained SearchSpec, and live Nextcloud authorization is independent of document instructions. For that reason, indirect prompt injection in ordinary document retrieval is primarily an **evidence-integrity / retrieval-quality risk**, not an arbitrary-code-execution or ACL-bypass path.
+SunaQ is not a general tool-using agent. Model output is not executed as Elasticsearch JSON DSL, Cypher, SQL or shell code. Elasticsearch and Qdrant are candidate-retrieval backends; the normal LLM rewrite produces a constrained SearchSpec, and live Nextcloud authorization is independent of document instructions. For that reason, indirect prompt injection in ordinary document retrieval is primarily an **evidence-integrity / retrieval-quality risk**, not an arbitrary-code-execution or ACL-bypass path.
 
 The more relevant boundaries are persistence and egress:
 

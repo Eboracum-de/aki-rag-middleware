@@ -1,0 +1,7 @@
+#sunaq-admin input.long {
+    width: min(620px, 95%);
+}
+
+.sunaq-admin-status {
+    margin-left: 10px;
+}

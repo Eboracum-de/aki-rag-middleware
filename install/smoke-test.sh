@@ -74,6 +74,11 @@ ok() { echo "[ OK ] $*"; }
 warn() { echo "[WARN] $*"; }
 bad() { echo "[FAIL] $*"; FAIL=1; }
 
+MAINTENANCE_ACTIVE=0
+case "$(printf '%s' "${RAG_MAINTENANCE_MODE:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) MAINTENANCE_ACTIVE=1 ;;
+esac
+
 if [[ -x "$PY" ]]; then
   ok "Python venv"
 elif [[ "$DEPLOYMENT_MODE" == "dockerized" || "$DEPLOYMENT_PROFILE" == "super-light" ]]; then
@@ -173,6 +178,8 @@ fi
 
 if curl -fsS http://127.0.0.1:7474 >/dev/null 2>&1; then
   ok "Neo4j HTTP"
+elif [[ "$DEPLOYMENT_MODE" == "dockerized" && $MAINTENANCE_ACTIVE -eq 1 && $LOCAL_NEO4J -eq 1 ]]; then
+  ok "Neo4j deferred until maintenance mode is disabled"
 else
   [[ $LOCAL_NEO4J -eq 1 ]] && bad "Neo4j HTTP" || echo "[INFO] Local Neo4j not selected; configure a remote endpoint if graph retrieval is required."
 fi
@@ -183,6 +190,8 @@ if [[ $LOCAL_PLAYWRIGHT -eq 1 ]]; then
     ok "Playwright renderer"
   elif [[ -n "$playwright_live" ]]; then
     warn "Playwright renderer is running but browser launch is degraded"
+  elif [[ "$DEPLOYMENT_MODE" == "dockerized" && $MAINTENANCE_ACTIVE -eq 1 ]]; then
+    ok "Playwright renderer deferred until maintenance mode is disabled"
   else
     warn "Playwright renderer unavailable; Web research remains usable but rendered-PDF archival is disabled"
   fi

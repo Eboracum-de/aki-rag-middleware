@@ -133,6 +133,8 @@ RC4 attempted to avoid property warnings by writing optional names onto `RAGSche
 
 The recurring `RelationObservation.relation_text` property warning and sparse-graph relationship warnings such as `MENTIONS_NAME` or `MERGED_INTO` are instances of the same general rule: absence is valid and must not require synthetic graph data merely to register a token.
 
+> **Empty-graph note:** Until the first seed/contact import has populated Neo4j, the graph is intentionally sparse. Neo4j may therefore emit notifications or warnings about optional labels, property keys or relationship types that do not exist yet. Such messages do not by themselves indicate a failed schema initialization. Connection failures, constraint/index errors and actual Cypher execution errors are not covered by this note and should still be investigated.
+
 ## Initialization and upgrades
 
 `GraphStore.ensure_schema()` is the canonical entry point. It:
@@ -143,11 +145,13 @@ The recurring `RelationObservation.relation_text` property warning and sparse-gr
 4. creates the Research Finding/Run/User schema;
 5. backfills a missing Finding `curation_hash` without changing Finding IDs.
 
-The standard installer waits for selected local Neo4j and runs:
+The standard installer waits for selected local Neo4j and, on a fresh 0.8.6 installation, runs the equivalent of:
 
 ```bash
-python -m rag.graph --config /opt/nextcloud-rag/config.yaml init
+python -m rag.graph --config /opt/sunaq/config.yaml init
 ```
+
+Recognized legacy installations retain their existing installation prefix; substitute that prefix (for example `/opt/nextcloud-rag/config.yaml`) when running the command manually.
 
 The Super-Light installer runs the same command inside the API image. API startup also attempts the idempotent migration for independently managed deployments; failure is logged and deferred because Neo4j remains a degradable backend. Installer-selected local Neo4j failure is fatal.
 

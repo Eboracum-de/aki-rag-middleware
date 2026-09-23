@@ -1,19 +1,19 @@
-# AKI RAG Middleware
+# SunaQ / Eboracum Research Gateway
 
-**AI gateway for existing Nextcloud deployments.**
+**Evidence-first AI gateway for existing Nextcloud deployments.**
 
 > **Keep your Nextcloud. Add modern AI around it.**
 
 Modern AI-assisted research and RAG for established Nextcloud document estates — without replacing Nextcloud as the document store, rebuilding its permission model or requiring full-corpus vectorization.
 
-AKI reuses existing Nextcloud FullTextSearch / Elasticsearch infrastructure and keeps Nextcloud as the final authorization authority for private document evidence. Start with an Elasticsearch-centric Super-Light deployment and add semantic retrieval, reranking, Graph-Lite or additional research sources only where they provide value.
+SunaQ reuses existing Nextcloud FullTextSearch / Elasticsearch infrastructure and keeps Nextcloud as the final authorization authority for private document evidence. Start with an Elasticsearch-centric Super-Light deployment and add semantic retrieval, reranking, Graph-Lite or additional research sources only where they provide value.
 
 **Super-Light can typically be up and running in under 10 minutes** when the required Nextcloud, Elasticsearch and model endpoints are already available. Actual installation time depends on network speed, host performance, image/package downloads and site configuration.
 
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
 [![Status: Public Beta](https://img.shields.io/badge/status-public%20beta-orange.svg)](CHANGELOG.md)
 
-Behind an OpenAI-compatible provider interface, AKI can combine FullTextSearch / Elasticsearch with optional semantic retrieval, graph signals, mail ingestion, web research and archived chats while keeping model backends replaceable.
+Behind an OpenAI-compatible provider interface, SunaQ combines FullTextSearch / Elasticsearch with optional semantic retrieval, graph signals, mail ingestion, web research and archived chats. SunaQ owns retrieval, ACL enforcement, evidence preparation and provenance; the downstream model/backend remains replaceable.
 
 The central security invariant is deliberately simple:
 
@@ -21,29 +21,49 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.5-rc5.1` — current public-beta follow-up to the validated RC5 baseline. It keeps the RC5 retrieval and authorization architecture unchanged, fixes Super-Light backup inventory path normalization and clarifies AKI's existing-estate deployment model. See `RELEASE-NOTES-0.8.5-rc5.1.md`, `CHANGELOG.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.6-rc1` is the current release-candidate baseline. See `RELEASE-NOTES-0.8.6-rc1.md`, `CHANGELOG.md`, `models/README.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+
+## Renaming
+
+Releases up to and including `0.8.5-rc5.1` were published under the
+`aki-rag-middleware` name. To avoid confusion with the Berlin-based
+aki.io GmbH, we decided to rename the project to **SunaQ**. We hope that the new
+name does not conflict with any existing project, product or company in this
+field.
+
+As part of the rename, current user-facing names and new project-local
+identifiers no longer use `AKI` or `Nextcloud` where those terms are not
+required for compatibility. For example, fresh installations now default to
+`/opt/sunaq` instead of `/opt/nextcloud-rag`. References to Nextcloud remain
+where necessary to describe compatibility with the Nextcloud platform.
+
+Some textual, configuration, protocol, archive and compatibility references to
+the previous names intentionally remain so existing installations can continue
+to work and upgrade safely.
+
+Please accept our apologies for any inconvenience caused by this decision.
 
 ## Why this project exists
 
 Many organizations already have a useful Nextcloud document estate, working permissions and a FullTextSearch / Elasticsearch index. Replacing that environment merely to add AI-assisted research is often unnecessary, expensive or undesirable.
 
-AKI follows a brownfield integration approach: keep the existing document store, search infrastructure and permission model in place, and add modern AI capabilities around them. Operational complexity and external data exposure remain under administrator control.
+SunaQ follows a brownfield integration approach: keep the existing document store, search infrastructure and permission model in place, and add modern AI capabilities around them. Operational complexity and external data exposure remain under administrator control.
 
 The project focuses on eight practical goals:
 
-- **Existing-estate / legacy-friendly deployment.** The Super-Light profile reuses an existing Nextcloud FullTextSearch / Elasticsearch index and is tested on an openSUSE Leap 15.3 host. The bundled AKI Recherche UI targets Nextcloud 23+.
-- **No document migration.** Nextcloud remains the document store and authorization authority; AKI does not require a separate AI knowledge base to become the system of record.
+- **Existing-estate / legacy-friendly deployment.** The Super-Light profile reuses an existing Nextcloud FullTextSearch / Elasticsearch index and is tested on an openSUSE Leap 15.3 host. The bundled SunaQ Recherche UI targets Nextcloud 23+.
+- **No document migration.** Nextcloud remains the document store and authorization authority; SunaQ does not require a separate AI knowledge base to become the system of record.
 - **No mandatory full-corpus vectorization.** Super-Light can remain Elasticsearch-centric indefinitely. Qdrant and embeddings are optional scale-up components rather than prerequisites for first use.
-- **UI agnostic.** The middleware exposes an OpenAI-compatible provider path. The included AKI Recherche app is a slim Nextcloud-native UI; external OpenWebUI deployments can use the same middleware.
+- **UI agnostic.** The middleware exposes an OpenAI-compatible provider path. The included SunaQ Recherche app is a slim Nextcloud-native UI; external OpenWebUI deployments can use the same middleware.
 - **Small local footprint.** Super-Light runs without Qdrant and without a local reranker. On the current acceptance VM, the local middleware services used about **1.7 GiB RAM at idle** while Nextcloud, Elasticsearch and the LLM were external. This is an observed test point, not a guaranteed ceiling; 4 GiB remains the practical VM minimum when Chromium-based web archiving is enabled.
-- **Integrated research sources.** Ordinary documents, imported mail, archived web evidence and saved AKI chats are distinct source scopes. Live public-web research remains a separate evidence arm.
+- **Integrated research sources.** Ordinary documents, imported mail, archived web evidence and saved SunaQ chats are distinct source scopes. Live public-web research remains a separate evidence arm.
 - **Scale up without changing the core.** The same codebase can add Qdrant semantic retrieval, a reranker and richer Neo4j/Graph-Lite functionality when resources and use cases justify them.
 - **Data minimization by design.** Retrieval, indexing, embeddings and ACL checks can remain local. LLM roles are independently configurable and may be local or remote. A fully local deployment is possible when local model and web-search choices are used.
 
 ## Architecture at a glance
 
 ```text
-                  AKI Recherche / OpenWebUI / API client
+                 SunaQ Recherche / OpenWebUI / API client
                                 |
                        OpenAI-compatible provider
                                 |
@@ -70,9 +90,9 @@ The project focuses on eight practical goals:
        optional verifier                        |
                 +---------------+---------------+
                                 |
-                         answer model
+                  reasoning / answer backend
                                 |
-                  sources + optional archives
+              answer / structured outcome + sources
 ```
 
 Elasticsearch, Qdrant and Neo4j are retrieval systems, not authorization systems. The live Nextcloud ACL check is intentionally downstream of candidate retrieval and upstream of document evidence sent to verifier or answer roles.
@@ -84,7 +104,7 @@ Elasticsearch, Qdrant and Neo4j are retrieval systems, not authorization systems
 | **Super-Light** | legacy/smaller servers, first deployment | API, provider, Neo4j Graph-Lite, Playwright; optional nginx | Nextcloud, FullTextSearch/Elasticsearch, LLM |
 | **Standard** | larger/hybrid retrieval installations | native middleware plus optional Qdrant, reranker, Neo4j, OpenWebUI | Nextcloud, Elasticsearch; model backends as configured |
 
-For the current 0.8.5 release-candidate line, the regression-tested deployment mappings are:
+For the 0.8.6-rc1 candidate, the regression-tested deployment mappings remain:
 
 - `super-light + dockerized`
 - `standard + native`
@@ -98,10 +118,12 @@ The middleware keeps source selection separate from retrieval-engine selection.
 - `/documents` — ordinary Nextcloud documents
 - `/mailarchive` — imported mail and attachments
 - `/webarchive` — archived web-research evidence
-- `/chatarchive` — saved AKI conversations
+- `/chatarchive` — saved SunaQ conversations
 - live `/web` research — current public web evidence, separately fetched and checked
 
 Archive origins are tracked by stable Nextcloud file IDs and mirrored into retrieval indexes so source scopes can be applied before candidate limits.
+
+Without an explicit source directive, SunaQ searches ordinary Nextcloud documents only. Mail, web archives and saved chat archives are opt-in sources, and live Web research is a separate capability. This behavior is provider-side and therefore independent of the frontend: OpenWebUI, the bundled Nextcloud client and any other OpenAI-compatible client can override the source selection directly in the user request with `/documents`, `/mailarchive`, `/webarchive`, `/chatarchive` and/or `/web`. Explicit source directives override frontend source selections. The bundled SunaQ Nextcloud client currently selects Documents and Mail archive by default through its UI checkboxes, so it intentionally sends both scopes unless the user changes that selection.
 
 Archive scopes are optional. In particular, saved chats are useful as shared/flat-hierarchy working memory, but they are deliberate retained copies: a saved conversation can contain text derived from another document and then has its own Nextcloud file ID, ACL and lifecycle. Deployments that require revocation of an original document to remove every conversational copy should leave `/chatarchive` disabled or define a matching retention/purge process.
 
@@ -118,7 +140,7 @@ A private document corpus does not need to be exposed wholesale to an external L
 
 Those controls reduce disclosure; they do not make remotely transmitted evidence non-sensitive. Administrators remain responsible for deciding which roles may use remote model providers.
 
-AKI also distinguishes **shared retrieval knowledge** from **document evidence**. Curated names/aliases and shared Finding decisions may be reused across users so that the organization benefits from prior curation. That reuse does not grant access to the document that originally motivated the knowledge: document text still needs the current user's live Nextcloud authorization before it becomes answer evidence.
+SunaQ also distinguishes **shared retrieval knowledge** from **document evidence**. Curated names/aliases and shared Finding decisions may be reused across users so that the organization benefits from prior curation. That reuse does not grant access to the document that originally motivated the knowledge: document text still needs the current user's live Nextcloud authorization before it becomes answer evidence.
 
 See `docs/PRIVACY-ARCHITECTURE.md`, `docs/THREAT-MODEL.md` and `SECURITY.md` for details.
 
@@ -126,9 +148,9 @@ See `docs/PRIVACY-ARCHITECTURE.md`, `docs/THREAT-MODEL.md` and `SECURITY.md` for
 
 The project intentionally keeps support for older installations in scope rather than requiring a current Linux/Python stack everywhere.
 
-Current public-beta reference points:
+Current 0.8.6-rc1 reference points:
 
-- **AKI Recherche:** Nextcloud 23+
+- **SunaQ Recherche 0.3.0:** Nextcloud 23+
 - **Super-Light acceptance host:** openSUSE Leap 15.3
 - **Document retrieval:** existing Nextcloud FullTextSearch / Elasticsearch
 - **Internal PKI:** supported, including compatibility mode for older private certificate chains without disabling ordinary TLS verification
@@ -136,7 +158,7 @@ Current public-beta reference points:
 
 Compatibility statements describe the current tested/project target, not a promise that every combination of Nextcloud, Elasticsearch, proxy and model backend is regression-tested.
 
-For current Nextcloud deployments, the native baseline to evaluate is Nextcloud Context Chat. AKI is not intended to out-feature that supported ecosystem; it addresses a different operating model: reuse of an existing FullTextSearch estate, a replaceable OpenAI-compatible provider boundary, optional Graph-Lite and live Nextcloud authorization of concrete document candidates. See `docs/NEXTCLOUD-CONTEXT-CHAT.md` for the neutral comparison and current caveats.
+For current Nextcloud deployments, the native baseline to evaluate is Nextcloud Context Chat. SunaQ is not intended to out-feature that supported ecosystem; it addresses a different operating model: reuse of an existing FullTextSearch estate, a replaceable OpenAI-compatible provider boundary, optional Graph-Lite and live Nextcloud authorization of concrete document candidates. See `docs/NEXTCLOUD-CONTEXT-CHAT.md` for the neutral comparison and current caveats.
 
 ## Quick start: Super-Light
 
@@ -152,15 +174,15 @@ sudo ./install/install.sh \
   --plan
 ```
 
-Then install with the same arguments, removing `--plan` and adding the components you want. For an internal PKI, use repeatable `--ca-certificate FILE` arguments rather than disabling TLS verification. Fresh installs and installer reruns enter an explicit **maintenance mode** first: the OpenAI-compatible provider remains reachable and authenticates trusted client keys, but returns a maintenance message without loading the normal RAG/LLM pipeline. After configuration and checks, use `sudo /opt/nextcloud-rag/install/maintenance-mode.sh off` to start normal operation.
+Then install with the same arguments, removing `--plan` and adding the components you want. For an internal PKI, use repeatable `--ca-certificate FILE` arguments rather than disabling TLS verification. Fresh installs and installer reruns enter an explicit **maintenance mode** first: the OpenAI-compatible provider remains reachable and authenticates trusted client keys, but returns a maintenance message without loading the normal SunaQ/LLM pipeline. After configuration and checks, use `sudo /opt/sunaq/install/maintenance-mode.sh off` on a fresh 0.8.6 installation to start normal operation. Recognized legacy installations keep their existing prefix (for example `/opt/nextcloud-rag`) rather than being moved.
 
 Detailed installation and acceptance steps are in `install/INSTALL.md` and `docs/BETA-OPERATIONS.md`.
 
 ## Front ends
 
-### AKI Recherche
+### SunaQ Recherche
 
-The included `clients/nextcloud/akirag/` app is a slim Nextcloud-native research UI. It targets Nextcloud 23+, proxies server-side to the middleware, keeps the provider key out of browser JavaScript and stores saved conversations per user in Nextcloud.
+The included `clients/nextcloud/sunaq/` app is a slim Nextcloud-native research UI. It targets Nextcloud 23+, proxies server-side to the middleware, keeps the provider key out of browser JavaScript, exposes the user's allowed SunaQ profiles, shows request progress/follow-up actions and stores saved conversations per user in Nextcloud.
 
 ### OpenWebUI
 
@@ -195,9 +217,10 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/ADMINISTRATION.md` — user, credential, mail, web and graph administration
 - `docs/GRAPHLIGHT-FINDINGS.md` — Findings curation and Graph-Lite safety boundary
 - `docs/KNOWN-LIMITATIONS.md` — known limitations and deferred polish
-- `docs/ROADMAP.md` — explicitly deferred RC5 / 0.8.6 work
+- `docs/ROADMAP.md` — implemented 0.8.6 direction and explicitly deferred follow-up work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
+- `RELEASE-NOTES-0.8.6-rc1.md` — draft 0.8.6 rc1 release notes
 - `RELEASE-NOTES-0.8.5-rc5.1.md` — current public-beta release notes
 - `RELEASE-NOTES-0.8.5-rc5.md` — preceding release-candidate notes
 - `CHANGELOG.md` — detailed development/change history
@@ -240,6 +263,6 @@ See `docs/PROJECT-GOVERNANCE.md`.
 
 ## Trademark notice
 
-AKI RAG Middleware is an independent project and is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH or aki.io GmbH. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH. References to aki.io are solely for identification and do not imply any affiliation, sponsorship, or endorsement.
+SunaQ / Eboracum Research Gateway is an independent project and is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH or aki.io GmbH. Historical repository and compatibility identifiers may still use the earlier AKI naming during the 0.8.6 transition. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH. References to aki.io are solely for identification and do not imply any affiliation, sponsorship, or endorsement.
 
 See `TRADEMARKS.md`.

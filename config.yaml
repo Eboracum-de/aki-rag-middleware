@@ -1,4 +1,4 @@
-# AKI RAG Middleware - 0.8.5-rc4 secure multi-user beta candidate
+# SunaQ / Eboracum Research Gateway - 0.8.6-rc1 development
 
 health:
   timeout_seconds: 4
@@ -54,14 +54,10 @@ embedding:
   # ca_file: "/etc/ssl/certs/private-ca.pem"
   timeout: 300
 
-search:
-  es_limit: 50
-  vector_limit: 80
-  vector_threshold: 0.55
-  rrf_k: 60
-  rerank_candidates: 10
-  final_limit: 15
-  rerank_min_score: null
+# Request-local research behaviour is defined by SunaQ model packages under
+# models/<model>/profile.yaml. The provider and middleware load/validate those
+# profiles and their prompt files once at startup. Infrastructure, security,
+# source access and background-worker policy remain global in this file.
 
 # Retrieval capability policy. Normal automatic retrieval uses files plus optional
 # vector; Neo4j is used for entity/alias expansion unless /graph is explicitly
@@ -73,52 +69,6 @@ retrieval_policy:
     graph: optional
   optional_default: include
   web: planner  # disabled | explicit | planner
-
-# Legacy section name retained for config compatibility. Round 1 always performs
-# one structured Query-Rewrite. `enabled` controls only additional retrieval
-# rounds; max_retrieval_rounds=1 therefore means no automatic second round.
-retrieval_planner:
-  enabled: true
-  max_retrieval_rounds: 1
-  # Empty = use the provider's general LLM_MODEL for Query-Rewrite.
-  model: ""
-  max_tokens: 700
-  context_max_chars: 12000
-  # Exhaustive/list-like tasks stop instead of silently dropping matching docs
-  # when the strict ES query exceeds this post-ACL completeness budget.
-  max_complete_documents: 15
-  # Hard upper bound for strict-query ACL candidates. With the default ACL
-  # batch_size=100 this normally costs at most one additional WebDAV SEARCH.
-  overflow_acl_scan_limit: 80
-  # Normal-mode verifier: compact top-6 EvidenceFrames in one batch.
-  verification_candidate_limit: 6
-  # Concretely bounded sets such as "Rechnungen ... 2025" get a larger
-  # verifier window without claiming exhaustive completeness.
-  bounded_verification_candidate_limit: 30
-  exhaustive_verification_candidate_limit: 30
-  verification_max_chars_per_document: 2500
-  verification_max_tokens: 900
-  verification_batch_size: 6
-
-# Optional post-ACL/post-verifier evidence controller. Experimental in 0.8.5
-# and deliberately disabled by default. "review" may select answer sources or
-# return retry/clarify/insufficient/conflict before the final answer model.
-evidence_control:
-  mode: "off"  # off | review
-
-retrieval_signal:
-  enabled: true
-  reject_unspecific: true
-  unspecific_signal_floor: 0.08
-  min_curve_candidates: 8
-  head_size: 3
-  tail_fraction: 0.33
-  small_field_signal: 0.35
-  explicit_anchor_signal: 0.45
-  dominance_ratio: 1.50
-  dominance_margin: 0.10
-  secondary_weight_floor: 0.20
-  overlap_k: 10
 
 # Elasticsearch -> Qdrant incremental sync.
 # sync.* is the canonical location for chunk/state settings.
@@ -233,15 +183,6 @@ acl:
     # rc5 v1 considers Nextcloud owner/direct-user/group metadata only.
     # Circle membership is intentionally not evaluated yet. Keep this disabled
     # on deployments where Circle-only shares must be discoverable.
-entity_resolution:
-  enabled: true
-  fail_open: true
-  retry_seconds: 30
-  fuzzy: true
-  fuzzy_threshold: 86.0
-  fuzzy_max_candidates: 5
-  fuzzy_expansion_min_similarity: 90.0
-
 graph:
   entity_admission:
     use_default_blocked_generic_names: true
@@ -297,16 +238,6 @@ graph_indexer:
   fuzzy_max_candidates: 5
   max_documents_per_call: 8
   max_content_chars: 500000
-
-graph_retrieval:
-  enabled: true
-  limit: 30
-  pair_weight: 0.65
-  relation_weight: 0.90
-  direct_relation_weight: 0.75
-  single_entity_weight: 0.30
-  hydrate_limit: 15
-  snippet_chars: 2400
 
 graph_entity_discovery:
   enabled: true
@@ -366,20 +297,6 @@ admin_ui:
   password_env: "RAG_ADMIN_PASSWORD"
   allow_unauthenticated: false
 
-reranker:
-  # Disabled by default. Enable local or tei explicitly for comparative testing.
-  # local = CPU/host model; tei = external Text Embeddings Inference reranker.
-  backend: "none"
-  model: "BAAI/bge-reranker-v2-m3"
-  device: "cpu"
-  max_length: 512
-  batch_size: 4
-  # Used only when backend=tei. Example: http://127.0.0.1:8081
-  tei_url: ""
-  timeout_seconds: 30
-  tei_batch_size: 32
-  fallback_backend: "none"
-
 auth:
   # Login Flow v2 populates the same credential store used by live ACL and the
   # canonical-user registry. Reversible Nextcloud/IMAP credentials and Login Flow
@@ -406,13 +323,6 @@ dedup:
   near_text_ratio: 0.96
   min_text_chars: 500
   min_length_ratio: 0.80
-
-context_enrichment:
-  enabled: true
-  head_chars: 2200
-  window_chars: 1800
-  max_windows: 2
-  max_chars: 7000
 
 # Hidden mail sidecars are read on demand. In multi-user mode the graph worker
 # receives the scoped request identity for answer-cited documents and uses that

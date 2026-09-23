@@ -36,8 +36,10 @@ deployment_mode="native"
 if [[ -f "$STATE_FILE" ]]; then
   value="$(sed -n 's/^DEPLOYMENT_MODE=//p' "$STATE_FILE" | tail -1)"
   [[ "$value" == "dockerized" || "$value" == "native" ]] && deployment_mode="$value"
-elif [[ -f "$BASE_DIR/.aki-rag-installation" ]]; then
-  value="$(sed -n 's/^DEPLOYMENT_MODE=//p' "$BASE_DIR/.aki-rag-installation" | tail -1)"
+elif [[ -f "$BASE_DIR/.sunaq-installation" || -f "$BASE_DIR/.aki-rag-installation" ]]; then
+  marker="$BASE_DIR/.sunaq-installation"
+  [[ -f "$marker" ]] || marker="$BASE_DIR/.aki-rag-installation"
+  value="$(sed -n 's/^DEPLOYMENT_MODE=//p' "$marker" | tail -1)"
   [[ "$value" == "dockerized" || "$value" == "native" ]] && deployment_mode="$value"
 fi
 
@@ -128,12 +130,12 @@ case "${1:-}" in
   on)
     set_mode true
     if [[ "$deployment_mode" == "dockerized" ]]; then enable_dockerized; else enable_native; fi
-    echo "AKI maintenance mode enabled."
+    echo "SunaQ maintenance mode enabled."
     ;;
   off)
     set_mode false
     if { [[ "$deployment_mode" == "dockerized" ]] && disable_dockerized; } || { [[ "$deployment_mode" != "dockerized" ]] && disable_native; }; then
-      echo "AKI maintenance mode disabled; normal services started."
+      echo "SunaQ maintenance mode disabled; normal services started."
     else
       rc=$?
       echo "Normal startup failed; restoring maintenance mode." >&2

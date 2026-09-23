@@ -1,10 +1,10 @@
-# AKI RAG Middleware
+# SunaQ / Eboracum Research Gateway
 ## Technical documentation and command reference
 
-**Version:** `0.8.5-rc5`  
-**Updated:** 22 September 2026
+**Version:** `0.8.6-rc1` (draft)  
+**Updated:** 23 September 2026
 
-This file is the consolidated technical reference for the current snapshot. Unpublished internal development and migration drafts are not part of the public baseline repository. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
+This file is the consolidated technical reference for the current release-candidate snapshot. Internal development and migration drafts are not part of the release documentation. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `models/*/profile.yaml`, `models/README.md`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
 
 ---
 
@@ -13,7 +13,7 @@ This file is the consolidated technical reference for the current snapshot. Unpu
 Default installation directory:
 
 ```text
-/opt/nextcloud-rag/
+/opt/sunaq/
 ```
 
 Main processes:
@@ -33,7 +33,7 @@ Reverse-proxy paths:
 
 ```text
 /             user UI; OpenWebUI when installed
-/rag-admin/   protected RAG administration
+/rag-admin/   protected SunaQ administration
 /curation/    optional Nextcloud-authenticated Findings self-service
 /rag-api/     middleware/diagnostics
 /auth/        Nextcloud Login Flow
@@ -44,13 +44,13 @@ Without a user UI, `/` redirects to `/rag-admin/`.
 
 ### Internal API trust boundary
 
-Port `8765` is an internal FastAPI service and is loopback-bound by the supported profiles. The current 0.8.5 line enforces explicit route zones through central FastAPI dependencies:
+Port `8765` is an internal FastAPI service and is loopback-bound by the supported profiles. The current 0.8.6 line enforces explicit route zones through central FastAPI dependencies:
 
 - `PUBLIC`: no internal machine credential; currently only `/live`;
 - `INTERNAL`: requires `X-AKI-Internal-Key` / `RAG_INTERNAL_API_KEY`;
 - `TRUSTED_PROVIDER`: requires the internal key plus `X-AKI-Provider-Key` / `RAG_PROVIDER_INTERNAL_KEY`;
 - `USER`: trusted-provider authentication plus a usable scoped identity in multi-user modes; Nextcloud live ACL remains the final document authorization boundary;
-- `ADMIN`: internal machine authentication plus RAG Admin Basic credentials.
+- `ADMIN`: internal machine authentication plus SunaQ Admin Basic credentials.
 
 The bundled provider sends both internal and provider-role credentials. Bundled nginx receives and injects only the internal credential, after its configured proxy authentication layer, so an nginx-forwarded request cannot acquire provider privileges. Client-supplied internal-key values are overwritten by nginx.
 
@@ -73,7 +73,7 @@ The public wrapper accepts `--profile standard|super-light` and `--deployment na
 
 | Option | Meaning |
 |---|---|
-| `--prefix PATH` | installation directory, default `/opt/nextcloud-rag` |
+| `--prefix PATH` | installation directory, default `/opt/sunaq` |
 | `--user USER` | service user, default `rag` |
 | `--nextcloud-url URL` | override the Nextcloud base URL in `config.yaml` |
 | `--elasticsearch-url URL` | override the Elasticsearch endpoint in `config.yaml` |
@@ -115,7 +115,7 @@ Super-Light has a separate CLI because it configures the external Nextcloud/Full
 | `--nextcloud-url URL` | canonical Nextcloud base URL, preferably HTTPS |
 | `--elasticsearch-url URL` | existing Nextcloud FullTextSearch Elasticsearch endpoint |
 | `--elasticsearch-index ID` | FullTextSearch index name; default `my_index` |
-| `--prefix PATH` | installation directory; default `/opt/nextcloud-rag` |
+| `--prefix PATH` | installation directory; default `/opt/sunaq` |
 | `--skip-system-packages` | do not install Docker/curl/jq/openssl |
 | `--no-start` | prepare files/images but do not start the stack |
 | `--with-openwebui` | start/retain the bundled OpenWebUI; fresh default off |
@@ -142,7 +142,7 @@ sudo ./install/install.sh \
   --with-proxy
 ```
 
-For a host where Nextcloud/Apache already owns 80/443, use alternate internal nginx ports, for example `--proxy-http-port 81 --proxy-https-port 444`, and let Apache proxy only the RAG path prefixes. See `install/INSTALL.md` and `docs/BETA-OPERATIONS.md`.
+For a host where Nextcloud/Apache already owns 80/443, use alternate internal nginx ports, for example `--proxy-http-port 81 --proxy-https-port 444`, and let Apache proxy only the SunaQ path prefixes. See `install/INSTALL.md` and `docs/BETA-OPERATIONS.md`.
 
 ## 2.4 Reference installation
 
@@ -177,16 +177,16 @@ in `runtime.env` and start only the maintenance-facing provider path needed to k
 Use the wrapper rather than editing the environment value manually:
 
 ```bash
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+sudo /opt/sunaq/install/maintenance-mode.sh status
+sudo /opt/sunaq/install/maintenance-mode.sh on
+sudo /opt/sunaq/install/maintenance-mode.sh off
 ```
 
 `status` reports both the maintenance state and the recorded deployment mode.
 
 While maintenance is **on**:
 
-- the normal RAG API/background workers are stopped or not started;
+- the normal SunaQ API/background workers are stopped or not started;
 - the provider runs the minimal `rag.maintenance_provider` implementation;
 - `/live` and `/health` report maintenance state;
 - `/v1/models` and `/v1/chat/completions` still require a registered provider-client Bearer key from `runtime/users.sqlite`;
@@ -198,13 +198,46 @@ For **Super-Light/dockerized**, `maintenance-mode.sh off` starts Neo4j, Playwrig
 
 For **Standard/native**, the wrapper performs the corresponding systemd/native process switch. Systemd-managed switching requires root.
 
-Maintenance mode is required before RC5 `backup-restore.sh create` and `restore` operations and is the expected state for comparable invasive maintenance. The restore workflow deliberately leaves AKI in maintenance mode until health/smoke/live-ACL checks have completed; see `BETA-OPERATIONS.md` and `DATA-LIFECYCLE.md`.
+Maintenance mode is required before RC5 `backup-restore.sh create` and `restore` operations and is the expected state for comparable invasive maintenance. The restore workflow deliberately leaves SunaQ in maintenance mode until health/smoke/live-ACL checks have completed; see `BETA-OPERATIONS.md` and `DATA-LIFECYCLE.md`.
 
 ---
 
 # 3. Configuration files
 
 ## 3.1 `config.yaml`
+
+0.8.6 changes the configuration ownership boundary substantially. `config.yaml`
+remains the canonical place for **deployment/global infrastructure, security,
+source access and background-worker policy**. Request-local research behaviour is
+owned by the selected SunaQ model package under `models/<profile>/profile.yaml`.
+
+For packaged SunaQ models, the following sections are intentionally **not**
+inherited from global `config.yaml`:
+
+| Profile-owned section | Current profile-local parameters |
+| --- | --- |
+| `search` | `es_limit`, `vector_limit`, `vector_threshold`, `rrf_k`, `rerank_candidates`, `final_limit`, `rerank_min_score` |
+| `retrieval_planner` | `enabled`, `thinking`, `max_retrieval_rounds`, `max_queries_per_round`, `model`, `max_tokens`, `context_max_chars`, `max_complete_documents`, `overflow_acl_scan_limit`, verifier candidate/character/token/batch limits |
+| `evidence_control` | `mode` and future evidence-review policy |
+| `retrieval_signal` | unspecific-query rejection, signal floors, curve/head/tail and dominance/overlap thresholds |
+| `entity_resolution` | enable/fail-open/retry/fuzzy settings and candidate/similarity thresholds |
+| `graph_retrieval` | enable, graph candidate limits, weights, hydration and snippet budgets |
+| `reranker` | backend/model/device/batch/length/TEI/fallback settings |
+| `context_enrichment` | head/window/max-window/max-character budgets |
+| `answer_context` | max documents, per-document characters and total answer-context characters |
+
+The loader copies the global configuration, removes all nine profile-owned
+sections, then installs the selected model's values. This is deliberately
+stronger than a normal YAML override: changing an old global
+`config.yaml: retrieval_planner` or `config.yaml: reranker` section must not
+silently change every packaged SunaQ model.
+
+Typical settings that remain global include Elasticsearch/Qdrant/Neo4j
+endpoints, embeddings, ACL and identity policy, retrieval capability policy,
+Nextcloud/TLS settings, source/archive policy, synchronization, GraphQueue and
+graph discovery/indexing workers, credentials, mail, Admin UI and deployment
+metadata.
+
 
 ### Elasticsearch
 
@@ -289,49 +322,35 @@ A compact Neo4j seed/alias context is supplied before the rewrite. `elastic_quer
 
 Backend results are fused, deduplicated and optionally reranked. The current normal path then applies live Nextcloud ACL and the Candidate Verifier. ACL denials do not trigger adaptive replacement searches, so the visible candidate window may become smaller. A fixed pre-rerank ACL pool is a documented future optimization, not the current implementation.
 
-After Candidate Verification, AKI still contains an optional **Evidence Control** pass. It may return `answer`, `retry`, `clarify`, `insufficient` or `conflict`, and for `answer` may narrow the authorized/verified set via `answer_sources` before the final answer model. This layer is experimental and **disabled by default** in the 0.8.5 reference configuration:
+After Candidate Verification, SunaQ can optionally run **Evidence Control**.
+The shipped 0.8.6-rc1 profiles set `evidence_control.mode: off`; this does not
+disable the Candidate Verifier.
 
-```yaml
-evidence_control:
-  mode: "off"  # off | review
-```
+The configuration split above is part of the 0.8.6 model-package contract; see
+section 3.2 for loading, precedence, custom profiles, role routing and prompts.
 
-`config.yaml` is canonical for this mode. `EVIDENCE_DECISION_MODE=off|review` in `provider.env` is retained only as a compatibility fallback when an older preserved `config.yaml` has no `evidence_control` section. Turning Evidence Control off does **not** disable the Candidate Verifier.
+The shipped rc1 budgets are:
 
-The SearchSpec path logs the generated `elastic_query`, the actual Elasticsearch JSON request body and a compact hit list without document contents.
+| Profile | Verification window | Answer documents | Answer total chars |
+| --- | ---: | ---: | ---: |
+| Schnell / `sunaq-standard` | 10 | 10 | 25,000 |
+| Gründlich / `sunaq-thorough` | 30 | 30 | 100,000 |
+| Tief / `sunaq-deep` | 50 | 50 | 200,000 |
 
-Current reference values:
+All three currently use `max_retrieval_rounds: 1`, Evidence Review off and
+planner thinking off. This isolates budget effects for rc1 acceptance.
 
-```yaml
-search:
-  es_limit: 50
-  vector_limit: 80
-  vector_threshold: 0.55
-  rrf_k: 60
-  rerank_candidates: 10
-  final_limit: 15
+Administrator-controlled remote hard ceilings remain separate from profile
+budgets. Legacy/non-packaged compatibility requests retain the older restrictive
+remote caps.
 
-# Legacy section name retained for configuration compatibility.
-retrieval_planner:
-  enabled: true
-  max_retrieval_rounds: 1
-  model: ""
-  max_tokens: 700
-  context_max_chars: 12000
-  max_complete_documents: 15
-  overflow_acl_scan_limit: 80
-  verification_candidate_limit: 6
-  bounded_verification_candidate_limit: 30
-  exhaustive_verification_candidate_limit: 30
-  verification_max_chars_per_document: 2500
-  verification_max_tokens: 900
-  verification_batch_size: 6
+Profiles and prompt packs are read at process startup. Restart API/provider after
+editing them. Installer reruns preserve an existing model-package directory as
+administrator-owned configuration and add only missing shipped packages.
 
-evidence_control:
-  mode: "off"
-```
+The SearchSpec path logs the generated `elastic_query`, the actual
+Elasticsearch JSON request body and a compact hit list without document contents.
 
-With additional rounds enabled, the rewriter may produce a new SearchSpec from the already visible result picture. Every round uses the same pipeline. The historical `strict_lexical`/`lexical`/`semantic` multi-probe language is no longer part of the normal provider path; compatibility/diagnostic code remains available separately.
 
 ### Qdrant sync
 
@@ -379,7 +398,9 @@ GraphQueue, Entity Discovery and Relation Discovery use separate budgets/thresho
 
 Neo4j is writable because Graph-Lite stores curation/provenance and optional document observations. It should therefore be treated as sensitive infrastructure and should normally remain loopback/private-network only.
 
-### Reranker
+### Profile-local reranker example
+
+The following values belong in the selected `models/<profile>/profile.yaml`, not in global `config.yaml`.
 
 Local:
 
@@ -413,7 +434,7 @@ reranker:
 
 This does **not** disable candidate deduplication. `dedup.enabled:true` remains an independent preprocessing step and prevents PDF/ODT/copy variants or near-identical text from consuming multiple candidate slots.
 
-The Super-Light normal verifier window is 10 authorized candidates; the standard reference profile remains at 6.
+Super-Light uses the same selected SunaQ profile budgets; its deployment override disables unavailable heavyweight capabilities such as local reranking/graph document retrieval rather than defining a separate six-document normal window.
 
 ### RetrievalRecord
 
@@ -452,7 +473,146 @@ Accounts, servers, mailbox roots, target paths and credentials are user-specific
 
 ---
 
-## 3.2 `provider.env` / `runtime.env`
+## 3.2 SunaQ model packages
+
+Each direct subdirectory below `models/` that contains a valid `profile.yaml`
+is discovered at API/provider startup:
+
+```text
+models/
+  standard/profile.yaml
+  thorough/profile.yaml
+  deep/profile.yaml
+  my-local-profile/profile.yaml
+```
+
+The directory name is only a package location. The stable API identity is the
+profile `id`; `name` is the user-visible label and `order` controls display
+ordering. `enabled: false` skips a package. IDs and aliases must be unique.
+Exactly one explicit `default: true` is allowed unless
+`SUNAQ_DEFAULT_MODEL` selects the default; otherwise the first ordered model
+becomes the default.
+
+A model package can contain:
+
+- the nine request-local configuration sections listed in 3.1;
+- `deployment_overrides` for capability-preserving differences such as
+  Super-Light disabling graph-document retrieval or a local reranker;
+- `roles` for `default`, `planner`, `verifier`, `evidence` and
+  `answer`, independently selecting the underlying LLM backend/model;
+- `prompts` pointing to files inside that model directory;
+- metadata such as `id`, `name`, `description`, `order`, `aliases`,
+  `default` and `enabled`.
+
+### Compilation and precedence
+
+Profiles and prompt files are compiled once at process startup. Runtime requests
+select an already validated compiled model and do not reread YAML/prompt files.
+After editing a model package, restart API/provider before testing it.
+
+For a packaged model the effective request-local configuration is built in this
+order:
+
+1. load the global base configuration for infrastructure/background policy;
+2. remove the nine profile-owned request-local sections;
+3. load those sections from the selected model package;
+4. when `legacy_config_overlay: true` is explicitly set, merge matching old
+   inline `config.yaml` sections over that model as an upgrade bridge;
+5. apply the matching `deployment_overrides.<deployment.profile>` last;
+6. compile model-specific role routing and prompt files.
+
+The shipped Schnell profile enables `legacy_config_overlay: true` only to
+preserve deliberately tuned 0.8.5 Standard installations. Fresh 0.8.6
+`config.yaml` files no longer contain these request-local sections, so the
+bridge is inert. Gründlich, Tief and administrator-created profiles are isolated
+from legacy global tuning unless they explicitly opt into such behaviour.
+
+If no packaged model exists at all, SunaQ falls back to the legacy single-model
+compatibility path and uses global `config.yaml` settings.
+
+### Shipped rc1 profiles
+
+| Profile | Search/final window | Verification window | Answer context |
+| --- | ---: | ---: | ---: |
+| Schnell / `sunaq-standard` | 10 | 10 | 10 docs / 25k chars |
+| Gründlich / `sunaq-thorough` | 30 | 30 | 30 docs / 100k chars |
+| Tief / `sunaq-deep` | 50 | 50 | 50 docs / 200k chars |
+
+The profile packages differ in more than the final answer budget: they also own
+Elasticsearch/vector candidate limits, verifier/context budgets,
+entity-resolution breadth, graph-retrieval budgets and context-enrichment
+limits. For rc1 all three nevertheless keep one retrieval round, Evidence
+Review off and planner thinking off so the first field comparison remains
+primarily a breadth/budget experiment.
+
+### LLM role routing inside a profile
+
+The visible SunaQ model is independent from the underlying LLM. For example:
+
+```yaml
+roles:
+  planner:
+    backend: ollama
+    base_url: http://127.0.0.1:11434
+    model: qwen3:4b
+  verifier:
+    backend: openai
+    base_url: https://provider.example/v1
+    model: verifier-model
+    api_key_env: VERIFIER_API_KEY
+  answer:
+    backend: openai
+    base_url: https://provider.example/v1
+    model: answer-model
+    api_key_env: ANSWER_API_KEY
+```
+
+Missing role values inherit the established global/role environment defaults.
+Secrets are referenced through environment variables; plaintext API keys do not
+belong in `profile.yaml`.
+
+### Model-specific prompts
+
+A short prompt filename resolves below
+`models/<profile>/prompts/`. The shipped core slots are `planner`,
+`verifier`, `evidence` and `answer`. Prompt paths must remain inside the
+model directory.
+
+### Remote hard ceilings
+
+Profile budgets are still bounded by administrator-controlled remote hard
+ceilings. The packaged-model ceilings are separate from the older legacy caps:
+
+```text
+SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT
+SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS
+SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES
+SUNAQ_REMOTE_HARD_VERIFIER_MAX_CHARS_PER_DOCUMENT
+SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS
+```
+
+These are safety ceilings, not normal profile defaults. The shipped profile
+budgets are intended to remain at or below them. Legacy/non-packaged
+compatibility requests continue to use the older `REMOTE_*` limits. For upgrade
+safety, an explicitly preserved `REMOTE_*` value also remains a tighter cap for
+a packaged SunaQ profile; fresh 0.8.6 templates leave those legacy variables
+unset.
+
+### Administrator-created profiles
+
+An administrator may copy an existing package, assign a new unique `id` and
+`name`, tune its profile-local sections/roles/prompts and restart API/provider.
+The registry and SunaQ Admin discover the new package automatically. It is not
+automatically granted to existing users; per-user entitlement still has to be
+enabled in SunaQ Admin.
+
+Installer reruns treat existing model-package directories as
+administrator-owned configuration and do not overwrite them; missing newly
+shipped packages may be added.
+
+---
+
+## 3.3 `provider.env` / `runtime.env`
 
 `runtime.env` contains deployment/global service secrets and operational flags. In RC5 the maintenance-state flag is:
 
@@ -491,7 +651,7 @@ If `WEB_LLM_API_KEY` is empty, the Web relevance path may fall back to the norma
 User-bound Nextcloud/IMAP secrets do **not** live in `runtime.env`. The encrypted credential store additionally uses:
 
 ```bash
-RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/nextcloud-rag/runtime/credential-master.key
+RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/sunaq/runtime/credential-master.key
 RAG_CREDENTIAL_ENCRYPTION=required
 ```
 
@@ -503,7 +663,7 @@ For native `api.openai.com` + GPT-5.6, the provider selects compatible request p
 
 ---
 
-## 3.3 `web.yaml`
+## 3.4 `web.yaml`
 
 Current shape:
 
@@ -589,7 +749,7 @@ Keep `fetch.allow_private:false` for public Web research. The restriction applie
 # 4. Start, stop and status
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 ./start-all.sh
 ./status.sh
 ./stop-all.sh
@@ -633,7 +793,7 @@ Slash directives must appear at the **beginning** of the request. `/help` intent
 
 | Command | Effect |
 |---|---|
-| `/new` | start a fresh RAG conversation context |
+| `/new` | start a fresh SunaQ conversation context |
 | `/web` | public-Web research only |
 | `/list` | ranked result list with relevant passage |
 | `/force` | bypass the broad/unspecific early stop |
@@ -894,16 +1054,16 @@ Operational rules:
 - when an external integration must reach it, use reverse-proxy source-IP/network allowlists and, where appropriate, mTLS or an equivalent second network-level control;
 - do not treat an arbitrary public OpenAI-compatible client as trusted merely because it can send an `Authorization` header.
 
-This boundary allows AKI to remain UI-agnostic and to be combined with other local RAG systems, agents or tools, but only when the administrator deliberately grants that integration access.
+This boundary allows SunaQ to remain UI-agnostic and to be combined with other local RAG systems, agents or tools, but only when the administrator deliberately grants that integration access.
 
 ---
 
 # 10. Administration CLI
 
-All examples assume `/opt/nextcloud-rag`:
+All examples assume `/opt/sunaq`:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 ```
 
 ## 10.1 Trusted Provider Clients
@@ -1258,7 +1418,7 @@ The Nextcloud credential already created through Login Flow is reused.
 Admin UI:
 
 ```text
-RAG Admin -> Users -> <Nextcloud login> -> Contact DB
+SunaQ Admin -> Users -> <Nextcloud login> -> Contact DB
 ```
 
 Native CLI:
@@ -1273,7 +1433,7 @@ sudo -u rag ./.venv/bin/python -m rag.contacts sync --user alice
 Dockerized Super-Light:
 
 ```bash
-cd /opt/nextcloud-rag/install/super-light
+cd /opt/sunaq/install/super-light
 ./contacts.sh list
 ./contacts.sh status --user alice
 ./contacts.sh books --user alice
@@ -1450,7 +1610,7 @@ runtime/users.sqlite            rag:rag 0600
 Configuration:
 
 ```bash
-RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/nextcloud-rag/runtime/credential-master.key
+RAG_CREDENTIAL_MASTER_KEY_FILE=/opt/sunaq/runtime/credential-master.key
 RAG_CREDENTIAL_ENCRYPTION=required
 ```
 
@@ -1465,7 +1625,7 @@ Back up the master key separately but together with the encrypted database. A `u
 ## 19.3 Secret administration
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 ./.venv/bin/python -m rag.secret_admin status
 sudo ./.venv/bin/python -m rag.secret_admin init-key --group rag
 sudo -u rag ./.venv/bin/python -m rag.secret_admin migrate
@@ -1527,7 +1687,7 @@ OpenWebUI follow-up helper requests are suppressed provider-side and do not invo
 
 OpenWebUI can also be embedded/navigated from Nextcloud without special middleware support.
 
-AKI itself is UI-agnostic. Any integration that implements the OpenAI-compatible request contract can use the Provider **if the administrator creates a Trusted Client for it**. This makes composition with other local RAG systems, agents and research tools possible, but the Trusted Client boundary in section 9 applies: provider keys belong on trusted integration servers and should be network-restricted when exposed beyond loopback.
+SunaQ is UI-agnostic. Any integration that implements the OpenAI-compatible request contract can use the Provider **if the administrator creates a Trusted Client for it**. This makes composition with other local RAG systems, agents and research tools possible, but the Trusted Client boundary in section 9 applies: provider keys belong on trusted integration servers and should be network-restricted when exposed beyond loopback.
 
 ---
 
@@ -1582,31 +1742,31 @@ For latency measurements, record the WebDAV SEARCH time separately from total an
 
 # 22. Current feature/freeze status
 
-**Implemented in 0.8.5-rc4 and included in the package:**
+**Implemented in the 0.8.6-rc1 candidate:**
 
 - common middleware core with `standard+native` and `super-light+dockerized`;
-- Query Rewriter/SearchSpec + Elasticsearch + optional Qdrant; Neo4j seed/alias expansion;
-- Super-Light without Qdrant/local reranker but with independent deduplication;
-- derived QueryFrame, compact verifier and RetrievalRecord code;
-- live Nextcloud ACL without adaptive backfill;
-- role-specific local/remote LLM configuration;
-- Brave and SearXNG Web Search, fetch, passage selection and relevance gate;
-- shared Playwright renderer with 1440×900 desktop viewport and A4 Landscape;
-- hidden Web-archive metadata sidecars and best-effort persistent consent state;
-- Graph CLI/curation and AKI Recherche Findings with manual Graph-Lite Entity/Claim curation and bulk decisions;
-- CardDAV seeds per verified Nextcloud user through Admin UI/CLI;
-- multi-user Nextcloud Login Flow;
-- admin-controlled Mail/Web/Contact settings;
-- AKI Recherche 0.2.4 for Nextcloud 23+ with saved chats, sidebar, safe Markdown tables, timestamps and source scopes.
+- SunaQ research profiles Schnell/Gründlich/Tief with per-user entitlement;
+- request-local profile budgets, prompt packs and LLM-role routing;
+- Query Rewriter/SearchSpec + Elasticsearch + optional Qdrant; Neo4j
+  seed/alias expansion;
+- live Nextcloud ACL without adaptive post-denial backfill;
+- bounded Candidate Verification with hard-limit and near-capacity signalling;
+- deterministic follow-up actions and identity-scoped request progress;
+- SunaQ Recherche 0.3.0 for Nextcloud 23+;
+- Brave/SearXNG Web Research and Nextcloud-backed Mail/Web/Chat archives;
+- Graph-Lite Findings/curation, CardDAV seeds and multi-user Login Flow;
+- maintenance/recovery tooling inherited and hardened from rc5.1.
 
-**Intentionally outside the 0.8.5 beta scope:**
+**Intentionally outside rc1 scope:**
 
+- additional profile-specific retrieval rounds;
+- planner/model Thinking as a default profile differentiator;
+- a generic side-effect/action execution layer;
 - complete browser/WARC/WACZ capture;
 - automatic global fact materialization from QueryFrames;
-- `standard+dockerized` as a released deployment path;
-- complex site-specific cookie/paywall/login automation.
+- `standard+dockerized` as a released deployment path.
 
-See `docs/KNOWN-LIMITATIONS.md` for additional operational limits.
+See `models/README.md`, `KNOWN-LIMITATIONS.md` and `ROADMAP.md`.
 
 ---
 
@@ -1621,12 +1781,12 @@ YAML                      13 files OK
 XML                       2 files OK
 Shell syntax              OK
 Python compile            OK
-AKI/PHP                   9 files OK
+SunaQ/PHP                   9 files OK
 JavaScript syntax         OK
 Package hygiene           OK
 ```
 
-The rc4.3 release-candidate baseline has completed blank-VM acceptance for both supported deployment mappings. Super-Light/dockerized completed installation and passed document-search and RAG Admin checks with Playwright active as part of the normal stack. Standard/native completed installation and passed document-search and RAG Admin checks; the optional Playwright renderer was built and started automatically when selected. CI covers the shared regression suite, while the field passes exercise real Nextcloud/Elasticsearch/Neo4j and installer behavior.
+The rc4.3 release-candidate baseline has completed blank-VM acceptance for both supported deployment mappings. Super-Light/dockerized completed installation and passed document-search and SunaQ Admin checks with Playwright active as part of the normal stack. Standard/native completed installation and passed document-search and SunaQ Admin checks; the optional Playwright renderer was built and started automatically when selected. CI covers the shared regression suite, while the field passes exercise real Nextcloud/Elasticsearch/Neo4j and installer behavior.
 
 Registry images recorded in the Compose lock set are digest-pinned. The locally built Playwright renderer currently uses a version-tag-pinned Microsoft base image rather than an immutable base-image digest; this is documented deferred hardening in `KNOWN-LIMITATIONS.md`. Secrets are not part of the package.
 
@@ -1661,7 +1821,7 @@ Web-archive TLS verification is separate from Search/Fetch/Relevance TLS and is 
 
 Raw HTML is not archived by default (`write_raw_html: false`); text snapshots and raw PDFs remain available as provenance.
 
-## AKI Recherche Findings
+## SunaQ Recherche Findings
 
 `POST /graph/research-findings` accepts already structured Query-Rewriter/Verifier output and starts neither a Graph Worker nor an additional LLM call. Only entries with `verification_status=match` and `relation_binding=direct` are persisted.
 
@@ -1690,11 +1850,11 @@ The provenance/curation model separates the concrete research run from the share
 
 The legacy-compatible `finding_id` remains deterministic from provenance, document ID and the complete canonical QueryFrame. A separate `curation_hash` covers the structured Entities, relations, constraints and concepts while excluding free-form `intent` wording. Persistence first looks for an existing Finding on the same supporting document with that curation fingerprint, allowing equivalent provider/chat runs to reuse one global curation decision without changing existing Finding IDs during upgrade.
 
-Admin curation is user-context scoped. The RAG Admin selects a canonical Nextcloud user; the backend requires that the selected user actually produced the Finding and re-checks the supporting document through the user's current live Nextcloud ACL before returning Finding evidence. Unauthorized Findings are omitted from lists and counts.
+Admin curation is user-context scoped. The SunaQ Admin selects a canonical Nextcloud user; the backend requires that the selected user actually produced the Finding and re-checks the supporting document through the user's current live Nextcloud ACL before returning Finding evidence. Unauthorized Findings are omitted from lists and counts.
 
 RC5 adds lazy cleanup at these Finding ACL-filter points. When a successful ACL check definitively denies a numeric Nextcloud `files:<id>`, the graph layer may remove the selected/current user's `PRODUCED` edges for Findings that are still completely uncurated. The shared Finding is deleted only after its last ResearchRun reference disappears. Finding curator status/suppression, `CURATED_ENTITY` edges or any Finding-derived RelationObservation prevent deletion. ACL/backend/TLS/network/credential errors and non-numeric/non-Nextcloud identifiers never trigger cleanup. This mechanism is not called by Qdrant sync and does not replace a future explicit cross-store `purge-document` workflow.
 
-Optional end-user curation is exposed at `/curation/`. It uses Nextcloud Login Flow v2 once per curation session and creates no separate RAG password. The returned app password is stored only in the encrypted `curation_sessions` table, not in the normal provider credential namespace and not in `identity_bindings`.
+Optional end-user curation is exposed at `/curation/`. It uses Nextcloud Login Flow v2 once per curation session and creates no separate SunaQ password. The returned app password is stored only in the encrypted `curation_sessions` table, not in the normal provider credential namespace and not in `identity_bindings`.
 
 A curation session has a configurable **absolute** maximum age; default is 7200 seconds. Request activity does not extend expiry. The browser receives a random HttpOnly/Secure/SameSite=Strict session cookie, while SQLite stores only its hash. State-changing requests require a session-bound CSRF token.
 

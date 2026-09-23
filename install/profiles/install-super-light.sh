@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PREFIX="/opt/nextcloud-rag"
+PREFIX="/opt/sunaq"
+LEGACY_PREFIX="/opt/nextcloud-rag"
+PREFIX_EXPLICIT=0
 NEXTCLOUD_URL=""
 ELASTICSEARCH_URL=""
 ELASTICSEARCH_INDEX="my_index"
@@ -27,7 +29,7 @@ usage() {
   cat <<'USAGE'
 Usage: sudo ./install/install.sh --profile super-light [options]
 
-Installs the 0.8.5 super-light installation profile as a Docker-hosted deployment.  Host Python
+Installs the SunaQ 0.8.6 super-light installation profile as a Docker-hosted deployment.  Host Python
 is not used by the middleware and may be older than Python 3.10 (e.g. Leap 15.3).
 
 Required for a started installation:
@@ -36,7 +38,7 @@ Required for a started installation:
 
 Options:
   --elasticsearch-index ID  Elasticsearch index (default: my_index)
-  --prefix PATH             Install prefix (default: /opt/nextcloud-rag)
+  --prefix PATH             Install prefix (default: /opt/sunaq)
   --skip-system-packages    Do not install Docker/curl/jq/openssl
   --no-start                Prepare files/images but do not start the stack
   --with-openwebui          Start/retain bundled OpenWebUI (fresh default: off)
@@ -62,7 +64,7 @@ USAGE
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix) PREFIX="$2"; shift 2 ;;
+    --prefix) PREFIX="$2"; PREFIX_EXPLICIT=1; shift 2 ;;
     --nextcloud-url) NEXTCLOUD_URL="$2"; shift 2 ;;
     --elasticsearch-url) ELASTICSEARCH_URL="$2"; shift 2 ;;
     --elasticsearch-index) ELASTICSEARCH_INDEX="$2"; shift 2 ;;
@@ -84,6 +86,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fresh installs use /opt/sunaq. Existing 0.8.5 installations remain in place
+# unless the administrator explicitly supplies --prefix; moving a live install
+# implicitly would be substantially more disruptive than retaining its path.
+if [[ $PREFIX_EXPLICIT -eq 0 && -d "$LEGACY_PREFIX" ]] && { [[ ! -e "$PREFIX" ]] || [[ -d "$PREFIX" && -z "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; }; then
+  if [[ -f "$LEGACY_PREFIX/.sunaq-installation" || -f "$LEGACY_PREFIX/.aki-rag-installation" || ( -d "$LEGACY_PREFIX/rag" && -f "$LEGACY_PREFIX/config.yaml" && -d "$LEGACY_PREFIX/install" ) ]]; then
+    echo "[INFO] Legacy SunaQ/AKI installation detected at $LEGACY_PREFIX; continuing in place."
+    PREFIX="$LEGACY_PREFIX"
+  fi
+fi
+
 log() { printf '\n==> %s\n' "$*"; }
 
 probe_service_url() {
@@ -97,7 +109,7 @@ probe_service_url() {
     echo "[CHECK] $label endpoint reachable."
   else
     echo "[WARN] $label endpoint is not reachable with current host curl/TLS trust." >&2
-    echo "       Installation will continue; verify the configured URL/service before using AKI." >&2
+    echo "       Installation will continue; verify the configured URL/service before using SunaQ." >&2
   fi
 }
 
@@ -118,7 +130,7 @@ load_install_state() {
   local state_file="$PREFIX/install/install-state.env"
   [[ -f "$state_file" ]] || return 0
   local recognized=0
-  [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized=1
+  [[ -f "$PREFIX/.sunaq-installation" || -f "$PREFIX/.aki-rag-installation" ]] && recognized=1
   [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]] && recognized=1
   [[ $recognized -eq 1 ]] || return 0
 
@@ -178,7 +190,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-AKI RAG Middleware 0.8.5-rc4.3 - super-light installation profile
+SunaQ / Eboracum Research Gateway 0.8.6-rc1 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized
@@ -239,17 +251,17 @@ preflight() {
   if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
     source_is_prefix=0
     [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
-    recognized_aki=0
-    [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
+    recognized_sunaq=0
+    [[ -f "$PREFIX/.sunaq-installation" || -f "$PREFIX/.aki-rag-installation" ]] && recognized_sunaq=1
     if [[ -f "$PREFIX/install/install-state.env" ]] && grep -Eq '^DEPLOYMENT_PROFILE=(super-light|standard)$' "$PREFIX/install/install-state.env"; then
-      recognized_aki=1
+      recognized_sunaq=1
     fi
     if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
-      recognized_aki=1
+      recognized_sunaq=1
     fi
-    if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
-      echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
-      echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
+    if [[ $source_is_prefix -ne 1 && $recognized_sunaq -ne 1 ]]; then
+      echo "Refusing to install into non-empty directory that is not recognized as a SunaQ installation: $PREFIX" >&2
+      echo "Choose a dedicated --prefix (recommended: /opt/sunaq). Existing files were not modified." >&2
       exit 2
     fi
   fi
@@ -292,11 +304,11 @@ preflight() {
           "${existing_compose[@]}" ps --services --filter status=running 2>/dev/null || true
         )"
         if [[ -n "$existing_running" ]]; then
-          echo "[WARN] Existing AKI RAG services are running: $(printf '%s' "$existing_running" | tr '\n' ' ')" >&2
+          echo "[WARN] Existing SunaQ services are running: $(printf '%s' "$existing_running" | tr '\n' ' ')" >&2
           echo "Stop the existing stack before rerunning the installer; no installation changes were made." >&2
           exit 2
         else
-          echo "[INFO] Existing AKI RAG stack is stopped; rerun may rebuild/start it."
+          echo "[INFO] Existing SunaQ stack is stopped; rerun may rebuild/start it."
         fi
       else
         echo "[WARN] Existing installation found but Docker Compose is not currently available; package installation may repair this."
@@ -373,6 +385,21 @@ if [[ "$(readlink -f "$SOURCE_DIR")" != "$(readlink -f "$PREFIX")" ]]; then
   # generated.conf and the local super-light .env are site state and survive reruns.
   mkdir -p "$PREFIX/install"
   cp -a "$SOURCE_DIR/install/." "$PREFIX/install/"
+fi
+# Seed SunaQ models once, then preserve each installed package as site
+# configuration. On upgrades, copy only newly shipped package directories so
+# new bundled profiles become available without overwriting local tuning.
+if [[ ! -d "$PREFIX/models" ]]; then
+  cp -a "$SOURCE_DIR/models" "$PREFIX/models"
+else
+  for source_model in "$SOURCE_DIR"/models/*; do
+    [[ -d "$source_model" ]] || continue
+    model_name="$(basename "$source_model")"
+    if [[ ! -e "$PREFIX/models/$model_name" ]]; then
+      cp -a "$source_model" "$PREFIX/models/$model_name"
+      log "Added new SunaQ model package: $model_name"
+    fi
+  done
 fi
 chmod 0755 "$PREFIX/install/maintenance-mode.sh"
 mkdir -p "$PREFIX/runtime" "$PREFIX/runtime/ca"
@@ -498,7 +525,7 @@ chmod 600 "$PREFIX/runtime/credential-master.key"
 
 cat > "$PREFIX/install/super-light/.env" <<ENV
 NEO4J_IMAGE=neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe
-OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e
 NGINX_IMAGE=nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
 NEO4J_PASSWORD=${NEO4J_PASSWORD}
 OPENWEBUI_PROVIDER_API_KEY=${PROVIDER_API_KEY}
@@ -529,17 +556,17 @@ MULTI_USER=1
 ENVSTATE
 chmod 0644 "$PREFIX/install/install-state.env"
 
-cat > "$PREFIX/.aki-rag-installation" <<MARKER
-AKI_RAG_INSTALLATION=1
+cat > "$PREFIX/.sunaq-installation" <<MARKER
+SUNAQ_INSTALLATION=1
 DEPLOYMENT_PROFILE=super-light
 DEPLOYMENT_MODE=dockerized
 MARKER
-chmod 0644 "$PREFIX/.aki-rag-installation"
+chmod 0644 "$PREFIX/.sunaq-installation"
 
 # Keep the exact wrapper invocation used for this deployment/rerun. This file is
 # root-owned operational metadata; it contains no generated secrets, but may
 # contain internal URLs and certificate paths and therefore is not world-readable.
-INSTALL_INVOCATION="${AKI_INSTALL_INVOCATION:-}"
+INSTALL_INVOCATION="${SUNAQ_INSTALL_INVOCATION:-${AKI_INSTALL_INVOCATION:-}}"
 if [[ -z "$INSTALL_INVOCATION" ]]; then
   printf -v INSTALL_INVOCATION '%q ' "$0" "$@"
   INSTALL_INVOCATION="${INSTALL_INVOCATION% }"
@@ -608,7 +635,7 @@ EOFOVR
   if [[ $WITH_OPENWEBUI -eq 1 ]]; then
     cat >> "$OVERRIDE" <<'EOFOVR'
   openwebui:
-    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e}
     restart: unless-stopped
     network_mode: host
     environment:
@@ -619,6 +646,7 @@ EOFOVR
       ENABLE_FORWARD_USER_INFO_HEADERS: "false"
       ENABLE_PERSISTENT_CONFIG: "false"
       BYPASS_MODEL_ACCESS_CONTROL: "true"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
       OPENAI_API_BASE_URL: "http://127.0.0.1:8766/v1"
       OPENAI_API_KEY: "${OPENWEBUI_PROVIDER_API_KEY:-}"
       OPENAI_API_CONFIGS: '{"0":{"enable":true,"headers":{"X-OpenWebUI-User-Id":"{{USER_ID}}"}}}'

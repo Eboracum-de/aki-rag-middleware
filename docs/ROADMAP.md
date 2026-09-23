@@ -1,135 +1,212 @@
 # Roadmap
 
-This file records the implemented RC5 direction together with follow-up work that is intentionally deferred beyond the current `0.8.5-rc5.1` public-beta baseline.
+**Baseline:** `0.8.6-rc1`
 
-## Deferred operational/security polish
+This roadmap starts from the capabilities already delivered in the 0.8.6 release
+candidate. Historical work completed in 0.8.5 and earlier belongs in the
+CHANGELOG and release notes rather than in the forward-looking roadmap.
 
-The following items are deliberately deferred because they do not block the validated RC5 deployment paths:
+## 0.8.6-rc1 baseline
 
-- reduce plaintext global-secret exposure in Dockerized/Super-Light operation: migrate suitable API keys/passwords from Compose environment materialization to Docker secrets or file-mounted credentials where practical, avoid support workflows that render full Compose configuration, and document Docker-daemon/group access as a privileged/root-equivalent boundary. This hardening can reduce accidental disclosure through `docker-compose config`/inspection but is not intended to protect secrets from a Docker administrator;
-- pin the Microsoft Playwright base image by immutable digest in addition to the existing version tag/package pins;
-- make the Standard `--plan` wording distinguish a fresh Playwright default-off install from a rerun that preserves an existing `web.yaml` choice;
-- bound each Neo4j schema-readiness attempt so periodic installer progress output cannot be delayed by one long connection attempt;
-- reduce synchronous WebDAV archive latency, preferably with bounded parallel writes / fewer file-ID `PROPFIND` round trips while preserving immediate `/use:Wn` and answer-finalization semantics.
+The current release candidate establishes the SunaQ product and architecture
+baseline:
 
-## 0.8.5-rc5 delivered items
+- user-visible research profiles **Schnell**, **Gründlich** and **Tief** with
+  per-user entitlements;
+- request-local model/profile configuration and role-specific LLM routing;
+- startup-loaded administrator-owned model packages and prompt packs;
+- live Nextcloud ACL as the final authorization boundary for private evidence;
+- client-neutral source scopes with ordinary documents as the implicit provider
+  default;
+- SunaQ Recherche 0.3.0 with profile selection, source chips, progress and
+  deterministic follow-up actions;
+- SunaQ Admin for user/model permissions, credentials, Graph-Lite and Findings
+  curation;
+- Super-Light as the Elasticsearch-centric deployment profile, with optional
+  Neo4j seeds/Graph-Lite and no required Qdrant/local reranker;
+- fresh-install prefix `/opt/sunaq` with legacy-installation compatibility;
+- explicit maintenance mode, smoke diagnostics and console backup/restore for
+  SunaQ-owned operational state;
+- optional ACL metadata prefilter, exact extracted-content duplicate grouping,
+  Research Findings and lazy ACL-based cleanup of uncurated Finding provenance.
 
-### Optional ACL-aware retrieval prefilter
+The rc1 profile comparison deliberately varies **budget only**. All shipped
+profiles currently use one retrieval round, Evidence Review is off and planner
+thinking is off.
 
-RC5 introduces a deliberately conservative **opt-in** prefilter before candidate limits/reranking. It is configured under `acl.prefilter.enabled` and remains off by default.
+## Near term: 0.8.6-rc1.1 / rc2 candidates
 
-The first implementation uses only the Nextcloud FullTextSearch metadata `owner`, `users` and `groups` in Elasticsearch; the same fields are already preserved in Qdrant payloads. The bundled AKI Recherche frontend derives the user's Nextcloud groups server-side from the authenticated Nextcloud session and forwards them only as a retrieval hint. The middleware derives the actual Nextcloud login from the stored live-ACL credential rather than trusting the frontend user header.
+These items are suitable for the first follow-up release(s) after rc1. They
+should be implemented independently so field results remain attributable.
 
-RC5 v1 intentionally does **not** evaluate Circles. Deployments that rely on Circle-only shares should leave the prefilter disabled until Circle membership is implemented. If a trusted frontend does not provide usable Nextcloud group context, the middleware skips prefiltering for that request and falls back to the established unfiltered retrieval path.
+### Simplify retrieval/completeness logic
 
-Security/behavioral constraints:
+Remove the legacy **Exhaustive Mode** now that research depth is represented by
+explicit SunaQ profiles. This includes:
 
-- live WebDAV ACL remains the mandatory final authorization boundary;
-- stale or forged indexed ACL metadata can affect recall/ranking but cannot grant document access;
-- no adaptive backfill is added after final live-ACL denials;
-- Graph retrieval remains unprefiltered in v1 and is still subject to final live ACL;
-- the prefilter may be disabled globally at any time without changing authorization semantics.
+- exhaustive-intent planner branches;
+- `exhaustive_verification_candidate_limit` and related special-case limits;
+- exhaustive-only answer/warning paths;
+- obsolete completeness wording, tests and documentation.
 
-### Exact extracted-content duplicate detection — implemented in RC5
+Completeness should remain conservative: SunaQ may report bounded or
+near-capacity retrieval, but it should not imply global corpus completeness merely
+because a question asks for "all" documents.
 
-RC5 reads Nextcloud FullTextSearch's document `hash` as the primary exact duplicate signal where available. In the current Nextcloud FullTextSearch implementation this is an MD5 of the **extracted indexed content**, not a raw-file byte hash, so AKI treats only a valid 32-hex value as an *exact extracted-content duplicate* signal.
+### Profile tuning
 
-Duplicate grouping retains every distinct Nextcloud file ID in `duplicate_variants`. Live ACL checks the ranked representative **and each retained variant**. If the representative is denied but an identical copy is authorized, the authorized copy is promoted and denied metadata/snippets are discarded. Near-text/OCR and same-stem format-variant detection remain separate secondary signals.
+Use real rc1 workloads to tune Schnell/Gründlich/Tief rather than changing the
+first release-candidate experiment prematurely.
 
-A later statistics cleanup may use distinct extracted-content hashes rather than distinct file IDs for independent-source counts where that semantic is appropriate.
+Likely experiments include:
 
-### Dependency hardening and Transformers 5 evaluation
+- adjusting candidate and answer-context budgets;
+- evaluating whether Tief needs a larger window in normal corpora;
+- introducing an additional retrieval round for Gründlich/Tief only when evidence
+  gaps justify it;
+- evaluating model/planner thinking with strict time and token limits. Reasoning
+  loops observed with smaller Qwen models are a known operational risk;
+- improving deterministic follow-up actions from verifier/retrieval signals.
 
-Keep `transformers==4.57.6` as the RC4 baseline for now. Dependabot's direct 5.10.1 bump is not mergeable as-is because Transformers 5.10.1 requires `huggingface-hub>=1.5,<2`, while the current baseline intentionally pins `huggingface-hub>=0.24,<1`.
+These should remain separate experiments: budget, retrieval rounds and model
+reasoning must not be changed together if their effect is to be measurable.
 
-For RC5:
+### SunaQ naming/schema cleanup
 
-- test a coordinated Transformers 5.x + Hugging Face Hub 1.x upgrade on a dedicated branch rather than accepting an isolated major bump;
-- run the full regression suite plus a real local reranker smoke test with the configured cross-encoder model before changing the baseline;
-- document/automate reachability triage for dependency advisories: distinguish vulnerable APIs from actually exercised AKI paths, especially where the local reranker only imports `AutoTokenizer` and `AutoModelForSequenceClassification` with `local_files_only=True`;
-- split optional heavyweight ML dependencies from the core/server dependency set where practical (for example core vs. local-reranker requirements), so TEI/Super-Light deployments do not install Transformers merely because another profile can use it;
-- keep Dependabot major-version updates non-automatic; security updates within the supported major line should still be reviewed promptly.
+Finish non-breaking removal of legacy product names from active data structures
+while retaining explicit upgrade compatibility where required.
 
-### Backup / restore and credential-key lifecycle
+In particular:
 
-RC5 now provides the console-first `install/backup-restore.sh` workflow:
+- migrate the Neo4j secondary label `AKIResearchFinding` to
+  `SunaQResearchFinding`;
+- keep legacy `akirag` app configuration and `.akirag.json` chat metadata
+  readable as compatibility input, while all newly written state uses SunaQ
+  naming;
+- continue removing legacy display strings without renaming stable protocol,
+  environment or database identifiers merely for cosmetics.
 
-- `create TARGET`: requires maintenance mode, checkpoints/integrity-checks AKI SQLite state, creates a timestamped recovery set and verifies it before publishing;
-- `verify BACKUP`: verifies SHA-256 checksums, SQLite integrity and credential decryption with the included master key;
-- `restore BACKUP --yes`: requires maintenance mode and explicit confirmation, verifies first, restores only the AKI-owned state described by the recovery format and leaves the service in maintenance mode afterwards.
+### Installer and client polish
 
-The first recovery format includes configuration/runtime state,
-`runtime/users.sqlite`, the matching credential master key, relevant AKI SQLite
-state, private CA/TLS/operator state below the installation prefix and bundled
-Neo4j when selected. Qdrant remains deliberately rebuildable and is not included
-in v1. Nextcloud/Elasticsearch remain outside AKI backup ownership, and external
-Neo4j requires its own operator-managed backup.
+- pull all selected container images during installation so
+  `maintenance-mode.sh off` normally starts already-downloaded services instead
+  of discovering registry/image problems at that point;
+- live-refresh the SunaQ model selector after entitlement changes without
+  requiring a tab reload;
+- continue minor layout/accessibility polish where it does not complicate the
+  deliberately thin Nextcloud client;
+- expose useful pre-answer progress to generic OpenAI-compatible streaming clients
+  only if it can be done without destabilizing the current provider/SSE path.
 
-Restore is intentionally conservative: the same supported deployment
-profile/mode and installation prefix are required. Version drift is warned about
-and the operator must complete smoke/schema/ACL checks before leaving maintenance
-mode.
+## Before 1.0
 
-`credential-key rotate` remains a follow-up. It should require maintenance,
-create a recovery copy of `users.sqlite` plus the old key, re-encrypt every
-reversible secret with a new key, verify every row and only then commit the new
-key.
+The following work is more important than additional UI features.
 
-### Lazy ACL cleanup for uncurated Findings
+### Security and operational hardening
 
-RC5 now implements the first narrow cross-store lifecycle step without introducing a background purge worker. The Finding live-ACL checks in RAG Admin and `/curation/` self-clean stale **uncurated** user provenance after a successful definitive denial of a numeric Nextcloud file.
+- reduce exposure of global service secrets through Docker Compose environment
+  materialization by using file-mounted credentials or Docker secrets where
+  practical;
+- pin the Playwright base image by immutable digest;
+- bound individual Neo4j readiness/schema attempts so one network call cannot
+  stall installer progress reporting for a long interval;
+- keep dependency upgrades deliberate, including a coordinated Transformers 5 /
+  Hugging Face Hub evaluation and a real reranker smoke test;
+- split heavyweight optional ML dependencies from the core/server requirement set
+  where practical.
 
-The implementation deliberately:
+### Lifecycle and recovery
 
-- removes only the denied canonical user's `ResearchRun-[:PRODUCED]->ResearchFinding` provenance;
-- garbage-collects the shared Finding only when it is uncurated and no ResearchRun references it;
-- preserves Finding curator state/suppression, `CURATED_ENTITY` mappings and Finding-derived RelationObservations/claims;
-- performs no deletion on ACL/backend/TLS/network/credential failure or on non-numeric/non-Nextcloud document identifiers;
-- remains independent from Qdrant synchronization.
+- provide an explicit plan/execute `purge-document` workflow for SunaQ-owned
+  derived stores without pretending to control Nextcloud/Elasticsearch lifecycle;
+- add a supported credential-master-key rotation workflow with recovery copy,
+  full re-encryption and verification before commit;
+- improve lifecycle reporting so an administrator can see which SunaQ-owned
+  derived stores contain state for a document;
+- keep chat/web archive retention explicit because archived copies have their own
+  Nextcloud file IDs, ACLs and lifecycle.
 
-A future explicit `purge-document` workflow may coordinate deletion across derived stores after an authoritative document-lifecycle event. A periodic full ACL reconciler is intentionally deferred until operational need justifies it.
+### Retrieval and ACL behaviour
 
-### Smaller RC5 follow-ups
+- evaluate Circle-aware ACL metadata prefiltering without weakening the mandatory
+  live-ACL authorization boundary;
+- investigate a bounded pre-rerank/pre-window ACL strategy for narrow-rights users
+  without introducing unbounded adaptive fetching or an authorization oracle;
+- reduce unnecessary entity-resolution diagnostic detail before treating that
+  surface as an ordinary end-user API contract;
+- consider distinct extracted-content hashes for statistics where independent
+  source counts should not treat exact copies as separate evidence.
 
-- Reduce presentation drift between RAG-Admin Finding curation and `/curation/` by sharing more of the Finding view/presentation logic while keeping their authorization/session boundaries separate.
-- Consider controlled expansion of self-service beyond a user's own ResearchRuns only after the ACL/provenance semantics are specified and tested.
+### Web and archive performance
 
-## 0.8.6 direction
+Reduce synchronous WebDAV archive latency while preserving immediate provenance
+and source usability. Prefer bounded parallelism and fewer file-ID
+`PROPFIND` round trips over changes that weaken archive consistency.
+
+## 1.x architecture
+
+### Reasoning/backend abstraction
+
+SunaQ should remain the evidence, retrieval and authorization authority while the
+downstream reasoning component remains replaceable.
+
+The intended boundary is:
+
+```text
+question/task
+    -> SunaQ retrieval + ACL + evidence
+    -> reasoning/task backend
+    -> answer or proposed action
+```
+
+A future backend contract may support local/remote LLMs, specialist agents and
+workflow engines. Such a backend may recommend another search, but SunaQ remains
+responsible for source policy, ACL, retrieval budgets and the evidence returned.
+
+External side effects require a separate capability/approval boundary. A model or
+agent should propose an action; SunaQ/operator policy decides whether that action
+may be executed.
 
 ### Platform/resource abstraction
 
-Keep Nextcloud as the reference platform, but move Nextcloud-specific resource, identity and authorization semantics behind explicit interfaces rather than forking the Planner/RRF/Reranker/Graph/LLM core for every groupware platform.
+Nextcloud remains the reference platform. A second platform should not require a
+fork of the Planner/RRF/Reranker/Graph/provider core.
 
-The intended migration is evolutionary and compatibility-preserving:
-
-- introduce a structured `ResourceId` / `ResourceRef` with a stable serialization (for example `resource://nextcloud/files/66732`) while continuing to accept legacy `files:<id>` values during migration;
-- model an AKI `Principal` separately from frontend-scoped external identity, platform identity and credential bindings;
-- replace boolean authorization with an explicit decision such as `ALLOW / DENY / UNKNOWN`, preserving the current fail-closed/no-delete-on-backend-error distinction;
-- identify explicit capability boundaries for resource lookup/content, authorization and identity, with archive/changes/contacts/mail remaining optional capabilities;
-- keep retrieval backends (Elasticsearch, Qdrant, Graph) orthogonal to platform authorization/content semantics so an ownCloud/Pydio/SharePoint port can reuse the same retrieval implementation where appropriate;
-- avoid introducing a monolithic `NextcloudPlatformAdapter` merely to create an abstraction. Stabilize the core types/boundaries first and move concrete behavior behind narrowly scoped providers incrementally.
-
-This is an architectural 0.8.6 task, not an RC5 compatibility claim.
-
-### Model profiles
-
-The next minor line may expose richer **multi-model/model-profile selection** rather than adding it late to the 0.8.5 RC series. The current role-specific backend configuration remains the 0.8.5 contract; model-profile UX, selection policy and compatibility rules should be designed and tested as an explicit 0.8.6 feature.
-
-## Post-0.8.6 provider decomposition
-
-After the 0.8.6 resource/principal groundwork is stable, prefer a small provider split over a large platform-specific facade. The first useful interfaces are expected to be conceptually:
+Introduce narrow interfaces only when a concrete second platform requires them,
+for example:
 
 ```python
 class SearchProvider:
     def search(self, query, limit): ...
 
 class ContentProvider:
-    def get_content(self, document_id): ...
+    def get_content(self, resource_id): ...
 
 class AuthorizationProvider:
-    def authorize(self, principal, document_ids): ...
+    def authorize(self, principal, resource_ids): ...
 ```
 
-The current Nextcloud deployment can initially map these to `ElasticsearchSearchProvider`, `ElasticsearchContentProvider` and `NextcloudAuthorizationProvider`. Only after those boundaries are proven should additional authorization implementations such as ownCloud, Pydio or SharePoint be added. Identity/capability interfaces can then be split out when a concrete second platform requires them rather than forcing a large speculative abstraction up front.
+Longer term this may include:
 
-This keeps a future port close to an adapter exercise instead of a fork of the Planner/RRF/Reranker/Graph/LLM core.
+- a structured `ResourceId` / `ResourceRef` while accepting legacy
+  `files:<id>` identifiers during migration;
+- a SunaQ `Principal` distinct from frontend-scoped external identity,
+  platform identity and credential bindings;
+- explicit `ALLOW / DENY / UNKNOWN` authorization decisions;
+- narrowly scoped providers for Nextcloud first and, only when justified by a
+  real integration, ownCloud/Pydio/SharePoint or another content platform.
+
+Avoid a speculative monolithic platform adapter. The current Nextcloud security
+and retrieval semantics should first be represented by small, proven boundaries.
+
+## Lower-priority product work
+
+- reduce presentation drift between SunaQ Admin Findings curation and
+  end-user `/curation/` while preserving their different authorization models;
+- consider controlled expansion of self-service curation only after
+  cross-user/privacy semantics are explicit;
+- add a dedicated per-binding delete action in SunaQ Admin;
+- improve mail backfill state so moving `mail.not_before` to an earlier date can
+  safely reopen the historical UID range without manual cursor repair;
+- evaluate more durable background handling for Playwright render jobs where
+  deployments need it.

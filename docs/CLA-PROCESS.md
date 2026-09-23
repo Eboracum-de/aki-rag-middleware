@@ -1,6 +1,6 @@
 # CLA acceptance process
 
-AKI RAG Middleware uses a Contributor License Agreement only for contributions where a clean dual-licensing rights chain matters. The goal is to keep routine community participation lightweight.
+SunaQ uses a Contributor License Agreement only for contributions where a clean dual-licensing rights chain matters. The goal is to keep routine community participation lightweight.
 
 ## No CLA required for
 
@@ -21,7 +21,7 @@ AKI RAG Middleware uses a Contributor License Agreement only for contributions w
 
 Until a CLA automation is configured, the pull request must contain a comment from the contributor's GitHub account with the exact statement:
 
-> I have read and agree to AKI RAG Middleware CLA v1.0 (`CLA.md`) for the contributions in this pull request.
+> I have read and agree to SunaQ CLA v1.0 (`CLA.md`) for the contributions in this pull request.
 
 The maintainer records acceptance in the pull request before merge.
 

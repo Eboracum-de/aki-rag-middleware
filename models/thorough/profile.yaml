@@ -1,0 +1,112 @@
+id: sunaq-thorough
+name: Gründlich
+order: 20
+description: Breitere Recherche mit einem 30-Dokument-Fenster und größerem Antwortkontext.
+
+search:
+  es_limit: 80
+  vector_limit: 120
+  vector_threshold: 0.52
+  rrf_k: 60
+  rerank_candidates: 30
+  final_limit: 30
+  rerank_min_score: null
+
+retrieval_planner:
+  enabled: true
+  thinking: false
+  max_retrieval_rounds: 1
+  max_queries_per_round: 3
+  model: ""
+  max_tokens: 1000
+  context_max_chars: 18000
+  max_complete_documents: 30
+  overflow_acl_scan_limit: 120
+  verification_candidate_limit: 30
+  bounded_verification_candidate_limit: 30
+  exhaustive_verification_candidate_limit: 30
+  verification_max_chars_per_document: 4000
+  verification_max_tokens: 1600
+  verification_batch_size: 6
+
+evidence_control:
+  mode: "off"
+
+retrieval_signal:
+  enabled: true
+  reject_unspecific: true
+  unspecific_signal_floor: 0.08
+  min_curve_candidates: 8
+  head_size: 3
+  tail_fraction: 0.33
+  small_field_signal: 0.35
+  explicit_anchor_signal: 0.45
+  dominance_ratio: 1.50
+  dominance_margin: 0.10
+  secondary_weight_floor: 0.20
+  overlap_k: 10
+
+entity_resolution:
+  enabled: true
+  fail_open: true
+  retry_seconds: 30
+  fuzzy: true
+  fuzzy_threshold: 86.0
+  fuzzy_max_candidates: 8
+  fuzzy_expansion_min_similarity: 90.0
+
+graph_retrieval:
+  enabled: true
+  limit: 40
+  pair_weight: 0.65
+  relation_weight: 0.90
+  direct_relation_weight: 0.75
+  single_entity_weight: 0.30
+  hydrate_limit: 20
+  snippet_chars: 3000
+
+# Deliberately inherits the same safe disabled default as Standard. An
+# installation can opt this profile into local/TEI reranking independently.
+reranker:
+  backend: "none"
+  model: "BAAI/bge-reranker-v2-m3"
+  device: "cpu"
+  max_length: 512
+  batch_size: 4
+  tei_url: ""
+  timeout_seconds: 30
+  tei_batch_size: 32
+  fallback_backend: "none"
+
+context_enrichment:
+  enabled: true
+  head_chars: 3000
+  window_chars: 2200
+  max_windows: 3
+  max_chars: 11000
+
+answer_context:
+  max_documents: 30
+  max_chars_per_document: 4000
+  max_total_chars: 100000
+
+deployment_overrides:
+  super-light:
+    retrieval_planner:
+      # Budget-only experiment: preserve the 30-document Thorough window.
+      verification_candidate_limit: 30
+      bounded_verification_candidate_limit: 30
+      exhaustive_verification_candidate_limit: 30
+    graph_retrieval:
+      enabled: false
+    reranker:
+      backend: "none"
+
+
+roles: {}
+
+prompts:
+  planner: retrieval_planner.txt
+  verifier: candidate_verifier.txt
+  evidence: evidence_decision.txt
+  answer: rag_answer.txt
