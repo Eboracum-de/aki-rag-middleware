@@ -232,7 +232,22 @@ def _promote_authorized_duplicate(
     remaining_variants: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Promote one ACL-visible duplicate without reusing denied evidence text."""
-    promoted = dict(representative)
+    ranking_keys = (
+        "rank", "final_rank", "score",
+        "es_rank", "es_score", "elasticsearch_rank", "elasticsearch_score",
+        "vector_rank", "vector_score", "graph_rank", "graph_score",
+        "rrf", "rrf_rank", "rrf_score",
+        "probe_rrf_score", "probe_hits",
+        "reranker_score", "reranker_raw_score",
+        "chunk_no", "exhaustive_required",
+    )
+    # Never begin with the denied representative.  Only ranking/provenance
+    # metadata that cannot contain document evidence crosses the ACL boundary.
+    promoted = {
+        key: representative.get(key)
+        for key in ranking_keys
+        if key in representative
+    }
     identity_keys = (
         "document_id", "id", "fileid", "file_id",
         "title", "path", "directory", "filename",
