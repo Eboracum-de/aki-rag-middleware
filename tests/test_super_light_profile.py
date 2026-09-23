@@ -360,6 +360,19 @@ def test_super_light_rerun_preserves_optional_services_unless_explicitly_disable
     assert "OpenWebUI:               not pulled/not started" in disabled.stdout
     assert "Reverse proxy:           disabled" in disabled.stdout
 
+    explicit_ports = subprocess.run(
+        [
+            "bash", str(ROOT / "install/install.sh"), "--profile", "super-light",
+            "--plan", "--prefix", str(prefix), "--with-proxy",
+            "--proxy-http-port", "82", "--proxy-https-port", "445",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert explicit_ports.returncode == 0, explicit_ports.stderr
+    assert "Reverse proxy:           bundled/start on 82/445" in explicit_ports.stdout
+
 
 def test_super_light_runtime_env_appends_real_newlines_for_upgrade_keys():
     installer = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
