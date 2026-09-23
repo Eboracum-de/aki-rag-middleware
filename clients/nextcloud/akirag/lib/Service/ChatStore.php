@@ -87,6 +87,10 @@ class ChatStore {
         foreach ($folder->getDirectoryListing() as $node) {
             $name = (string)$node->getName();
             if (preg_match($pattern, $name)) {
+                $content = (string)$node->getContent();
+                if (strpos($content, "\n- Chat-ID: " . $id . "\n") === false) {
+                    continue;
+                }
                 $matches[] = $name;
                 if (count($matches) > 1) {
                     return '';
@@ -231,19 +235,9 @@ class ChatStore {
             $parts[] = (string)($message['content'] ?? '');
             $parts[] = '';
 
-            if (!empty($message['sources']) && is_array($message['sources'])) {
-                $parts[] = '### Quellen';
-                $parts[] = '';
-                foreach ($message['sources'] as $source) {
-                    $index = (int)($source['index'] ?? 0);
-                    $reference = trim((string)($source['reference'] ?? ''));
-                    if ($reference !== '') {
-                        $prefix = $index > 0 ? '[' . $index . '] ' : '';
-                        $parts[] = '- ' . $prefix . $reference;
-                    }
-                }
-                $parts[] = '';
-            }
+            // Technical source handoff IDs stay in the hidden metadata sidecar.
+            // The readable Markdown already contains the answer's user-facing
+            // source list and must not expose internal files:<id> bookkeeping.
         }
         return rtrim(implode("\n", $parts)) . "\n";
     }
@@ -253,12 +247,14 @@ class ChatStore {
         $id = $this->cleanId($id);
         $normalized = $this->normalizeMessages($messages);
         $now = gmdate('c');
+        $metadataCorrupt = false;
         try {
             $existing = $this->load($id, false);
         } catch (ChatMetadataCorruptionException $e) {
             // Damaged metadata must not block saving a new message. Treat the
             // record as absent; the next save rewrites a valid metadata file.
             $existing = null;
+            $metadataCorrupt = true;
         }
         $record = [
             'id' => $id,
@@ -272,7 +268,7 @@ class ChatStore {
         ];
 
         $previousArchiveFile = is_array($existing) ? trim((string)($existing['archive_file'] ?? '')) : '';
-        if ($previousArchiveFile === '') {
+        if ($previousArchiveFile === '' && ($metadataCorrupt || is_array($existing))) {
             $previousArchiveFile = $this->recoverMarkdownName($folder, $id);
         }
         // Keep the readable file name stable after first creation so normal
@@ -369,16 +365,19 @@ class ChatStore {
         if ($folder === null) {
             return;
         }
+        $metadataCorrupt = false;
         try {
             $record = $this->load($id, false);
-        } catch (\Exception $e) {
-            // Damaged metadata must not prevent deletion of the fixed archive files.
+        } catch (ChatMetadataCorruptionException $e) {
+            // Confirmed damaged metadata must not prevent deletion of its
+            // matching managed archive. Storage/read failures still propagate.
             $record = null;
+            $metadataCorrupt = true;
         }
         $names = [$this->metaName($id), $this->legacyHtmlName($id)];
         if (is_array($record) && !empty($record['archive_file'])) {
             $names[] = (string)$record['archive_file'];
-        } else {
+        } elseif ($metadataCorrupt || is_array($record)) {
             $recoveredArchive = $this->recoverMarkdownName($folder, $id);
             if ($recoveredArchive !== '') {
                 $names[] = $recoveredArchive;

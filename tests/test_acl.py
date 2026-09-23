@@ -27,6 +27,14 @@ MULTISTATUS_PATH = b'''<?xml version="1.0"?>
   </d:response>
 </d:multistatus>'''
 
+MULTISTATUS_SUBPATH = b'''<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+  <d:response>
+    <d:href>/nextcloud/remote.php/dav/files/alice/AKI-Chats/2026-09-22%20-%20Test%20-%20deadbeef.md</d:href>
+    <d:propstat><d:prop><oc:fileid>42</oc:fileid></d:prop></d:propstat>
+  </d:response>
+</d:multistatus>'''
+
 
 class LiveAclTests(unittest.TestCase):
     def test_search_xml_contains_all_ids(self):
@@ -50,6 +58,16 @@ class LiveAclTests(unittest.TestCase):
             {"42": "AKI-Chats/2026-09-22 - Test - deadbeef.md"},
         )
 
+    def test_parse_server_derived_visible_paths_with_nextcloud_subpath(self):
+        self.assertEqual(
+            parse_authorized_file_paths(
+                MULTISTATUS_SUBPATH,
+                "alice",
+                "/nextcloud/remote.php/dav/",
+            ),
+            {"42": "AKI-Chats/2026-09-22 - Test - deadbeef.md"},
+        )
+
     def test_resolve_visible_file_path_uses_authenticated_dav_result(self):
         os.environ["NEXTCLOUD_USERNAME"] = "alice"
         os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
@@ -66,6 +84,22 @@ class LiveAclTests(unittest.TestCase):
             path = NextcloudLiveAcl(cfg).resolve_visible_file_path("files:42")
         self.assertEqual(path, "AKI-Chats/2026-09-22 - Test - deadbeef.md")
         self.assertEqual(request_mock.call_args.kwargs["auth"], ("alice", "secret"))
+
+    def test_resolve_visible_file_path_uses_nextcloud_subpath(self):
+        os.environ["NEXTCLOUD_USERNAME"] = "alice"
+        os.environ["NEXTCLOUD_APP_PASSWORD"] = "secret"
+        cfg = {
+            "nextcloud": {"base_url": "https://nc.example/nextcloud"},
+            "acl": {"enabled": True, "identity_mode": "single_user", "verify_tls": False},
+        }
+        response = httpx.Response(
+            207,
+            content=MULTISTATUS_SUBPATH,
+            request=httpx.Request("SEARCH", "https://nc.example/nextcloud/remote.php/dav/"),
+        )
+        with patch("rag.acl.httpx.request", return_value=response):
+            path = NextcloudLiveAcl(cfg).resolve_visible_file_path("files:42")
+        self.assertEqual(path, "AKI-Chats/2026-09-22 - Test - deadbeef.md")
 
     def test_filter_does_not_backfill(self):
         os.environ["NEXTCLOUD_USERNAME"] = "alice"

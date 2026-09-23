@@ -56,7 +56,10 @@ A full static/security review of the complete `0.8.5-rc4.3` → `0.8.5-rc5` publ
 - Confirmed damaged chat metadata no longer blocks saving a repaired conversation; storage/read failures remain errors instead of being mistaken for corruption, and rename returns a controlled client error only for confirmed metadata corruption.
 - Chat-archive provenance registration is now user-scoped end to end: the Nextcloud app forwards the current UID, the provider binds that external UID to its authenticated client identity before forwarding it, and the middleware requires live Nextcloud ACL authorization for the exact `files:<id>` before changing source-origin metadata. Registration remains best-effort and fails closed if live ACL is unavailable.
 - The archive path itself is also server-derived: AKI resolves the visible file through the same authenticated Nextcloud WebDAV SEARCH, requires the canonical user-relative path to be below the configured chat-archive root and to match the submitted path, and persists only that canonical path.
-- If chat metadata is damaged, save/delete may recover the existing managed Markdown archive by its unique chat-ID filename suffix. Ambiguous matches are deliberately left unresolved instead of guessing.
+- If chat metadata is damaged, save/delete may recover the existing managed Markdown archive only after verifying the archive's full Chat-ID. Recovery is not attempted for genuinely absent metadata, preventing a new chat from overwriting or deleting another archive that merely shares the eight-character filename suffix. Ambiguous matches remain unresolved instead of guessing.
+- Server-derived chat-archive path resolution now derives its accepted DAV prefix from the configured WebDAV root, including Nextcloud installations below a URL subpath and explicit custom `acl.webdav_url` paths.
+- AKI Recherche keeps technical `files:<id>` source-handoff metadata in the hidden JSON sidecar but no longer renders that bookkeeping as an extra source list in the human-readable Markdown archive; the answer's ordinary user-facing source list remains unchanged.
+- Super-Light install-state loading now returns success explicitly, preventing `set -e` from terminating an rc4.3→rc5.1 rerun when proxy ports are supplied explicitly. A stopped-stack rerun with explicit alternate ports is covered by regression testing.
 - ACL duplicate promotion no longer starts from the unauthorized ranked representative at all: it carries forward only allow-listed ranking metadata and rebuilds identity/snippet fields from the authorized duplicate. Research logging similarly receives only the metadata fields its schema persists. Legacy duplicate records with only a file ID receive a canonical `files:<id>` document identifier.
 - The AKI Recherche documentation is aligned with app version 0.2.6 and Markdown chat archives.
 - Elasticsearch filename lookup now has behavioral regression coverage for requesting and mapping the Nextcloud document hash used by duplicate detection.
@@ -88,6 +91,6 @@ The pre-finalization `0.8.5-rc5.1` development tree passed:
 
 - Python compile checks;
 - shipped shell syntax checks;
-- **557 automated tests**.
+- **559 automated tests**.
 
 The exact public release delta is reviewed separately in a review-only pull request before tagging; that review-only PR is not intended to be merged.

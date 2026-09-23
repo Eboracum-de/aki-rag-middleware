@@ -173,6 +173,7 @@ def build_fileid_search_xml(username: str, file_ids: list[str]) -> bytes:
 def parse_authorized_file_paths(
     xml_body: str | bytes,
     username: str,
+    dav_root_path: str = "/remote.php/dav/",
 ) -> dict[str, str]:
     """Map visible Nextcloud file IDs to canonical user-relative DAV paths."""
     try:
@@ -184,9 +185,10 @@ def parse_authorized_file_paths(
     if not user:
         return {}
     encoded_user = quote(user, safe="")
+    dav_root = "/" + str(dav_root_path or "").strip("/") + "/"
     prefixes = (
-        f"/remote.php/dav/files/{encoded_user}/",
-        f"/remote.php/dav/files/{user}/",
+        f"{dav_root}files/{encoded_user}/",
+        f"{dav_root}files/{user}/",
         f"/files/{encoded_user}/",
         f"/files/{user}/",
     )
@@ -600,6 +602,7 @@ class NextcloudLiveAcl:
         return parse_authorized_file_paths(
             response.content,
             credential.username,
+            urlparse(self.webdav_url).path or "/remote.php/dav/",
         ).get(file_id)
 
 
