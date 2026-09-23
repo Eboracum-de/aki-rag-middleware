@@ -984,12 +984,35 @@ def _conversation_id(request: Request, body: ChatCompletionRequest) -> str | Non
 
 
 def _raw_documents(results: list[SearchResult]) -> list[dict[str, Any]]:
+    """Return only metadata fields persisted by ResearchLog.log_documents()."""
     documents: list[dict[str, Any]] = []
     for result in results:
-        item = dict(result.raw)
-        item.setdefault("title", result.title)
-        item.setdefault("rank", result.index)
-        documents.append(item)
+        raw = result.raw
+        documents.append({
+            "document_id": raw.get("document_id"),
+            "title": raw.get("title") or result.title,
+            "path": raw.get("path"),
+            "source_url": raw.get("source_url"),
+            "rank": raw.get("rank") if raw.get("rank") is not None else result.index,
+            "rrf_rank": raw.get("rrf_rank"),
+            "elasticsearch_rank": (
+                raw.get("elasticsearch_rank")
+                if raw.get("elasticsearch_rank") is not None
+                else raw.get("es_rank")
+            ),
+            "vector_rank": raw.get("vector_rank"),
+            "chunk_no": raw.get("chunk_no"),
+            "rrf_score": raw.get("rrf_score") if raw.get("rrf_score") is not None else raw.get("rrf"),
+            "elasticsearch_score": (
+                raw.get("elasticsearch_score")
+                if raw.get("elasticsearch_score") is not None
+                else raw.get("es_score")
+            ),
+            "vector_score": raw.get("vector_score"),
+            "reranker_score": raw.get("reranker_score"),
+            "reranker_raw_score": raw.get("reranker_raw_score"),
+            "document_date": raw.get("document_date"),
+        })
     return documents
 
 
@@ -5566,10 +5589,14 @@ async def register_chat_archive(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    _check_auth(authorization)
-    user_id = str(request.headers.get("x-rag-user-id") or "").strip()
-    if not user_id:
+    client_id = _check_auth(authorization)
+    external_user_id = str(request.headers.get("x-rag-user-id") or "").strip()
+    if not external_user_id:
         raise HTTPException(status_code=403, detail="RAG user identity missing")
+    try:
+        user_id = scope_identity(client_id, external_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Invalid RAG user identity") from exc
     document_id = str(body.document_id or "").strip()
     path = str(body.path or "").strip()
     if not document_id or not path:

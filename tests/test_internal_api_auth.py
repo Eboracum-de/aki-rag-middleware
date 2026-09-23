@@ -270,3 +270,79 @@ def test_core_routes_declare_machine_readable_security_zones():
                 actual[key] = zone
 
     assert actual == expected
+
+
+@pytest.mark.asyncio
+async def test_provider_chat_archive_registration_scopes_external_identity(monkeypatch):
+    captured = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return DummyResponse()
+
+    monkeypatch.setattr(provider, "_check_auth", lambda authorization: "client-a")
+
+    def scoped(client_id, external_user_id):
+        captured["scope"] = (client_id, external_user_id)
+        return "client-a::alice"
+
+    monkeypatch.setattr(provider, "scope_identity", scoped)
+    monkeypatch.setattr(provider, "_middleware_client", lambda **kwargs: DummyClient())
+
+    request = _request("/v1/archive/chat/register", {"X-RAG-User-ID": "alice"})
+    body = provider.ChatArchiveRegisterRequest(
+        document_id="files:42",
+        path="AKI-Chats/example.md",
+    )
+
+    result = await provider.register_chat_archive(
+        body,
+        request,
+        authorization="Bearer provider-key",
+    )
+
+    assert result == {"ok": True}
+    assert captured["scope"] == ("client-a", "alice")
+    assert captured["headers"]["X-RAG-User-ID"] == "client-a::alice"
+
+
+@pytest.mark.asyncio
+async def test_provider_chat_archive_registration_rejects_invalid_scoped_identity(monkeypatch):
+    monkeypatch.setattr(provider, "_check_auth", lambda authorization: "client-a")
+    monkeypatch.setattr(
+        provider,
+        "scope_identity",
+        lambda client_id, external_user_id: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+
+    request = _request("/v1/archive/chat/register", {"X-RAG-User-ID": "alice"})
+    body = provider.ChatArchiveRegisterRequest(
+        document_id="files:42",
+        path="AKI-Chats/example.md",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await provider.register_chat_archive(
+            body,
+            request,
+            authorization="Bearer provider-key",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Invalid RAG user identity"

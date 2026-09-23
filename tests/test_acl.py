@@ -201,6 +201,10 @@ def test_acl_promotes_visible_duplicate_when_ranked_representative_is_denied():
         "context_text": "SECRET FROM DENIED REPRESENTATIVE",
         "context_enriched": True,
         "es_snippet": "SECRET ES",
+        "text": "SECRET RAW TEXT",
+        "chunk": "SECRET RAW CHUNK",
+        "private_payload": {"body": "SECRET RAW OBJECT"},
+        "rrf_rank": 4,
         "duplicate_variants": [{
             "document_id": "files:2",
             "title": "visible.pdf",
@@ -230,6 +234,9 @@ def test_acl_promotes_visible_duplicate_when_ranked_representative_is_denied():
     assert "SECRET" not in promoted["es_snippet"]
     assert promoted["context_enriched"] is False
     assert promoted["acl_promoted_duplicate"] is True
+    assert promoted["rrf_rank"] == 4
+    for key in ("text", "chunk", "private_payload"):
+        assert key not in promoted
     assert promoted["duplicate_variants"] == []
     request_xml = request_mock.call_args.kwargs["content"].decode("utf-8")
     assert "<d:literal>1</d:literal>" in request_xml

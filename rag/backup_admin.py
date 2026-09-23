@@ -110,9 +110,12 @@ def _resolve_ca_reference(
     if tuple(app_relative.parts[:2]) != ("runtime", "ca"):
         return path, relative
 
-    candidate = (root.resolve() / app_relative).resolve(strict=False)
+    root_resolved = root.resolve()
+    ca_root = (root_resolved / "runtime" / "ca").resolve(strict=False)
+    candidate = (root_resolved / app_relative).resolve(strict=False)
     try:
-        candidate_relative = candidate.relative_to(root.resolve()).as_posix()
+        candidate.relative_to(ca_root)
+        candidate_relative = candidate.relative_to(root_resolved).as_posix()
     except ValueError:
         return path, relative
     if candidate.is_file():

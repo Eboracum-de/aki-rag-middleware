@@ -100,6 +100,9 @@ def test_aki_026_archive_registration_is_bounded_and_damaged_chats_remain_deleta
     assert "'connect_timeout' => 2" in proxy
     assert "'X-RAG-User-ID' => $uid" in proxy
     assert "Damaged metadata must not block saving a new message" in store
+    assert "class ChatMetadataCorruptionException extends \\RuntimeException" in store
+    assert "throw new ChatMetadataCorruptionException" in store
+    assert store.count("catch (ChatMetadataCorruptionException $e)") >= 2
     assert "recoverMarkdownName" in store
     assert "count($matches) > 1" in store
     assert store.count("$this->recoverMarkdownName($folder, $id)") >= 2

@@ -109,3 +109,43 @@ def test_retrieval_record_archive_is_atomic_and_contains_no_document_body(monkey
     stored = json.loads(files[0].read_text(encoding="utf-8"))
     assert stored["query"]["original"] == "Telemall"
     assert "text" not in stored["documents"][0]
+
+
+def test_raw_documents_allowlists_research_log_metadata():
+    result = provider.SearchResult(
+        index=3,
+        title="visible.pdf",
+        text="ANSWER CONTEXT MUST NOT BE LOGGED",
+        raw={
+            "document_id": "files:42",
+            "title": "visible.pdf",
+            "path": "Documents/visible.pdf",
+            "source_url": "https://nc.example/open/42",
+            "es_rank": 2,
+            "es_score": 0.75,
+            "rrf": 0.125,
+            "vector_rank": 4,
+            "vector_score": 0.5,
+            "reranker_score": 0.9,
+            "document_date": "2026-09-22",
+            "text": "SECRET RAW TEXT",
+            "chunk": "SECRET RAW CHUNK",
+            "context_text": "SECRET CONTEXT",
+            "private_payload": {"body": "SECRET OBJECT"},
+        },
+    )
+
+    document = provider._raw_documents([result])[0]
+
+    assert document["document_id"] == "files:42"
+    assert document["rank"] == 3
+    assert document["elasticsearch_rank"] == 2
+    assert document["elasticsearch_score"] == 0.75
+    assert document["rrf_score"] == 0.125
+    assert set(document) == {
+        "document_id", "title", "path", "source_url", "rank", "rrf_rank",
+        "elasticsearch_rank", "vector_rank", "chunk_no", "rrf_score",
+        "elasticsearch_score", "vector_score", "reranker_score",
+        "reranker_raw_score", "document_date",
+    }
+    assert all("SECRET" not in str(value) for value in document.values())

@@ -196,3 +196,24 @@ def test_inventory_includes_internal_ca_and_reports_external_ca(tmp_path: Path) 
 
     assert "runtime/ca/private.pem" in state["archive_paths"]
     assert {"kind": "ca_file", "path": "/etc/ssl/private/external-ca.pem"} in state["external_paths"]
+
+
+def test_inventory_rejects_super_light_ca_alias_escape(tmp_path: Path) -> None:
+    root = tmp_path
+    (root / "runtime/ca").mkdir(parents=True)
+    (root / "config.yaml").write_text(
+        "nextcloud:\n  ca_file: /app/runtime/ca/../../secret.pem\n"
+        "auth:\n  credential_store: runtime/users.sqlite\n",
+        encoding="utf-8",
+    )
+    (root / "runtime.env").write_text(
+        "RAG_CREDENTIAL_MASTER_KEY_FILE=runtime/credential-master.key\n",
+        encoding="utf-8",
+    )
+    (root / "secret.pem").write_text("must-not-be-archived-as-ca", encoding="utf-8")
+    _sqlite(root / "runtime/users.sqlite")
+
+    state = inventory(root, source_prefix=Path("/opt/nextcloud-rag"))
+
+    assert "secret.pem" not in state["archive_paths"]
+    assert {"kind": "ca_file", "path": "/app/secret.pem"} in state["external_paths"]

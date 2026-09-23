@@ -5,7 +5,7 @@ a081a6e4d025b7087770856742a705ed8d21812661f0ebef36cb6936e46163bc  ./.github/ISSU
 0a2462dd9fe785bab54e1ee5701bfae3f3b909539947cbd30af5b3976f392987  ./.github/pull_request_template.md
 a79af9795a323beb5b2758dff968c2d7b3b7c05a50d346fe4209e139d50e34bc  ./.github/workflows/ci.yml
 b34055499d61da58af74e03cb242a6a3ff70fcb0f3844f8f71f64d6efa505c81  ./.gitignore
-9e3f63c685984921c90b53b34d86216f9356cc830767851a14f08804014f7c3b  ./CHANGELOG.md
+9b815597cf5cb6953c4adde51e4241b7fe30755deb723c508762b1a59664d96a  ./CHANGELOG.md
 ff8e29f42a23c5943105159251be47401876368afce8a494cd01441435874c08  ./check-config.sh
 baf6797c3c7b773dc447f12d4bdeab81448d5f536e3e80f8ebaf6c3c21a05705  ./CLA.md
 6cb73a539bb62b04b2a33daf3edbf1598807d5d9667cd9fdc8bdd1359c8a6938  ./clients/nextcloud/akirag/appinfo/info.xml
@@ -18,7 +18,7 @@ ee45e146b57e043c3734c05024b0fbcee91657f9a11d476ffad878a32d9c6f0b  ./clients/next
 78867b9c9d9447467823c78722385d65d7e673daace19ae290c849103d784a0d  ./clients/nextcloud/akirag/lib/Controller/AdminController.php
 5747cf537d196ddcb0f3e69d7aad3ea9f29d51bcba9839315b8168d5a5bbb5b1  ./clients/nextcloud/akirag/lib/Controller/ChatController.php
 1cf18ae34390e0d5bfa64d0d006ed02ca863ffa8b721d92a36c792a759287fa4  ./clients/nextcloud/akirag/lib/Controller/PageController.php
-ed4cba7ee26ba8025eda8a812e1ff22ac12e781e4fa56a9c44c85d2d35a0d24f  ./clients/nextcloud/akirag/lib/Service/ChatStore.php
+3dbcdefcd91596def6d025b90ca894e089b470144e6c300074e031afbddf2c82  ./clients/nextcloud/akirag/lib/Service/ChatStore.php
 a7b8214725bfffb3ccec5dde3641d03a4526c7c712493f176e6316e55eff7706  ./clients/nextcloud/akirag/lib/Service/RagProxy.php
 da73ba2052225332dbc47596a6357012bcc2e47a2e05a7568eabc22964caac38  ./clients/nextcloud/akirag/lib/Settings/Admin.php
 a84aaf25154ac9dda256102dc9bc5a027479fdb4fadc5b3c6200c512e6a5dcec  ./clients/nextcloud/akirag/README.md
@@ -103,11 +103,11 @@ ab7c011ff2002087d4ae871d46bb9cb89ae8b18092eba015f4d25e9c16a93caa  ./prompts/natu
 d91c04bbc8591216b7163354eab11c834b599d80344392d085a17906f1c995ae  ./provider.env.example
 2507b90dcebe6681681b360c2c158ad9670199060364b4c50267e48d26c3fbd5  ./pyproject.toml
 f9a69453f17dfef957542c7b286323082a032bf19e1aa12ba4593db51b86721c  ./rag/acl_smoke.py
-bf7d1be9bd122488619000f14ab573961af45629f5e26a0864a1a9460364965c  ./rag/acl.py
+2ec4838e1462854a5012cc80c6d418849bba3798ef686a3aff15ca6744b644ae  ./rag/acl.py
 228f1b5207c191d0e420fbb3af3b26a816c7cf4394d82f1454dfad5678fe4475  ./rag/admin_ui.py
 292bc139f26ebf1652d425bb4ab3f0b9e02895b475c30f125929849b9b5fb2e0  ./rag/api_security.py
 e6d9530206b1b243e5d70f686761db86b1be3878c75bcc02f9251409df536e5d  ./rag/api.py
-837d26617692ba8fc40d5745fa0e8ccd392dfe535d23013c598f04648fb35de6  ./rag/backup_admin.py
+0a9cc447301032f386e7f50130f5272f99919c6b2d04f48dd0dd638937e82c9f  ./rag/backup_admin.py
 33053eaa27ddc4feb3dd409fdffed2bb4fcd80c638cf4211ea400aaa01de9fe4  ./rag/carddav_sync.py
 2c839718af2237d87d3f85dede8b6a02e2e165beb2871984319f5a23e59dc2fb  ./rag/chunker.py
 ff050fc4365619bea89b4e2fd6faaf1af971aa036fbe5c60aeccf4517da5c270  ./rag/config_check.py
@@ -137,7 +137,7 @@ ba5b2f62c2252ce6506147c24694a7478058535e39252ea099c088667422d559  ./rag/llm_role
 eae659464b4696c417b1320634b21fbbe000a4b0fae097475b80011826d54a45  ./rag/maintenance_provider.py
 d32a1fe222c95e4383057c35578218a60d82f69e3f1d6781cacd172cec8561de  ./rag/nextcloud_tls.py
 45cbb9c2697ff1d3861b2b32d6b41b4241fab7302140199f5bbc873573326dd1  ./rag/ontology.py
-6153c5e82d6eaabe082389343efc413426f710ce4f5223b76a4306bbf2a2dbb2  ./rag/openai_provider.py
+30ec3ec0a825dfa8bc826ffe3e890477d0a9bb880988306eb77d9c3e4c7f2a8e  ./rag/openai_provider.py
 1326aa45be358992ba6c98b810d447572be483fdee6decd2e3426db54b163c98  ./rag/planner.py
 e95601b01164d299d5b153971c2a6c11e17ce3456fdbc1ce588fab1aa09e7839  ./rag/provider_clients.py
 8db951a97a443c2e818e84b80da35fc6ff074d568306ec314e73d7d5679e9aef  ./rag/provider_entrypoint.py
@@ -199,8 +199,8 @@ ede60d20821f9d2dc5cfde0e9265b12cfad428a856cfb5657eaa2f9f88d9714f  ./rag/web_rese
 1469c22e047274fde57a8caceac63e0ba4672ac89fcae28b6d4d03c48515aa3b  ./RELEASE-NOTES-0.8.5-rc4.2.md
 2ef37f89b9239262bb6e15008fc9c2419d89281b5e7a12823efd95638ddaedca  ./RELEASE-NOTES-0.8.5-rc4.3.md
 5bdfa26f16af69e7bbf7e2537a1eb4f81abb49a921a14284914cb6bc43d7f7c4  ./RELEASE-NOTES-0.8.5-rc4.md
-4be174c19b2a7c4f3b072cdd7b62061f8ba4f79e41a91d8178a106588c4767a8  ./RELEASE-NOTES-0.8.5-rc5.1.md
-dfa6bd48de74e5819c65ba55d0f000078a8ad867e44b943667fe8752b72de0af  ./RELEASE-NOTES-0.8.5-rc5.md
+198e9c18bfb317aaeacefe03af7f8a8c11dab38a98765ff0ade4f1925a386cd4  ./RELEASE-NOTES-0.8.5-rc5.1.md
+63c10b490a8664c9b28b996c1644d9e052f5f191f519eb39bd942005dc2eb5c1  ./RELEASE-NOTES-0.8.5-rc5.md
 d1d7feaa1e4c9411db99a11d561721ebd52f3da34bd71bd3f245f2223c0ac29e  ./requirements-dev.txt
 0ae08b2d994070cb2107d6e249fe534b9c0d5005c622dd84bb34ad471ede3526  ./requirements-super-light.txt
 f856444f10ebd4ce2ec48b7b8e83f2def5acf128a9c578f3c0b51ca08650f234  ./requirements.txt
@@ -217,9 +217,9 @@ ba7d3b6d50c9b52b35ed6627c88b8bdd02bc3a57cc6c0780423a7689371fb86e  ./stop-all.sh
 3cd85c494b16848564e55bbf588131925051ca9c1899519001376b72d1da85cf  ./SUPPORT.md
 d192318fde8f59607df7b9e8e3ddd8772646c44b42334da295e2f4801feb7a06  ./tests/conftest.py
 e5c7953aeb03a626fbfa95cbac6ed58917a6711bba5a2ebbfd835a105903c604  ./tests/test_acl_prefilter.py
-52efa889065a6548e2d1be6220dd96231b4d0751b6453dd719934e8dacdd9c59  ./tests/test_acl.py
-52ee4c9871eb4c05fc00b41baa3a583df4f4fa009bd4da97b55d0005f6d5efe7  ./tests/test_akirag_client.py
-a8f982a2304465f292e0d2eb3a25e8a104bbed3934dce9683c2c21e43a0c78b2  ./tests/test_backup_admin.py
+7aa64a9531aca62f65e8470297e62a5b2465404b87964f296dfe62b46884977a  ./tests/test_acl.py
+e834091533c965b5ab41d355c46b5872b86695367d3370fd659a8146f0680cbf  ./tests/test_akirag_client.py
+baf4c028cfce4cfa27a71bc12efcd2b03360002ee2615746f03cbbd582674b74  ./tests/test_backup_admin.py
 a68167a02178b5984b9a5469d0a7a786ae1108e58f77d1a6488f16887ab673d3  ./tests/test_backup_restore_script.py
 0703a3ada53782d5e2fe1f6f5d900ba2fdf2058403665898470992068f99dd41  ./tests/test_broad_entity_guard.py
 0a10251251c3c46a255b26742ae58b73464245ff730d32058571bc55033af03c  ./tests/test_broad_entity.py
@@ -248,7 +248,7 @@ bb238b8222c9de9459f3de0e4be608d193b475830b7ed7d4b4dc3027849ad356  ./tests/test_g
 1f8e77b577e0bf7c2e1fd886b02fcf637034b3dae872f2102fd23eaf633e10f7  ./tests/test_graph_structured_resilience.py
 07ae720208b07b78bbae0d1aea17dab681e0baf1d9f618358341ddec06856047  ./tests/test_graphlight_findings_admin.py
 6670ca2089253cbd5d9cc506b680e2d64c8718bb9376f77230e11a5a4dd08302  ./tests/test_hard_constraint_recall_filter.py
-12db47de1f5463149c0d0ee419230e3ccd940a50ad5a0055db8e662b8b9997a2  ./tests/test_internal_api_auth.py
+cbbc024d08fb1162b5eafd00f2568728491e5b39b73927617770b7814f326fdb  ./tests/test_internal_api_auth.py
 bfeea93c01e6badcc0ce89618b2e257d93f0fedd6deecb0dbc7a77eed0643df0  ./tests/test_llm_role_routing.py
 57cc563f3ccb3e0433206cf84d41097eacc8a3d332a1998b05cd2dec010b1646  ./tests/test_logging_utils.py
 df86caca1a8b0cfa3322312fb63b38fc1fce7607a6406367703302f5c26f091c  ./tests/test_mail_metadata.py
@@ -275,7 +275,7 @@ c82c621d313bc1b18394eadfb3954fa0f17840ee78037e956471a5c77400b155  ./tests/test_r
 a60fab2ca20ad69bd9666d680d91d30fb978dc5a8de1e33375efac897b16a4d7  ./tests/test_retrieval_planner.py
 d1f4177138484e8553ceb98c64662544448ae0348221eb7dd4fe800e8039d927  ./tests/test_retrieval_policy.py
 f99dae950b2773ca1e288758fb29689f51d2b99a1e8f36cf2cb35a1529e2f2ab  ./tests/test_retrieval_recall_behavior.py
-5d87a97e8f7ae60ba99b05cdb1197e23ec146879533b9f45af7115972b09c07a  ./tests/test_retrieval_record.py
+fba4e474c707845f9da14d1f318a763799e0565b0555ac43e1b6d8a0ea913ecb  ./tests/test_retrieval_record.py
 857c726c650c84aff84808471731260928a4e5361ba0c41535a8e616c01a9664  ./tests/test_runtime_requirements.py
 a9041bba200684b758224a7267fb7d2d8a835fa7d9b088a4b36fac392e39743e  ./tests/test_same_as_identity.py
 f9dbfed708d27c0731f8b3a3c526f72672b84b40516da78222cd7a0168fe0987  ./tests/test_search_spec_pipeline.py

@@ -4,6 +4,8 @@ namespace OCA\AkiRag\Service;
 use OCP\Files\IRootFolder;
 use OCP\IUserSession;
 
+class ChatMetadataCorruptionException extends \RuntimeException {}
+
 class ChatStore {
     const FOLDER = 'AKI-Chats';
     const MAX_MESSAGES = 80;
@@ -253,7 +255,7 @@ class ChatStore {
         $now = gmdate('c');
         try {
             $existing = $this->load($id, false);
-        } catch (\Exception $e) {
+        } catch (ChatMetadataCorruptionException $e) {
             // Damaged metadata must not block saving a new message. Treat the
             // record as absent; the next save rewrites a valid metadata file.
             $existing = null;
@@ -311,7 +313,7 @@ class ChatStore {
         $raw = $folder->get($this->metaName($id))->getContent();
         $record = json_decode((string)$raw, true);
         if (!is_array($record)) {
-            throw new \RuntimeException('Gespeicherter Chat ist beschädigt.');
+            throw new ChatMetadataCorruptionException('Gespeicherter Chat ist beschädigt.');
         }
         return $record;
     }
@@ -351,7 +353,7 @@ class ChatStore {
     public function rename($id, $title) {
         try {
             $record = $this->load($id);
-        } catch (\RuntimeException $e) {
+        } catch (ChatMetadataCorruptionException $e) {
             throw new \InvalidArgumentException('Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden.');
         }
         $title = trim((string)$title);
