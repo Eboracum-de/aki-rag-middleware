@@ -105,9 +105,14 @@ def test_aki_026_archive_registration_is_bounded_and_damaged_chats_remain_deleta
     assert store.count("catch (ChatMetadataCorruptionException $e)") >= 2
     assert "recoverMarkdownName" in store
     assert "count($matches) > 1" in store
+    assert 'strpos($content, "\\n- Chat-ID: " . $id . "\\n")' in store
     assert store.count("$this->recoverMarkdownName($folder, $id)") >= 2
+    assert "$previousArchiveFile === '' && ($metadataCorrupt || is_array($existing))" in store
+    assert "elseif ($metadataCorrupt || is_array($record))" in store
+    assert "Storage/read failures still propagate." in store
     assert "Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden." in store
-    assert "Damaged metadata must not prevent deletion" in store
+    assert "$item['sources'] = $sources;" in store
+    assert "### Quellen" not in store
     assert readme.startswith("# AKI Recherche 0.2.6")
     assert "Markdown plus Metadaten" in readme
     assert "Legacy-HTML" in readme
