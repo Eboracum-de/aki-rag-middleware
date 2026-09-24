@@ -47,12 +47,14 @@ def test_source_origin_classifies_mail_and_chat_scopes(tmp_path, monkeypatch):
     assert not source_origin.source_scope_allows_path('Archive/Mail/Inbox/x.html', {'documents'})
     assert source_origin.source_scope_allows_path('Archive/Mail/Inbox/x.html', {'mailarchive'})
     assert source_origin.source_scope_allows_path('AKI-Chats/abc.html', {'chatarchive'})
+    assert source_origin.source_scope_allows_path('Ordner/Datei.pdf', None)
+    assert not source_origin.source_scope_allows_path('Archive/Mail/Inbox/x.html', None)
     assert not source_origin.source_scope_allows_path('AKI-Chats/abc.html', None)
 
 
-def test_aki_client_has_scope_ui_and_server_side_chat_archive():
+def test_sunaq_client_has_scope_ui_and_server_side_chat_archive():
     from pathlib import Path
-    root = Path(__file__).resolve().parent.parent / 'clients' / 'nextcloud' / 'akirag'
+    root = Path(__file__).resolve().parent.parent / 'clients' / 'nextcloud' / 'sunaq'
     main = (root / 'templates' / 'main.php').read_text(encoding='utf-8')
     proxy = (root / 'lib' / 'Service' / 'RagProxy.php').read_text(encoding='utf-8')
     store = (root / 'lib' / 'Service' / 'ChatStore.php').read_text(encoding='utf-8')
@@ -60,7 +62,9 @@ def test_aki_client_has_scope_ui_and_server_side_chat_archive():
     for scope in ['documents', 'mailarchive', 'webarchive', 'chatarchive', 'web']:
         assert f'value="{scope}"' in main
     assert 'explicit user source selection wins over UI state' in proxy
-    assert "const FOLDER = 'AKI-Chats'" in store
+    assert "const FOLDER = 'SunaQ-Chats'" in store
+    assert "const LEGACY_FOLDER = 'AKI-Chats'" in store
+    assert "$record['archive_path'] = $folder->getName() . '/' . $archiveFile;" in store
     assert '.akirag.json' in store
     assert "'source_origin' => 'chat_archive'" in store
     assert "'format' => 'markdown'" in store
@@ -117,3 +121,72 @@ def test_chat_archive_registration_writes_registry_before_es_mirror(monkeypatch)
             'classification_source': 'chat_archive_write',
         },
     )]
+
+
+def test_vector_default_matches_explicit_documents_only(monkeypatch):
+    from types import SimpleNamespace
+    import rag.search as search
+
+    calls = []
+
+    class FakeEmbeddings:
+        kind = 'fake'
+        model = 'fake'
+        profile = 'plain'
+
+        def embed_query(self, _query):
+            return [0.0, 1.0]
+
+    class FakeStore:
+        def search(self, _vector, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setattr(search, 'embeddings', FakeEmbeddings())
+    monkeypatch.setattr(search, 'store', FakeStore())
+
+    plan = SimpleNamespace(semantic_query='Vogelsang')
+    search.vector_search(plan, {}, source_scopes=None)
+    search.vector_search(plan, {}, source_scopes={'documents'})
+
+    expected = ['mail_archive', 'web_archive', 'chat_archive']
+    assert calls[0]['exclude_source_origins'] == expected
+    assert calls[0]['include_source_origins'] is None
+    assert calls[1]['exclude_source_origins'] == expected
+    assert calls[1]['include_source_origins'] is None
+
+
+def test_vector_documents_scope_excludes_all_archive_origins(monkeypatch):
+    from types import SimpleNamespace
+    import rag.search as search
+
+    calls = []
+
+    class FakeEmbeddings:
+        kind = 'fake'
+        model = 'fake'
+        profile = 'plain'
+
+        def embed_query(self, _query):
+            return [0.0, 1.0]
+
+    class FakeStore:
+        def search(self, _vector, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setattr(search, 'embeddings', FakeEmbeddings())
+    monkeypatch.setattr(search, 'store', FakeStore())
+
+    search.vector_search(
+        SimpleNamespace(semantic_query='Vogelsang'),
+        {},
+        source_scopes={'documents'},
+    )
+
+    assert set(calls[0]['exclude_source_origins']) == {
+        'mail_archive',
+        'web_archive',
+        'chat_archive',
+    }
+    assert calls[0]['include_source_origins'] is None

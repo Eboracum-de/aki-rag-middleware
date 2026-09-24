@@ -1,6 +1,8 @@
 import sys
 import time
 import builtins
+from contextlib import contextmanager
+from contextvars import ContextVar
 import re
 import json
 from difflib import SequenceMatcher
@@ -194,8 +196,8 @@ def _apply_source_scope_to_es(bool_query: dict, source_scopes=None) -> set[str] 
     }
 
     if scopes is None:
-        # Historical default: documents + mail, not archived web/chats.
-        for scope in ("webarchive", "chatarchive"):
+        # Client-neutral implicit default: ordinary documents only.
+        for scope in ("mailarchive", "webarchive", "chatarchive"):
             bool_query["must_not"].append(_es_special_scope_clause(scope, roots_by_scope))
         return None
 
@@ -344,14 +346,16 @@ _graph_store_failed_at: float | None = None
 def _get_graph_store() -> GraphStore | None:
     global _graph_store, _graph_store_failed_at
 
-    if not ENTITY_RESOLUTION_ENABLED:
+    if not _entity_resolution_enabled():
         return None
     if _graph_store is not None:
         return _graph_store
+    fail_open = _entity_fail_open()
+    retry_seconds = _entity_retry_seconds()
     if (
         _graph_store_failed_at is not None
-        and ENTITY_FAIL_OPEN
-        and (time.monotonic() - _graph_store_failed_at) < ENTITY_RETRY_SECONDS
+        and fail_open
+        and (time.monotonic() - _graph_store_failed_at) < retry_seconds
     ):
         return None
 
@@ -372,7 +376,7 @@ def _get_graph_store() -> GraphStore | None:
             f"[RAG] WARNUNG Entity Resolution/Neo4j: {type(exc).__name__}: {exc}",
             flush=True,
         )
-        if ENTITY_FAIL_OPEN:
+        if fail_open:
             return None
         raise
 
@@ -393,7 +397,7 @@ def prepare_entity_context(question: str) -> dict:
     weighted phrase expansions to Elasticsearch; fuzzy candidates only add a
     conservative canonical phrase when string similarity is sufficiently high.
     """
-    if not ENTITY_RESOLUTION_ENABLED:
+    if not _entity_resolution_enabled():
         return {
             "enabled": False,
             "entities": [],
@@ -414,9 +418,9 @@ def prepare_entity_context(question: str) -> dict:
         entity_query = detect_known_entities(
             question,
             graph,
-            fuzzy=ENTITY_FUZZY_ENABLED,
-            fuzzy_threshold=ENTITY_FUZZY_THRESHOLD,
-            fuzzy_max_candidates=ENTITY_FUZZY_MAX_CANDIDATES,
+            fuzzy=_entity_fuzzy_enabled(),
+            fuzzy_threshold=_entity_fuzzy_threshold(),
+            fuzzy_max_candidates=_entity_fuzzy_max_candidates(),
         )
         payload = entity_query.to_dict()
         expansions = elastic_entity_phrases(entity_query)
@@ -433,7 +437,7 @@ def prepare_entity_context(question: str) -> dict:
             if not entity.candidates:
                 continue
             best = entity.candidates[0]
-            if best.similarity < ENTITY_FUZZY_EXPANSION_MIN_SIMILARITY:
+            if best.similarity < _entity_fuzzy_expansion_min_similarity():
                 continue
             value = str(best.form_value or "").strip()
             if not value:
@@ -467,7 +471,7 @@ def prepare_entity_context(question: str) -> dict:
             f"[RAG] WARNUNG Entity-Vorbereitung: {type(exc).__name__}: {exc}",
             flush=True,
         )
-        if not ENTITY_FAIL_OPEN:
+        if not _entity_fail_open():
             raise
         return {
             "enabled": True,
@@ -494,19 +498,22 @@ def _resolved_query_entity_ids(entity_context: dict) -> list[str]:
 
 def graph_search(entity_context: dict, diagnostics: dict | None = None, source_scopes=None) -> list[dict]:
     """Retrieve already-graphified documents for resolved query entities."""
+    graph_enabled = _graph_retrieval_enabled()
+    graph_limit = _graph_retrieval_limit()
+    snippet_chars = _graph_retrieval_snippet_chars()
     if diagnostics is not None:
         diagnostics.clear()
         diagnostics.update({
-            "enabled": GRAPH_RETRIEVAL_ENABLED,
+            "enabled": graph_enabled,
             "available": False,
-            "mode": "disabled" if not GRAPH_RETRIEVAL_ENABLED else "no_entities",
+            "mode": "disabled" if not graph_enabled else "no_entities",
             "resolved_entity_ids": [],
             "direct_relations": [],
             "indirect_relation_chains": [],
             "count": 0,
         })
 
-    if not GRAPH_RETRIEVAL_ENABLED:
+    if not graph_enabled:
         return []
 
     entity_ids = _resolved_query_entity_ids(entity_context)
@@ -524,7 +531,7 @@ def graph_search(entity_context: dict, diagnostics: dict | None = None, source_s
     try:
         payload = graph.retrieve_documents_for_entities(
             entity_ids,
-            limit=GRAPH_RETRIEVAL_LIMIT * (3 if INTERNAL_EXCLUDE_PATHS else 1),
+            limit=graph_limit * (3 if INTERNAL_EXCLUDE_PATHS else 1),
             structural_relations=GRAPH_RETRIEVAL_RELATIONS,
         )
     except Exception as exc:
@@ -573,7 +580,7 @@ def graph_search(entity_context: dict, diagnostics: dict | None = None, source_s
             "rank": int(item.get("rank") or rank),
             "score": float(item.get("graph_score") or 0.0),
             "snippet": "",
-            "graph_snippet": "\n\n".join(relation_evidence)[:GRAPH_RETRIEVAL_SNIPPET_CHARS],
+            "graph_snippet": "\n\n".join(relation_evidence)[:snippet_chars],
             "graph_mode": mode,
             "graph_direct_relations": relations,
             "graph_indirect_chains": list(item.get("graph_indirect_chains") or indirect_chains),
@@ -584,7 +591,7 @@ def graph_search(entity_context: dict, diagnostics: dict | None = None, source_s
                 item.get("nextcloud_openfile_id"),
             )
         results.append(item)
-        if len(results) >= GRAPH_RETRIEVAL_LIMIT:
+        if len(results) >= graph_limit:
             break
 
     if diagnostics is not None:
@@ -603,22 +610,22 @@ def graph_retrieval_weight(diagnostics: dict, results: list[dict]) -> float:
         return 0.0
     mode = str(diagnostics.get("mode") or "")
     if mode == "explicit_relation_observation":
-        return GRAPH_RETRIEVAL_RELATION_WEIGHT
+        return _graph_retrieval_relation_weight()
     if mode == "direct_relation_context":
-        return GRAPH_RETRIEVAL_DIRECT_WEIGHT
+        return _graph_retrieval_direct_weight()
     if mode == "all_query_entities":
         # A direct seed relation plus co-mention documents is the strongest v1
         # structural signal; still leave the reranker/evidence controller in
         # charge of the final answer.
         if diagnostics.get("direct_relations"):
-            return max(GRAPH_RETRIEVAL_PAIR_WEIGHT, GRAPH_RETRIEVAL_DIRECT_WEIGHT)
-        return GRAPH_RETRIEVAL_PAIR_WEIGHT
+            return max(_graph_retrieval_pair_weight(), _graph_retrieval_direct_weight())
+        return _graph_retrieval_pair_weight()
     if mode == "indirect_relation_chain":
         # Two independently document-grounded hops are useful orientation, but
         # intentionally weaker than direct pair evidence.
-        return min(GRAPH_RETRIEVAL_PAIR_WEIGHT, 0.55)
+        return min(_graph_retrieval_pair_weight(), 0.55)
     if mode == "single_entity_documents":
-        return GRAPH_RETRIEVAL_SINGLE_WEIGHT
+        return _graph_retrieval_single_weight()
     return 0.0
 
 
@@ -862,6 +869,213 @@ DEDUP_VARIANT_EXTENSIONS = {
     ".md",
     ".pdf",
 }
+
+
+# ------------------------------------------------------------
+# Request-local SunaQ model configuration
+# ------------------------------------------------------------
+
+_ACTIVE_RUNTIME_CONFIG: ContextVar[dict | None] = ContextVar(
+    "sunaq_search_runtime_config", default=None
+)
+
+
+@contextmanager
+def use_runtime_model_config(runtime_config: dict | None):
+    """Apply one prevalidated SunaQ model config to the current request only."""
+    token = _ACTIVE_RUNTIME_CONFIG.set(runtime_config)
+    try:
+        yield
+    finally:
+        _ACTIVE_RUNTIME_CONFIG.reset(token)
+
+
+def _runtime_section(name: str, fallback: dict) -> dict:
+    active = _ACTIVE_RUNTIME_CONFIG.get()
+    if active is None:
+        return fallback
+    value = active.get(name)
+    return value if isinstance(value, dict) else fallback
+
+
+def _runtime_value(section: str, key: str, fallback: object):
+    default_section = {
+        "search": SEARCH_CONFIG,
+        "retrieval_signal": RETRIEVAL_SIGNAL_CONFIG,
+        "context_enrichment": CONTEXT_ENRICH_CONFIG,
+        "graph_retrieval": GRAPH_RETRIEVAL_CONFIG,
+        "entity_resolution": ENTITY_CONFIG,
+        "reranker": RERANKER_CONFIG,
+    }[section]
+    return _runtime_section(section, default_section).get(key, fallback)
+
+
+def _es_limit() -> int:
+    return int(_runtime_value("search", "es_limit", ES_LIMIT))
+
+
+def _vector_limit() -> int:
+    return int(_runtime_value("search", "vector_limit", VECTOR_LIMIT))
+
+
+def _vector_threshold() -> float:
+    return float(_runtime_value("search", "vector_threshold", VECTOR_THRESHOLD))
+
+
+def _rrf_k() -> int:
+    return int(_runtime_value("search", "rrf_k", RRF_K))
+
+
+def _rerank_candidates() -> int:
+    return int(_runtime_value("search", "rerank_candidates", RERANK_CANDIDATES))
+
+
+def _rerank_min_score() -> float | None:
+    value = _runtime_value("search", "rerank_min_score", RERANK_MIN_SCORE)
+    if value is None or (isinstance(value, str) and value.strip().lower() in {"", "none", "null"}):
+        return None
+    return float(value)
+
+
+def _retrieval_signal_enabled() -> bool:
+    return bool(_runtime_value("retrieval_signal", "enabled", RETRIEVAL_SIGNAL_ENABLED))
+
+
+def _retrieval_signal_reject_unspecific() -> bool:
+    return bool(_runtime_value("retrieval_signal", "reject_unspecific", RETRIEVAL_SIGNAL_REJECT_UNSPECIFIC))
+
+
+def _retrieval_signal_head_size() -> int:
+    return int(_runtime_value("retrieval_signal", "head_size", RETRIEVAL_SIGNAL_HEAD_SIZE))
+
+
+def _retrieval_signal_tail_fraction() -> float:
+    return float(_runtime_value("retrieval_signal", "tail_fraction", RETRIEVAL_SIGNAL_TAIL_FRACTION))
+
+
+def _retrieval_signal_min_curve_candidates() -> int:
+    return int(_runtime_value("retrieval_signal", "min_curve_candidates", RETRIEVAL_SIGNAL_MIN_CURVE_CANDIDATES))
+
+
+def _retrieval_signal_small_field() -> float:
+    return float(_runtime_value("retrieval_signal", "small_field_signal", RETRIEVAL_SIGNAL_SMALL_FIELD))
+
+
+def _retrieval_signal_explicit_anchor() -> float:
+    return float(_runtime_value("retrieval_signal", "explicit_anchor_signal", RETRIEVAL_SIGNAL_EXPLICIT_ANCHOR))
+
+
+def _retrieval_signal_floor() -> float:
+    return float(_runtime_value("retrieval_signal", "unspecific_signal_floor", RETRIEVAL_SIGNAL_FLOOR))
+
+
+def _retrieval_signal_dominance_ratio() -> float:
+    return float(_runtime_value("retrieval_signal", "dominance_ratio", RETRIEVAL_SIGNAL_DOMINANCE_RATIO))
+
+
+def _retrieval_signal_dominance_margin() -> float:
+    return float(_runtime_value("retrieval_signal", "dominance_margin", RETRIEVAL_SIGNAL_DOMINANCE_MARGIN))
+
+
+def _retrieval_signal_secondary_weight_floor() -> float:
+    return float(_runtime_value("retrieval_signal", "secondary_weight_floor", RETRIEVAL_SIGNAL_SECONDARY_WEIGHT_FLOOR))
+
+
+def _retrieval_signal_overlap_k() -> int:
+    return int(_runtime_value("retrieval_signal", "overlap_k", RETRIEVAL_SIGNAL_OVERLAP_K))
+
+
+def _context_enrich_enabled() -> bool:
+    return bool(_runtime_value("context_enrichment", "enabled", CONTEXT_ENRICH_ENABLED))
+
+
+def _context_enrich_head_chars() -> int:
+    return int(_runtime_value("context_enrichment", "head_chars", CONTEXT_ENRICH_HEAD_CHARS))
+
+
+def _context_enrich_window_chars() -> int:
+    return int(_runtime_value("context_enrichment", "window_chars", CONTEXT_ENRICH_WINDOW_CHARS))
+
+
+def _context_enrich_max_windows() -> int:
+    return int(_runtime_value("context_enrichment", "max_windows", CONTEXT_ENRICH_MAX_WINDOWS))
+
+
+def _context_enrich_max_chars() -> int:
+    return int(_runtime_value("context_enrichment", "max_chars", CONTEXT_ENRICH_MAX_CHARS))
+
+
+def _graph_retrieval_enabled() -> bool:
+    return NEO4J_ENABLED and bool(_runtime_value("graph_retrieval", "enabled", GRAPH_RETRIEVAL_ENABLED))
+
+
+def _graph_retrieval_limit() -> int:
+    return int(_runtime_value("graph_retrieval", "limit", GRAPH_RETRIEVAL_LIMIT))
+
+
+def _graph_retrieval_pair_weight() -> float:
+    return float(_runtime_value("graph_retrieval", "pair_weight", GRAPH_RETRIEVAL_PAIR_WEIGHT))
+
+
+def _graph_retrieval_relation_weight() -> float:
+    return float(_runtime_value("graph_retrieval", "relation_weight", GRAPH_RETRIEVAL_RELATION_WEIGHT))
+
+
+def _graph_retrieval_direct_weight() -> float:
+    return float(_runtime_value("graph_retrieval", "direct_relation_weight", GRAPH_RETRIEVAL_DIRECT_WEIGHT))
+
+
+def _graph_retrieval_single_weight() -> float:
+    return float(_runtime_value("graph_retrieval", "single_entity_weight", GRAPH_RETRIEVAL_SINGLE_WEIGHT))
+
+
+def _graph_retrieval_hydrate_limit() -> int:
+    return int(_runtime_value("graph_retrieval", "hydrate_limit", GRAPH_RETRIEVAL_HYDRATE_LIMIT))
+
+
+def _graph_retrieval_snippet_chars() -> int:
+    return int(_runtime_value("graph_retrieval", "snippet_chars", GRAPH_RETRIEVAL_SNIPPET_CHARS))
+
+
+def _entity_resolution_enabled() -> bool:
+    return NEO4J_ENABLED and bool(_runtime_value("entity_resolution", "enabled", ENTITY_RESOLUTION_ENABLED))
+
+
+def _entity_fail_open() -> bool:
+    return bool(_runtime_value("entity_resolution", "fail_open", ENTITY_FAIL_OPEN))
+
+
+def _entity_fuzzy_enabled() -> bool:
+    return bool(_runtime_value("entity_resolution", "fuzzy", ENTITY_FUZZY_ENABLED))
+
+
+def _entity_fuzzy_threshold() -> float:
+    return float(_runtime_value("entity_resolution", "fuzzy_threshold", ENTITY_FUZZY_THRESHOLD))
+
+
+def _entity_fuzzy_max_candidates() -> int:
+    return int(_runtime_value("entity_resolution", "fuzzy_max_candidates", ENTITY_FUZZY_MAX_CANDIDATES))
+
+
+def _entity_fuzzy_expansion_min_similarity() -> float:
+    return float(_runtime_value(
+        "entity_resolution",
+        "fuzzy_expansion_min_similarity",
+        ENTITY_FUZZY_EXPANSION_MIN_SIMILARITY,
+    ))
+
+
+def _entity_retry_seconds() -> float:
+    return float(_runtime_value("entity_resolution", "retry_seconds", ENTITY_RETRY_SECONDS))
+
+
+def _runtime_reranker_config() -> dict:
+    return dict(_runtime_section("reranker", RERANKER_CONFIG))
+
+
+def _reranker_enabled() -> bool:
+    backend = str(_runtime_reranker_config().get("backend", "none") or "none").strip().lower()
+    return backend not in {"none", "off", "disabled"}
 
 
 # ------------------------------------------------------------
@@ -1756,6 +1970,7 @@ def elastic_exact_search(
                 {"wildcard": {"title.keyword": "*/.mailmeta.json"}},
                 {"wildcard": {"title.keyword": "*/.*.mailmeta.json"}},
                 {"wildcard": {"title.keyword": "*/.*.akirag.json"}},
+                {"wildcard": {"title.keyword": "*/.*.sunaq.json"}},
                 {"wildcard": {"title.keyword": "*/.*.metadata.json"}},
             ],
             "minimum_should_match": 1,
@@ -1932,6 +2147,7 @@ def elastic_search(
                 {"wildcard": {"title.keyword": "*/.mailmeta.json"}},
                 {"wildcard": {"title.keyword": "*/.*.mailmeta.json"}},
                 {"wildcard": {"title.keyword": "*/.*.akirag.json"}},
+                {"wildcard": {"title.keyword": "*/.*.sunaq.json"}},
                 {"wildcard": {"title.keyword": "*/.*.metadata.json"}},
             ],
             "minimum_should_match": 1,
@@ -2136,7 +2352,7 @@ def elastic_search(
 
     body = {
 
-        "size": ES_LIMIT,
+        "size": _es_limit(),
 
         "_source": [
             "title",
@@ -2403,7 +2619,7 @@ def elastic_search(
                     indexed_origin,
             }
         )
-        if len(results) >= ES_LIMIT:
+        if len(results) >= _es_limit():
             break
 
 
@@ -2453,19 +2669,42 @@ def vector_search(
     # Qdrant-Abfrage
     # --------------------------------------------------------
 
+    normalized_scopes = normalize_source_scopes(source_scopes)
+    vector_exclude_origins: list[str] | None = None
+    vector_include_origins: list[str] | None = None
+    if normalized_scopes is None:
+        # Client-neutral implicit default: ordinary documents only. Keep legacy
+        # untagged document chunks eligible; path classification below remains
+        # the authoritative fallback.
+        vector_exclude_origins = ["mail_archive", "web_archive", "chat_archive"]
+    elif "documents" in normalized_scopes:
+        # Mirror the Elasticsearch semantics: ordinary documents are the
+        # complement of unselected archive classes. Using exclusions rather
+        # than a positive origin filter keeps older untagged document chunks
+        # recoverable.
+        origin_by_scope = {
+            "mailarchive": "mail_archive",
+            "webarchive": "web_archive",
+            "chatarchive": "chat_archive",
+        }
+        vector_exclude_origins = [
+            origin
+            for scope, origin in origin_by_scope.items()
+            if scope not in normalized_scopes
+        ]
+    else:
+        # Archive-only requests can safely use the positive payload filter.
+        vector_include_origins = sorted(
+            source_origins_for_scopes(normalized_scopes) or []
+        )
+
     raw_results = run_timed(
         "qdrant",
         lambda: store.search(  # type: ignore[union-attr]
             query_vector,
-            limit=VECTOR_LIMIT,
-            exclude_source_origins=(
-                ["web_archive", "chat_archive"]
-                if source_scopes is None else None
-            ),
-            include_source_origins=(
-                sorted(source_origins_for_scopes(source_scopes) or [])
-                if source_scopes is not None else None
-            ),
+            limit=_vector_limit(),
+            exclude_source_origins=vector_exclude_origins,
+            include_source_origins=vector_include_origins,
             acl_user=acl_prefilter_user,
             acl_groups=acl_prefilter_groups,
         ),
@@ -2479,7 +2718,7 @@ def vector_search(
         diagnostics["raw_results"] = len(raw_results)
         diagnostics["above_threshold"] = sum(
             1 for result in raw_results
-            if float(getattr(result, "score", 0.0)) >= VECTOR_THRESHOLD
+            if float(getattr(result, "score", 0.0)) >= _vector_threshold()
         )
 
 
@@ -2497,7 +2736,7 @@ def vector_search(
 
         if (
             result.score
-            < VECTOR_THRESHOLD
+            < _vector_threshold()
         ):
 
             continue
@@ -2630,7 +2869,7 @@ def vector_search(
                     payload.get("circles") or [],
             }
         )
-        if len(documents) >= VECTOR_LIMIT:
+        if len(documents) >= _vector_limit():
             break
 
 
@@ -2802,7 +3041,7 @@ def fuse_results(
         record["rrf"] += (
             float(es_weight)
             / (
-                RRF_K
+                _rrf_k()
                 + item["rank"]
             )
         )
@@ -2861,7 +3100,7 @@ def fuse_results(
         record["rrf"] += (
             float(vector_weight)
             / (
-                RRF_K
+                _rrf_k()
                 + item["rank"]
             )
         )
@@ -2891,7 +3130,7 @@ def fuse_results(
         if item.get("rank"):
             record["rrf"] += (
                 float(graph_weight)
-                / (RRF_K + int(item["rank"]))
+                / (_rrf_k() + int(item["rank"]))
             )
 
     return sorted(
@@ -3384,7 +3623,7 @@ def _arm_head_document_ids(
 
 def deduplicate_for_reranker(
     fused_results: list[dict],
-    max_unique: int = RERANK_CANDIDATES,
+    max_unique: int | None = None,
     preserve_per_arm: int = 1,
 ) -> list[dict]:
     """Build the cross-encoder candidate pool with arm-head preservation.
@@ -3398,6 +3637,8 @@ def deduplicate_for_reranker(
       representative, so a graph #1 cannot become invisible after dedup.
     """
 
+    if max_unique is None:
+        max_unique = _rerank_candidates()
     if not fused_results or max_unique <= 0:
         return []
 
@@ -3700,11 +3941,11 @@ def _context_terms(question: str, plan) -> list[str]:
 
 
 def _relevant_windows(text: str, terms: list[str]) -> list[str]:
-    if not text or not terms or CONTEXT_ENRICH_MAX_WINDOWS <= 0:
+    if not text or not terms or _context_enrich_max_windows() <= 0:
         return []
 
     folded = text.casefold()
-    half = max(300, CONTEXT_ENRICH_WINDOW_CHARS // 2)
+    half = max(300, _context_enrich_window_chars() // 2)
     candidates: list[tuple[int, int]] = []
 
     for term in terms:
@@ -3728,7 +3969,7 @@ def _relevant_windows(text: str, terms: list[str]) -> list[str]:
     for start, end in candidates:
         # Fenster, die weitgehend schon vom Dokumentanfang oder einem bereits
         # ausgewählten Fenster abgedeckt sind, nicht doppelt aufnehmen.
-        if start < CONTEXT_ENRICH_HEAD_CHARS and end <= CONTEXT_ENRICH_HEAD_CHARS + 250:
+        if start < _context_enrich_head_chars() and end <= _context_enrich_head_chars() + 250:
             continue
         overlap = False
         for old_start, old_end in selected:
@@ -3739,7 +3980,7 @@ def _relevant_windows(text: str, terms: list[str]) -> list[str]:
         if overlap:
             continue
         selected.append((start, end))
-        if len(selected) >= CONTEXT_ENRICH_MAX_WINDOWS:
+        if len(selected) >= _context_enrich_max_windows():
             break
 
     return [text[start:end].strip() for start, end in selected if text[start:end].strip()]
@@ -3751,7 +3992,7 @@ def _graph_relevant_windows(
     *,
     before_chars: int = GRAPH_RETRIEVAL_SNIPPET_BEFORE_CHARS,
     after_chars: int = GRAPH_RETRIEVAL_SNIPPET_AFTER_CHARS,
-    max_windows: int = CONTEXT_ENRICH_MAX_WINDOWS,
+    max_windows: int | None = None,
 ) -> list[str]:
     """Select graph passages around the most discriminating entity mentions.
 
@@ -3764,6 +4005,8 @@ def _graph_relevant_windows(
     is clipped to the current page rather than crossing into the next/previous
     letter.
     """
+    if max_windows is None:
+        max_windows = _context_enrich_max_windows()
     if not text or not terms or max_windows <= 0:
         return []
 
@@ -3887,7 +4130,7 @@ def _build_enriched_context(item: dict, full_content: str, question: str, plan) 
 
     head = ""
     if content:
-        head = content[:CONTEXT_ENRICH_HEAD_CHARS].strip()
+        head = content[:_context_enrich_head_chars()].strip()
 
         # For graph hits, keep the head as secondary context.  For ordinary hits
         # preserve the historical behaviour and put it first.
@@ -3905,7 +4148,7 @@ def _build_enriched_context(item: dict, full_content: str, question: str, plan) 
             parts.append("Weitere relevante Stelle:\n" + window)
 
     result = "\n\n".join(parts).strip()
-    return result[:CONTEXT_ENRICH_MAX_CHARS]
+    return result[:_context_enrich_max_chars()]
 
 
 
@@ -3954,15 +4197,19 @@ def _build_graph_retrieval_snippet(
         unique_terms.append(value)
 
     parts: list[str] = []
-    for window in _graph_relevant_windows(content, unique_terms[:16]):
+    for window in _graph_relevant_windows(
+        content,
+        unique_terms[:16],
+        max_windows=_context_enrich_max_windows(),
+    ):
         parts.append("Graph-relevante Stelle:\n" + window)
 
     # Only if no useful window exists do we fall back to the beginning.  This
     # avoids the old 2200-char-head / 2400-char-snippet truncation pathology.
     if not parts:
-        parts.append("Dokumentanfang:\n" + content[:CONTEXT_ENRICH_HEAD_CHARS])
+        parts.append("Dokumentanfang:\n" + content[:_context_enrich_head_chars()])
 
-    return "\n\n".join(parts).strip()[:GRAPH_RETRIEVAL_SNIPPET_CHARS]
+    return "\n\n".join(parts).strip()[:_graph_retrieval_snippet_chars()]
 
 
 def hydrate_graph_results(graph_results: list[dict], question: str, plan, timings: dict) -> None:
@@ -3974,11 +4221,11 @@ def hydrate_graph_results(graph_results: list[dict], question: str, plan, timing
     reason for retrieval survives the compact review budget.
     """
     started = time.perf_counter()
-    if not graph_results or GRAPH_RETRIEVAL_HYDRATE_LIMIT <= 0:
+    if not graph_results or _graph_retrieval_hydrate_limit() <= 0:
         timings["graph_hydration"] = time.perf_counter() - started
         return
 
-    selected = graph_results[:GRAPH_RETRIEVAL_HYDRATE_LIMIT]
+    selected = graph_results[:_graph_retrieval_hydrate_limit()]
     ids = [str(item.get("document_id") or "") for item in selected]
     ids = [value for value in ids if value]
     if not ids:
@@ -4018,7 +4265,7 @@ def hydrate_graph_results(graph_results: list[dict], question: str, plan, timing
                 item["graph_snippet"] = (
                     "Explizit extrahierte Relationspassage:\n" + existing_snippet
                     + "\n\n" + hydrated_snippet
-                )[:GRAPH_RETRIEVAL_SNIPPET_CHARS]
+                )[:_graph_retrieval_snippet_chars()]
             elif hydrated_snippet:
                 item["graph_snippet"] = hydrated_snippet
     except Exception as exc:
@@ -4046,7 +4293,7 @@ def enrich_final_results(final_results: list[dict], question: str, plan, timings
         item["context_text"] = _fallback_context(item)
         item["context_enriched"] = False
 
-    if not CONTEXT_ENRICH_ENABLED or not final_results:
+    if not _context_enrich_enabled() or not final_results:
         timings["context_enrichment"] = time.perf_counter() - started
         return
 
@@ -4352,7 +4599,7 @@ def perform_search(
                 "question": question,
                 "plan": None,
                 "entity_resolution": {
-                    "enabled": ENTITY_RESOLUTION_ENABLED,
+                    "enabled": _entity_resolution_enabled(),
                     "entities": [],
                     "elastic_phrase_expansion": [],
                     "error": None,
@@ -4521,7 +4768,7 @@ def perform_search(
             and not raw_results
             and not force_unspecific
             and bool(es_diagnostics.get("available", True))
-            and es_total_hits > ES_LIMIT
+            and es_total_hits > _es_limit()
             and is_broad_entity_query(question, entity_context)
         )
         if broad_entity_guard:
@@ -4673,7 +4920,7 @@ def perform_search(
         else:
             graph_results = []
             graph_diagnostics = {
-                "enabled": bool(GRAPH_RETRIEVAL_ENABLED),
+                "enabled": bool(_graph_retrieval_enabled()),
                 "available": False,
                 "mode": "disabled_by_request",
                 "count": 0,
@@ -4719,7 +4966,7 @@ def perform_search(
             or getattr(plan, "entity_should_phrases", None)
         )
 
-        if RETRIEVAL_SIGNAL_ENABLED:
+        if _retrieval_signal_enabled():
 
             def _measure_retrieval_signal():
                 es_profile = analyze_score_curve(
@@ -4727,33 +4974,33 @@ def perform_search(
                     total_hits=es_diagnostics.get("total_hits"),
                     total_relation=es_diagnostics.get("total_relation"),
                     explicit_anchor=explicit_es_anchor,
-                    head_size=RETRIEVAL_SIGNAL_HEAD_SIZE,
-                    tail_fraction=RETRIEVAL_SIGNAL_TAIL_FRACTION,
-                    min_curve_candidates=RETRIEVAL_SIGNAL_MIN_CURVE_CANDIDATES,
-                    small_field_signal=RETRIEVAL_SIGNAL_SMALL_FIELD,
-                    explicit_anchor_signal=RETRIEVAL_SIGNAL_EXPLICIT_ANCHOR,
+                    head_size=_retrieval_signal_head_size(),
+                    tail_fraction=_retrieval_signal_tail_fraction(),
+                    min_curve_candidates=_retrieval_signal_min_curve_candidates(),
+                    small_field_signal=_retrieval_signal_small_field(),
+                    explicit_anchor_signal=_retrieval_signal_explicit_anchor(),
                 )
                 vector_profile = analyze_score_curve(
                     (item.get("score") for item in vector_unique),
                     explicit_anchor=False,
-                    head_size=RETRIEVAL_SIGNAL_HEAD_SIZE,
-                    tail_fraction=RETRIEVAL_SIGNAL_TAIL_FRACTION,
-                    min_curve_candidates=RETRIEVAL_SIGNAL_MIN_CURVE_CANDIDATES,
-                    small_field_signal=RETRIEVAL_SIGNAL_SMALL_FIELD,
-                    explicit_anchor_signal=RETRIEVAL_SIGNAL_EXPLICIT_ANCHOR,
+                    head_size=_retrieval_signal_head_size(),
+                    tail_fraction=_retrieval_signal_tail_fraction(),
+                    min_curve_candidates=_retrieval_signal_min_curve_candidates(),
+                    small_field_signal=_retrieval_signal_small_field(),
+                    explicit_anchor_signal=_retrieval_signal_explicit_anchor(),
                 )
                 overlap = overlap_at_k(
                     (item.get("document_id") for item in es_unique),
                     (item.get("document_id") for item in vector_unique),
-                    RETRIEVAL_SIGNAL_OVERLAP_K,
+                    _retrieval_signal_overlap_k(),
                 )
                 decision = choose_retrieval_strategy(
                     es_profile,
                     vector_profile,
-                    unspecific_signal_floor=RETRIEVAL_SIGNAL_FLOOR,
-                    dominance_ratio=RETRIEVAL_SIGNAL_DOMINANCE_RATIO,
-                    dominance_margin=RETRIEVAL_SIGNAL_DOMINANCE_MARGIN,
-                    secondary_weight_floor=RETRIEVAL_SIGNAL_SECONDARY_WEIGHT_FLOOR,
+                    unspecific_signal_floor=_retrieval_signal_floor(),
+                    dominance_ratio=_retrieval_signal_dominance_ratio(),
+                    dominance_margin=_retrieval_signal_dominance_margin(),
+                    secondary_weight_floor=_retrieval_signal_secondary_weight_floor(),
                 )
                 return {
                     "elasticsearch": es_profile,
@@ -4785,7 +5032,7 @@ def perform_search(
                 "overlap": overlap_at_k(
                     (item.get("document_id") for item in es_unique),
                     (item.get("document_id") for item in vector_unique),
-                    RETRIEVAL_SIGNAL_OVERLAP_K,
+                    _retrieval_signal_overlap_k(),
                 ),
                 "decision": {
                     "strategy": "fusion",
@@ -4820,7 +5067,7 @@ def perform_search(
         # Fusion anwenden statt versehentlich mit Gewicht 0/0 zu fusionieren.
         elif (
             observed_strategy == "unspecific"
-            and (force_unspecific or not RETRIEVAL_SIGNAL_REJECT_UNSPECIFIC)
+            and (force_unspecific or not _retrieval_signal_reject_unspecific())
         ):
             retrieval_strategy = "forced_fusion" if force_unspecific else "fusion"
             es_weight = 1.0 if es_unique else 0.0
@@ -4897,7 +5144,7 @@ def perform_search(
         )
 
         if (
-            RETRIEVAL_SIGNAL_REJECT_UNSPECIFIC
+            _retrieval_signal_reject_unspecific()
             and not raw_results
             and not force_unspecific
             and observed_strategy == "unspecific"
@@ -4989,7 +5236,7 @@ def perform_search(
         candidate_pool_limit = (
             max(1, int(limit))
             if (raw_results or search_spec is not None)
-            else RERANK_CANDIDATES
+            else _rerank_candidates()
         )
         rerank_candidates = run_timed(
             "dedup",
@@ -5041,7 +5288,7 @@ def perform_search(
             reranker_used = False
             reranker_error = None
             retrieval_mode = "raw_list"
-        elif not RERANKER_ENABLED:
+        elif not _reranker_enabled():
             # super-light profile: preserve deterministic retrieval order and do
             # not import/load a local CrossEncoder or call TEI at all.
             final_results = rrf_fallback(rerank_candidates, limit)
@@ -5052,16 +5299,17 @@ def perform_search(
             try:
 
                 rerank_limit = (
-                    max(RERANK_CANDIDATES, int(limit))
+                    max(_rerank_candidates(), int(limit))
                     if search_spec is not None
-                    else RERANK_CANDIDATES
+                    else _rerank_candidates()
                 )
                 final_results = rerank_results(
                     query=question,
                     results=rerank_candidates,
                     candidate_limit=rerank_limit,
                     top_k=limit,
-                    min_score=RERANK_MIN_SCORE,
+                    min_score=_rerank_min_score(),
+                    config_override=_runtime_reranker_config(),
                 )
 
 
@@ -5210,7 +5458,7 @@ def perform_search(
             },
             "graph": {
                 "requested": "graph" in active_arms,
-                "enabled": GRAPH_RETRIEVAL_ENABLED,
+                "enabled": _graph_retrieval_enabled(),
                 "available": str(graph_diagnostics.get("mode") or "") not in {"error", "neo4j_unavailable"},
                 "error": graph_diagnostics.get("error"),
             },
@@ -5425,7 +5673,7 @@ def _multi_probe_document_key(item: dict) -> str:
 def _merge_probe_rankings(
     probe_rankings: list[tuple[str, list[dict]]],
     *,
-    rrf_k: int = RRF_K,
+    rrf_k: int | None = None,
 ) -> list[dict]:
     """Fuse complete probe rankings with a second, probe-level RRF.
 
@@ -5433,6 +5681,9 @@ def _merge_probe_rankings(
     second RRF treats each retrieval probe as one independent ranked list and
     preserves the arm provenance from every occurrence of a document.
     """
+    if rrf_k is None:
+        rrf_k = _rrf_k()
+
     by_key: dict[str, dict] = {}
     scores: dict[str, float] = {}
     hits: dict[str, list[dict]] = {}
@@ -5711,7 +5962,7 @@ def perform_multi_probe_search(
         }]
 
     hard_constraint_values = _hard_constraint_values(original_question)
-    per_probe_limit = max(int(limit), RERANK_CANDIDATES, 20)
+    per_probe_limit = max(int(limit), _rerank_candidates(), 20)
     if hard_constraint_values:
         # Pull a wider recall field first; the cheap literal audit below prunes
         # it before RRF and CrossEncoder reranking.
@@ -5809,7 +6060,7 @@ def perform_multi_probe_search(
 
     # Keep the complete bounded probe field for the one joint reranking pass.
     # Three default probes x 20 candidates is still a small CrossEncoder batch.
-    candidate_limit = max(RERANK_CANDIDATES, int(limit), len(required_keys))
+    candidate_limit = max(_rerank_candidates(), int(limit), len(required_keys))
     candidate_limit = min(max(candidate_limit, len(fused)), 80)
     rerank_candidates = deduplicate_for_reranker(
         fused,
@@ -5827,7 +6078,7 @@ def perform_multi_probe_search(
 
     reranker_used = False
     reranker_error = None
-    if not RERANKER_ENABLED:
+    if not _reranker_enabled():
         joint_ranked = rrf_fallback(rerank_candidates, max(1, int(limit)))
     else:
         try:
@@ -5836,7 +6087,8 @@ def perform_multi_probe_search(
                 results=rerank_candidates,
                 candidate_limit=len(rerank_candidates),
                 top_k=max(1, int(limit)),
-                min_score=RERANK_MIN_SCORE,
+                min_score=_rerank_min_score(),
+                config_override=_runtime_reranker_config(),
             )
             if rerank_candidates and not joint_ranked:
                 raise RuntimeError("Reranker lieferte keine verwendbaren Ergebnisse")
@@ -5887,7 +6139,7 @@ def perform_multi_probe_search(
     else:
         retrieval_mode = (
             "multi_probe_reranked" if reranker_used
-            else ("multi_probe_rrf_no_reranker" if not RERANKER_ENABLED else "multi_probe_rrf_fallback")
+            else ("multi_probe_rrf_no_reranker" if not _reranker_enabled() else "multi_probe_rrf_fallback")
         )
         retrieval_message = ""
 

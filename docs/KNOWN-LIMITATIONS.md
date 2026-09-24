@@ -1,17 +1,42 @@
 # Known limitations
 
-**Reference:** `0.8.5-rc5`
+**Reference:** `0.8.6-rc1`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
 
+## 0.8.6 profile/client limitations
+
+- SunaQ model packages are loaded at API/provider startup. Editing
+  `models/<profile>/profile.yaml` or its prompt files requires a process restart.
+- Installer reruns preserve existing model-package directories as
+  administrator-owned configuration. An upgrade can therefore intentionally keep
+  an older Standard/Thorough package; use a fresh installation for clean rc1
+  acceptance or explicitly refresh reviewed profile files.
+- The bundled SunaQ app loads the authenticated model list when the app starts.
+  If an administrator changes model entitlements while the tab is open, reload
+  the app to refresh the selector.
+- Follow-up suggestions are intentionally transient and are not persisted in the
+  chat archive. They may depend on current model entitlements and retrieval state.
+- Generic OpenAI-compatible clients do not currently receive SunaQ's pre-answer
+  polling status channel. The bundled SunaQ app does. A portable streaming
+  `reasoning_content` bridge is deferred because it would require restructuring
+  the current SSE orchestration.
+- The provider's implicit source default is ordinary documents only. Mail, web
+  archive, chat archive and live web require explicit selection. The bundled
+  SunaQ app currently starts with Documents + Mail selected and sends both
+  explicitly.
+- Completeness remains bounded. A near-capacity warning means the ranked profile
+  window is almost exhausted; it does not claim that additional ACL-visible
+  documents are known to exist outside the window.
+
 ## Installation and deployment
 
 - Only `standard + native` and `super-light + dockerized` are supported/tested
-  deployment mappings in 0.8.5.
+  deployment mappings in the 0.8.6-rc1 candidate.
 - Installer/rerun preflight validates the install source, non-empty install
   prefix, CA files and Docker availability before destructive refresh steps, and
-  refuses a running existing AKI stack. Explicitly supplied Nextcloud and
+  refuses a running existing SunaQ stack. Explicitly supplied Nextcloud and
   Elasticsearch URLs receive a best-effort, non-fatal host-`curl` reachability/TLS
   probe after prerequisites are available. This is an early typo/connectivity
   diagnostic only and cannot prove that an authenticated endpoint, model backend
@@ -19,9 +44,9 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   archive the generated `install/last-install-command.sh` for reproducible reruns.
 - Super-Light intentionally relies on external Nextcloud, Elasticsearch and LLM
   services. Their availability and backup are outside the local Compose stack.
-- Super-Light still supplies several global service secrets through Compose environment files. A non-root account that can operate the Docker daemon/Compose stack can therefore render or inspect those values (for example with `docker-compose config`). Treat Docker-daemon access as privileged/root-equivalent, do not share full rendered Compose output, and restrict membership/access accordingly. Moving routine service-secret delivery to Docker secrets or file-mounted credentials is deferred hardening rather than an RC5 release blocker.
-- Bundled nginx and OpenWebUI are opt-in in Super-Light. AKI Recherche is the
-  reference user UI for the current beta.
+- Super-Light still supplies several global service secrets through Compose environment files. A non-root account that can operate the Docker daemon/Compose stack can therefore render or inspect those values (for example with `docker-compose config`). Treat Docker-daemon access as privileged/root-equivalent, do not share full rendered Compose output, and restrict membership/access accordingly. Moving routine service-secret delivery to Docker secrets or file-mounted credentials remains deferred hardening.
+- Bundled nginx and OpenWebUI are opt-in in Super-Light. SunaQ Recherche is the
+  reference slim Nextcloud UI for the current beta.
 - The locally built Playwright renderer pins Playwright/Python package versions and the
   Microsoft base-image tag (`v1.62.0-noble`), but the base image is not yet pinned by
   immutable digest. Digest pinning is deferred dependency hardening.
@@ -37,12 +62,12 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## Retrieval and completeness
 
-- RAG retrieval is bounded. A request is not globally exhaustive merely because it
+- SunaQ retrieval is bounded. A request is not globally exhaustive merely because it
   asks for documents. Completeness/counting intent has separate limits and must
   fail conservatively when those limits prevent a defensible complete result.
-- Standard and Super-Light use different normal verifier windows: 6 and 10
-  authorized candidates respectively. Bounded/exhaustive limits are configured
-  separately.
+- Normal verifier/answer windows are selected by the SunaQ profile rather than by
+  one deployment-global default: Schnell 10, Gründlich 30, Tief 50. Deployment
+  and administrator hard caps can still reduce unavailable capabilities.
 - Super-Light has no local reranker. Deduplication is independent and remains
   active, but Elasticsearch ranking plus verifier behavior can still be less
   precise than a well-tuned reranked standard deployment on difficult corpora.
@@ -68,7 +93,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   then live ACL. A fixed bounded pre-rerank ACL pool is a possible future
   optimization, but "keep fetching until N authorized results exist" is not part of
   the design because it creates variable work and another inference/timing surface.
-- The optional RC5 ACL metadata prefilter evaluates owner/direct-user/group
+- The optional ACL metadata prefilter evaluates owner/direct-user/group
   metadata. Nextcloud Circles are not considered in this first version; Circle
   support may be added in a later update. Leave the prefilter disabled where
   Circle-only shares must remain discoverable.
@@ -91,29 +116,29 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Playwright PDF rendering is backgrounded, but the WebDAV archive write that creates the run directory, text snapshots, metadata/fetch-log material and initial `recherche.md` is still synchronous. On higher-latency Nextcloud/WebDAV paths this archive phase can dominate Web Research response time even when search/fetch/relevance are fast. This is a performance limitation, not an evidence or renderer failure.
 - Web pages, incoming mail and saved chats can contain adversarial or instruction-like
   text. Structured verifier/Graph schemas and evidence separation reduce risk, but
-  0.8.5 does not claim a complete prompt-injection defense. See `THREAT-MODEL.md`.
+  0.8.6 does not claim a complete prompt-injection defense. See `THREAT-MODEL.md`.
 
-## AKI Recherche
+## SunaQ Recherche
 
-- AKI 0.2.6 targets Nextcloud 23+. Saved chats live as readable Markdown in the user-owned visible `AKI-Chats/` Nextcloud folder, with hidden `.akirag.json` sidecars for machine state. Chats last written by older app versions remain HTML until that conversation is saved or renamed again. Chat archives are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
+- SunaQ Recherche 0.3.0 targets Nextcloud 23+. New saved chats live as readable Markdown in the user-owned visible `SunaQ-Chats/` Nextcloud folder with `.sunaq.json` machine state. Legacy `AKI-Chats/` / `.akirag.json` archives remain readable. Chats last written by older app versions remain HTML until that conversation is saved or renamed again. Chat archives are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
 - The app is deliberately thin. Advanced provider diagnostics and administration
-  remain in RAG Admin rather than being duplicated in AKI.
+  remain in SunaQ Admin rather than being duplicated in SunaQ Recherche.
 
 ## Graph
 
-- CardDAV seeds and `AKI Recherche` findings are lightweight graph inputs. Full
+- CardDAV seeds and SunaQ Research Findings are lightweight graph inputs. Full
   document graph extraction remains comparatively expensive and opt-in.
-- `AKI Recherche` stores only positive, direct, verifier-supported findings; it
+- SunaQ stores only positive, direct, verifier-supported findings; it
   does not turn query hypotheses into global facts automatically. Research Findings are admin-visible and may be manually curated into document-grounded entity mentions and claims. They are still not automatically promoted into global facts or retrieval/query expansion.
 - Equivalent Findings remain shared/deduplicated curation objects, while per-user
   observation provenance is represented through
   `CanonicalUser -> ResearchRun -> ResearchFinding`. Findings, Observations and
-  Relations in RAG Admin require a selected canonical-user context and are filtered
+  Relations in SunaQ Admin require a selected canonical-user context and are filtered
   fail-closed through that user's current Nextcloud live ACL before evidence is
-  rendered. **RAG Admin itself is nevertheless a trusted operator surface, not a
-  personal Nextcloud-user surface:** an authenticated RAG administrator may select
+  rendered. **SunaQ Admin itself is nevertheless a trusted operator surface, not a
+  personal Nextcloud-user surface:** an authenticated SunaQ administrator may select
   another configured user's context and thereby inspect evidence that *that selected
-  user* may currently access. Do not expose RAG Admin to ordinary users or treat the
+  user* may currently access. Do not expose SunaQ Admin to ordinary users or treat the
   administrator's own Nextcloud ACL as an isolation boundary.
 - Optional self-service curation is narrower: a user sees only ResearchRuns produced
   for that canonical user and only Findings whose supporting document still passes
@@ -134,13 +159,13 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 - There is no unified cross-store `purge-document` / data-subject workflow that
   proves deletion across Elasticsearch, Qdrant, Neo4j, optional RetrievalRecords
-  and retained archive derivatives. RC5 does perform lazy Neo4j self-cleanup when
+  and retained archive derivatives. The current implementation does perform lazy Neo4j self-cleanup when
   a successful live-ACL check definitively denies a user's numeric Nextcloud file:
   only that user's provenance edges for still-uncurated ResearchFindings are
   removed, and globally orphaned uncurated Findings are garbage-collected.
   Curated Findings are preserved, and ACL/backend/credential errors never trigger
   deletion. See `DATA-LIFECYCLE.md`.
-- The RC5 console recovery workflow covers AKI-owned configuration, SQLite,
+- The current console recovery workflow covers SunaQ-owned configuration, SQLite,
   credential/master-key state and bundled Neo4j. It does not back up Nextcloud,
   Elasticsearch, Qdrant, external Neo4j, OpenWebUI/Playwright state or model
   caches. Restore currently requires the same supported deployment profile/mode
@@ -170,7 +195,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 - Open identity candidates are grouped by transitive active `SAME_AS` component,
   so several source-specific ContactRecords for one confirmed identity do not
-  create a combinatorial review queue. RAG Admin can filter the queue by canonical
+  create a combinatorial review queue. SunaQ Admin can filter the queue by canonical
   Nextcloud user and shows CardDAV user/address-book provenance for both sides.
   The filter is an administrative work-queue view, not an ACL boundary.
 - End-user `/curation/` currently covers Research Findings only. Self-service
@@ -178,7 +203,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   user-facing implementation must avoid revealing ContactRecords that exist only
   in another user's private address book.
 - Nextcloud Login Flow must be completed by the actual target user. Nextcloud impersonation/"Nachahmen" does not safely pre-create another user's app password and can bind an external client identity to the impersonator's Nextcloud account. Revoke erroneous Nextcloud app passwords and remove the corresponding binding before reuse.
-- The current Admin UI does not yet expose a dedicated per-binding delete button in RAG Admin.
+- The current Admin UI does not yet expose a dedicated per-binding delete button in SunaQ Admin.
 
 ## Mail backfill cutoff changes
 

@@ -1,6 +1,6 @@
 # Privacy architecture and trust boundary
 
-**Reference:** 0.8.5-rc5
+**Reference:** `0.8.6-rc1`
 
 The middleware deliberately separates access to the complete private corpus from
 processing of already selected evidence. Privacy is therefore not defined as
@@ -48,7 +48,7 @@ Nextcloud / Elasticsearch
 
 ## Role-specific LLM routing
 
-The current 0.8.5 reference can route four LLM roles independently:
+The current reference can route four LLM roles independently:
 
 - `planner`: Query Rewrite/SearchSpec generation and optional bounded round control;
 - `verifier`: semantic verification of ACL-authorized document candidates;
@@ -58,7 +58,7 @@ The current 0.8.5 reference can route four LLM roles independently:
 Unset role settings inherit the canonical `LLM_*` backend for compatibility. Each role can override backend, URL, model, API key, TLS verification
 and trust scope through `<ROLE>_LLM_*` variables.
 
-The `evidence` role remains available even though the **Evidence Control** stage is disabled by default. `config.yaml: evidence_control.mode` is `"off"` in the reference configuration; `review` opt-in runs the evidence model only after live ACL and Candidate Verification. The Candidate Verifier is a separate stage and is unaffected by this switch. `EVIDENCE_DECISION_MODE` is a legacy fallback for installations whose preserved configuration predates the YAML setting.
+The `evidence` role remains available even though the **Evidence Control** stage is disabled by default. For packaged SunaQ models, opt in per selected model with `models/<profile>/profile.yaml: evidence_control.mode: review`; the evidence model then runs only after live ACL and Candidate Verification. The Candidate Verifier is a separate stage and is unaffected by this switch. The shipped Schnell profile may additionally consume a preserved legacy `config.yaml: evidence_control` value through its explicit `legacy_config_overlay` upgrade bridge. `EVIDENCE_DECISION_MODE` is only the legacy/default fallback when no effective packaged-profile value is present.
 
 A practical `private-retrieval` deployment keeps embedding, Qdrant, reranking
 and ACL local while using a capable remote model for verifier/evidence/answer.
@@ -115,7 +115,7 @@ archive write is a separate HTTP client path.
 
 ## Shared retrieval knowledge versus protected evidence
 
-AKI intentionally permits organization-wide reuse of curated identity and alias
+SunaQ intentionally permits organization-wide reuse of curated identity and alias
 knowledge. If one user's work establishes a useful name form, another user's
 query may benefit from that expansion. This does not transfer the source
 document's read permission: any concrete document content still has to pass the
@@ -130,7 +130,7 @@ documents remain provenance-bearing and authorization-sensitive.
 Mail, web pages, archived web content and saved chats can be authored or influenced
 by third parties. Their text is data, not an instruction channel to the model.
 Structured verifier/Graph schemas, bounded context and provenance-specific prompts
-reduce the impact of adversarial text, but 0.8.5 does not claim a complete prompt-
+reduce the impact of adversarial text, but SunaQ does not claim a complete prompt-
 injection defense. Operators should treat automatic extraction from hostile inbound
 content as lower-trust until reviewed.
 
@@ -148,18 +148,18 @@ model and local/remote scope for Query-Rewriter (`planner`), verifier, evidence 
 CanonicalUser -> ResearchRun -> ResearchFinding -> Document
 ```
 
-The ResearchRun retains the user/query/runtime provenance. Before Findings evidence is shown in RAG Admin or self-service curation, the supporting Document is re-authorized through the selected/current user's live Nextcloud credential. RAG Admin is a trusted operator surface: its administrator can choose another configured canonical-user context and is therefore not isolated by the administrator's own Nextcloud ACL. Self-service curation is separately gated and currently exposes only the authenticated user's own ResearchRuns.
+The ResearchRun retains the user/query/runtime provenance. Before Findings evidence is shown in SunaQ Admin or self-service curation, the supporting Document is re-authorized through the selected/current user's live Nextcloud credential. SunaQ Admin is a trusted operator surface: its administrator can choose another configured canonical-user context and is therefore not isolated by the administrator's own Nextcloud ACL. Self-service curation is separately gated and currently exposes only the authenticated user's own ResearchRuns.
 
 Shared curation remains intentional organization-level retrieval knowledge. A decision made by one authorized curator can be reused when another authorized user later reaches the same Finding, but it never grants access to the supporting document.
 
-RC5 additionally treats a successful Finding live-ACL denial as a narrow lifecycle signal for **uncurated user provenance**. In RAG Admin and self-service curation, a definitively denied numeric Nextcloud file can cause that user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge to be removed. The shared Finding is garbage-collected only if it remains uncurated and no user ResearchRun references it. Curated Findings and their document-grounded observations/claims remain stored and continue to rely on live ACL for per-user evidence visibility. Operational ACL failures or ambiguous/non-Nextcloud identifiers never trigger deletion.
+RC5 additionally treats a successful Finding live-ACL denial as a narrow lifecycle signal for **uncurated user provenance**. In SunaQ Admin and self-service curation, a definitively denied numeric Nextcloud file can cause that user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge to be removed. The shared Finding is garbage-collected only if it remains uncurated and no user ResearchRun references it. Curated Findings and their document-grounded observations/claims remain stored and continue to rely on live ACL for per-user evidence visibility. Operational ACL failures or ambiguous/non-Nextcloud identifiers never trigger deletion.
 
 ## Data protection and lifecycle
 
 Technical data minimization does not by itself define legal roles or retention duties.
 For deployments using remote LLM/search/hosting providers, the operator must assess the
 required contractual/organizational controls for the actual data and jurisdiction.
-AKI's role routing and evidence caps can support such a policy but do not replace it.
+SunaQ's role routing and evidence caps can support such a policy but do not replace it.
 
 Deletion, archive-retention, backup/restore and key-rotation limits are documented in
 `DATA-LIFECYCLE.md`; the adversary/boundary model is in `THREAT-MODEL.md`.

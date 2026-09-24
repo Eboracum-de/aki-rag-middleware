@@ -146,4 +146,4 @@ The rc4.3 blank-VM acceptance remains the base deployment proof for both support
 - bundled Neo4j snapshot/restore participation;
 - legacy Docker Compose 1.25.x backup-helper compatibility after the RC5 fix.
 
-RC5 is therefore the current public release-candidate baseline.
+RC5 is therefore the current private development-repository release-candidate baseline. Public release/promotion remains a separate repository/release operation.

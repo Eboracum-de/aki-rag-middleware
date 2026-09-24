@@ -1,6 +1,6 @@
 # Project governance and lifecycle
 
-AKI RAG Middleware is currently a maintainer-led project. Eboracum GmbH maintains the main repository and decides which changes are accepted into the upstream branch.
+Eboracum GmbH maintains the main SunaQ repository and decides which changes are accepted into the upstream branch.
 
 This governance model is intentionally simple for the initial public phase. It does not restrict the rights granted by the AGPL: users and contributors remain free to fork and continue the software under the applicable license terms.
 
@@ -22,4 +22,4 @@ See `CONTRIBUTING.md`. Substantial contributions are discussed before submission
 
 ## Support expectations
 
-Public availability does not create an SLA, maintenance guarantee or obligation to support every Nextcloud/Linux/model combination. Tested baselines and known limitations are documented in the repository and release notes.
+No SLA is currently offered. Tested baselines and known limitations are documented in the repository and release notes. Questions can be sent to `rag@eboracum.de`.

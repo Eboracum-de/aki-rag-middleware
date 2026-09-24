@@ -44,6 +44,7 @@ from rag.admin_ui import create_admin_router
 from rag.curation_ui import create_curation_router, cleanup_stale_curation_sessions
 from rag.web_research import WebResearchArm, load_web_config
 from rag.retrieval_planner import load_retrieval_planner_settings
+from rag.sunaq_models import RuntimeModel, load_model_registry
 from rag.reranker import get_reranker_status
 from rag.source_origin import chat_archive_roots, path_is_under
 from rag.source_registry import register_document, auto_mirror_registry_to_elasticsearch
@@ -71,6 +72,7 @@ from rag.search import (
     perform_multi_probe_search,
     perform_search,
     prepare_entity_context,
+    use_runtime_model_config,
     resolve_document_references,
     strict_filename_lookup,
     store,
@@ -96,6 +98,26 @@ _research_finding_schema_ready = False
 # thousands of documents merely to count them.
 ELASTIC_ACL_RESULT_SCAN_LIMIT = max(20, int(os.getenv("ELASTIC_ACL_RESULT_SCAN_LIMIT", "200")))
 RETRIEVAL_PLANNER_SETTINGS = load_retrieval_planner_settings(app_config)
+SUNAQ_MODEL_REGISTRY = load_model_registry(app_config)
+
+
+def _resolve_sunaq_model(model_id: str | None) -> RuntimeModel:
+    try:
+        return SUNAQ_MODEL_REGISTRY.get(model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _profile_final_limit(model: RuntimeModel) -> int:
+    search_cfg = model.section("search")
+    try:
+        return max(1, min(100, int(search_cfg.get("final_limit", FINAL_LIMIT))))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"SunaQ model {model.model_id} has invalid search.final_limit",
+        ) from exc
+
 
 
 def _acl_prefilter_context(http_request: Request) -> tuple[str | None, list[str] | None]:
@@ -224,7 +246,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
 
-    title="AKI RAG Middleware",
+    title="SunaQ",
 
     description=(
         "Hybride Dokumentensuche über Nextcloud/Elasticsearch, Qdrant und Neo4j "
@@ -323,7 +345,7 @@ def _nextcloud_flow_post(url: str, *, data: dict[str, str] | None = None) -> req
         verify=_nextcloud_auth_verify(),
         allow_redirects=False,
         headers={
-            "User-Agent": f"Nextcloud-RAG-Middleware/{VERSION}",
+            "User-Agent": "SunaQ",
             "Accept": "application/json",
         },
     )
@@ -390,6 +412,11 @@ def _poll_nextcloud_flow(flow: Any) -> dict[str, Any]:
 
 class ElasticSearchRequest(BaseModel):
 
+    model: str | None = Field(
+        default=None,
+        description="SunaQ model/profile id. Omitted = configured default.",
+    )
+
     query: str = Field(
         ...,
         min_length=1,
@@ -437,6 +464,11 @@ class SearchSpecRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
+
+    model: str | None = Field(
+        default=None,
+        description="SunaQ model/profile id. Omitted = configured default.",
+    )
 
     query: str = Field(
         ...,
@@ -526,6 +558,10 @@ class MultiSearchProbe(BaseModel):
 
 
 class MultiSearchRequest(BaseModel):
+    model: str | None = Field(
+        default=None,
+        description="SunaQ model/profile id. Omitted = configured default.",
+    )
     original_query: str = Field(..., min_length=1)
     probes: list[MultiSearchProbe] = Field(default_factory=list, max_length=32)
     limit: int | None = Field(default=None, ge=1, le=100)
@@ -536,6 +572,11 @@ class MultiSearchRequest(BaseModel):
 
 
 class DocumentResolveRequest(BaseModel):
+
+    model: str | None = Field(
+        default=None,
+        description="SunaQ model/profile id. Omitted = configured default.",
+    )
 
     query: str = Field(
         default="",
@@ -554,6 +595,11 @@ class DocumentResolveRequest(BaseModel):
 
 
 class PlanRequest(BaseModel):
+
+    model: str | None = Field(
+        default=None,
+        description="SunaQ model/profile id. Omitted = configured default.",
+    )
 
     query: str = Field(
         ...,
@@ -627,7 +673,7 @@ class ResearchFindingRequest(BaseModel):
     retrieval_query: str = ""
     source_scopes: list[str] | None = None
     provenance_code: str = "aki_research"
-    provenance_label: str = "AKI Recherche"
+    provenance_label: str = "SunaQ Recherche"
     query_frame: dict[str, Any] = Field(default_factory=dict)
     software_version: str = ""
     planner_model: str = ""
@@ -1417,9 +1463,11 @@ def register_chat_archive_source(
 )
 def query_context(request: PlanRequest):
     """Return query-side entity/alias hints without performing retrieval."""
+    runtime_model = _resolve_sunaq_model(request.model)
     try:
         graph_queue.mark_activity("query_context")
-        return prepare_entity_context(request.query)
+        with use_runtime_model_config(runtime_model.config):
+            return prepare_entity_context(request.query)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -1446,19 +1494,20 @@ def plan(
     request: PlanRequest,
 ):
 
+    runtime_model = _resolve_sunaq_model(request.model)
     try:
 
         graph_queue.mark_activity("plan")
+        with use_runtime_model_config(runtime_model.config):
+            entity_context = prepare_entity_context(
+                request.query
+            )
 
-        entity_context = prepare_entity_context(
-            request.query
-        )
-
-        search_plan = create_plan(
-            request.query,
-            entity_context=entity_context,
-            entity_recall=request.entity_recall,
-        )
+            search_plan = create_plan(
+                request.query,
+                entity_context=entity_context,
+                entity_recall=request.entity_recall,
+            )
 
 
         return {
@@ -1547,7 +1596,7 @@ def graph_enqueue_evidence(request: GraphEvidenceRequest):
 
 @app.post(
     "/graph/research-findings",
-    summary="Persistiere positive AKI-Recherche-Findings",
+    summary="Persistiere positive SunaQ-Recherche-Findings",
     description=(
         "Speichert ausschließlich bereits vom Retrieval-Planner strukturierten und "
         "vom Candidate-Verifier positiv bestätigten Recherche-Nutzen in Neo4j. "
@@ -1594,7 +1643,7 @@ def graph_research_findings(request: ResearchFindingRequest):
                 retrieval_query=str(request.retrieval_query or ""),
                 source_scopes=request.source_scopes,
                 provenance_code=str(request.provenance_code or "aki_research"),
-                provenance_label=str(request.provenance_label or "AKI Recherche"),
+                provenance_label=str(request.provenance_label or "SunaQ Recherche"),
                 software_version=str(request.software_version or ""),
                 planner_model=str(request.planner_model or ""),
                 verifier_model=str(request.verifier_model or ""),
@@ -1771,7 +1820,9 @@ async def documents_resolve(body: DocumentResolveRequest, http_request: Request)
                     selected_ids.append(document_id)
 
             if selected_ids:
-                payload = resolve_document_references(selected_ids, question=body.query)
+                runtime_model = _resolve_sunaq_model(body.model)
+                with use_runtime_model_config(runtime_model.config):
+                    payload = resolve_document_references(selected_ids, question=body.query)
             else:
                 payload = {
                     "references": [],
@@ -1905,7 +1956,9 @@ def elastic_search_endpoint(body: ElasticSearchRequest, http_request: Request):
             and returned
         ):
             ids = [str(item.get("document_id") or "") for item in returned]
-            hydrated_payload = resolve_document_references(ids, question=body.query)
+            runtime_model = _resolve_sunaq_model(body.model)
+            with use_runtime_model_config(runtime_model.config):
+                hydrated_payload = resolve_document_references(ids, question=body.query)
             hydrated_by_id = {
                 str(item.get("document_id") or ""): item
                 for item in (hydrated_payload.get("results") or [])
@@ -1987,7 +2040,11 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
         if live_acl.enabled and live_acl.identity_mode == "credential_store":
             live_acl.credential_for_user(rag_user_id)
 
-        effective_limit = body.limit if body.limit is not None else FINAL_LIMIT
+        runtime_model = _resolve_sunaq_model(body.model)
+        effective_limit = (
+            body.limit if body.limit is not None else _profile_final_limit(runtime_model)
+        )
+        profile_planner = load_retrieval_planner_settings(runtime_model.config)
         probes = [probe.model_dump() for probe in body.probes]
         if not probes:
             probes = [{
@@ -2003,7 +2060,7 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
             for probe in probes
         )
 
-        max_complete = RETRIEVAL_PLANNER_SETTINGS.max_complete_documents
+        max_complete = profile_planner.max_complete_documents
         required_results: list[dict[str, Any]] = []
 
         # RC8 hotfix: an explicitly named complete filename is a deterministic
@@ -2033,6 +2090,7 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
                 exact_results = [result_to_dict(item) for item in visible_filename_matches]
                 return {
                     "query": body.original_query,
+                    "model": runtime_model.model_id,
                     "plan": {},
                     "entity_resolution": {},
                     "retrieval_mode": "filename_exact" if exact_results else "filename_not_found",
@@ -2061,7 +2119,10 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
             # snippet.
             if len(visible_filename_matches) == 1:
                 visible_id = str(visible_filename_matches[0].get("document_id") or "").strip()
-                resolved = resolve_document_references([explicit_filename], question=body.original_query)
+                with use_runtime_model_config(runtime_model.config):
+                    resolved = resolve_document_references(
+                        [explicit_filename], question=body.original_query
+                    )
                 for item in resolved.get("results") or []:
                     if str(item.get("document_id") or "").strip() == visible_id:
                         required_results.append(dict(item))
@@ -2087,15 +2148,16 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
         # are intentionally not used as a natural-language completeness gate.
 
         prefilter_user, prefilter_groups = _acl_prefilter_context(http_request)
-        search_result = perform_multi_probe_search(
-            original_question=body.original_query,
-            probes=probes,
-            limit=effective_limit,
-            required_results=required_results,
-            force_unspecific=body.force_unspecific,
-            acl_prefilter_user=prefilter_user,
-            acl_prefilter_groups=prefilter_groups,
-        )
+        with use_runtime_model_config(runtime_model.config):
+            search_result = perform_multi_probe_search(
+                original_question=body.original_query,
+                probes=probes,
+                limit=effective_limit,
+                required_results=required_results,
+                force_unspecific=body.force_unspecific,
+                acl_prefilter_user=prefilter_user,
+                acl_prefilter_groups=prefilter_groups,
+            )
 
         # Final security boundary remains live Nextcloud authorization.  The
         # strict-query preflight is only a bounded completeness gate, never a
@@ -2111,6 +2173,7 @@ def multi_search(body: MultiSearchRequest, http_request: Request):
         plan = search_result.get("plan")
         return {
             "query": body.original_query,
+            "model": runtime_model.model_id,
             "plan": plan.model_dump() if plan is not None else {},
             "entity_resolution": search_result.get("entity_resolution", {}),
             "search_spec": search_result.get("search_spec", {}),
@@ -2180,30 +2243,32 @@ def search(
         if live_acl.enabled and live_acl.identity_mode == "credential_store":
             live_acl.credential_for_user(http_request.headers.get("x-rag-user-id"))
 
+        runtime_model = _resolve_sunaq_model(body.model)
         effective_limit = (
             body.limit
             if body.limit is not None
-            else FINAL_LIMIT
+            else _profile_final_limit(runtime_model)
         )
 
         prefilter_user, prefilter_groups = _acl_prefilter_context(http_request)
-        search_result = perform_search(
-            question=body.query,
-            limit=effective_limit,
-            entity_recall=body.entity_recall,
-            retrieval_arms=body.retrieval_arms,
-            source_scopes=body.source_scopes,
-            raw_results=body.raw_results,
-            # With live ACL enabled the broad-field stop must not happen before
-            # authorization: otherwise "unspecific" itself becomes an oracle
-            # for hidden repository contents. Continue internally, then decide
-            # the user-visible outcome from the ACL-visible candidate set.
-            force_unspecific=(body.force_unspecific or live_acl.enabled),
-            search_spec=(body.search_spec.model_dump() if body.search_spec is not None else None),
-            entity_context_override=body.query_context,
-            acl_prefilter_user=prefilter_user,
-            acl_prefilter_groups=prefilter_groups,
-        )
+        with use_runtime_model_config(runtime_model.config):
+            search_result = perform_search(
+                question=body.query,
+                limit=effective_limit,
+                entity_recall=body.entity_recall,
+                retrieval_arms=body.retrieval_arms,
+                source_scopes=body.source_scopes,
+                raw_results=body.raw_results,
+                # With live ACL enabled the broad-field stop must not happen before
+                # authorization: otherwise "unspecific" itself becomes an oracle
+                # for hidden repository contents. Continue internally, then decide
+                # the user-visible outcome from the ACL-visible candidate set.
+                force_unspecific=(body.force_unspecific or live_acl.enabled),
+                search_spec=(body.search_spec.model_dump() if body.search_spec is not None else None),
+                entity_context_override=body.query_context,
+                acl_prefilter_user=prefilter_user,
+                acl_prefilter_groups=prefilter_groups,
+            )
 
         # Security boundary: authorization is deliberately applied only after
         # the retrieval/ranking decision.  Denied results are removed; lower
@@ -2270,6 +2335,9 @@ def search(
 
             "query":
                 body.query,
+
+            "model":
+                runtime_model.model_id,
 
             "plan":
                 (

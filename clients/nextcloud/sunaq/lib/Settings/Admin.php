@@ -1,0 +1,38 @@
+<?php
+namespace OCA\Sunaq\Settings;
+
+use OCP\AppFramework\Http\TemplateResponse;
+use OCP\IConfig;
+use OCP\Settings\ISettings;
+
+class Admin implements ISettings {
+    /** @var IConfig */
+    private $config;
+
+    public function __construct(IConfig $config) {
+        $this->config = $config;
+    }
+
+    private function appConfigValue($key, $default = '') {
+        $value = $this->config->getAppValue('sunaq', (string)$key, '');
+        if ($value !== '') {
+            return $value;
+        }
+        return $this->config->getAppValue('akirag', (string)$key, $default);
+    }
+
+    public function getForm() {
+        return new TemplateResponse('sunaq', 'admin', [
+            'middleware_url' => $this->appConfigValue('middleware_url', ''),
+            'has_api_key' => $this->appConfigValue('api_key_encrypted', '') !== '',
+        ]);
+    }
+
+    public function getSection() {
+        return 'additional';
+    }
+
+    public function getPriority() {
+        return 50;
+    }
+}

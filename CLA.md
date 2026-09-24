@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA) v1.0
 
-This Contributor License Agreement ("Agreement") applies to contributions accepted into the upstream **AKI RAG Middleware** repository maintained by **Eboracum GmbH** ("Project Steward").
+This Contributor License Agreement ("Agreement") applies to contributions accepted into the upstream **SunaQ** repository maintained by **Eboracum GmbH** ("Project Steward").
 
 The purpose of this Agreement is narrow: contributors keep ownership of their work, while the Project Steward receives enough additional rights to maintain the public AGPL project and, if there is demand, offer the same combined code under separate commercial terms.
 

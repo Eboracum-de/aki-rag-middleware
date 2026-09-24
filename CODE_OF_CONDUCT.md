@@ -19,6 +19,6 @@ Harassment, threats, discriminatory abuse, deliberate humiliation, doxxing, publ
 
 Maintainers may edit or remove content, lock discussions, reject contributions or restrict participation when necessary to protect the project and its participants. Moderation should be proportionate and should distinguish ordinary technical disagreement from abusive conduct.
 
-For a sensitive conduct matter that should not be discussed publicly, open a minimal issue asking for a private contact channel without disclosing sensitive details, unless a private project contact has already been published.
+For a sensitive conduct matter that should not be discussed publicly, contact `rag@eboracum.de` without posting sensitive details in a public issue.
 
 This Code of Conduct governs participation in the upstream project. It does not alter the software license or anyone's rights under the AGPL.

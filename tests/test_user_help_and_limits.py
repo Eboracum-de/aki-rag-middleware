@@ -5,6 +5,7 @@ from rag.openai_provider import (
     _COMMAND_HELP,
     _effective_verification_candidate_limit,
     _is_help_alias,
+    _verification_capacity_notice,
     _verification_limit_notice,
     _verification_notice_candidate_count,
 )
@@ -35,8 +36,9 @@ def test_verification_limit_notice_only_when_candidates_are_unchecked():
     assert "grenzen Sie" not in bounded
 
 
-def test_remote_verifier_uses_exhaustive_budget_only_for_explicit_completeness(monkeypatch):
+def test_legacy_remote_verifier_uses_exhaustive_budget_only_for_explicit_completeness(monkeypatch):
     monkeypatch.setattr(provider, "_role_remote", lambda role: role == "verifier")
+    monkeypatch.setattr(provider, "_answer_context_budget", lambda: None)
     monkeypatch.setattr(provider, "REMOTE_VERIFIER_MAX_CANDIDATES", 10)
     monkeypatch.setattr(
         provider,
@@ -82,3 +84,118 @@ def test_explicit_use_documentwise_completeness_is_narrow():
     assert provider._explicit_selection_needs_documentwise_completeness(
         'Fasse die wesentlichen Erkenntnisse zusammen.'
     ) is False
+
+
+def test_sunaq_remote_verifier_uses_profile_window_below_admin_hard_cap(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda role: role == "verifier")
+    monkeypatch.setattr(
+        provider,
+        "_answer_context_budget",
+        lambda: {
+            "max_documents": 30,
+            "max_chars_per_document": 4000,
+            "max_total_chars": 100000,
+        },
+    )
+    monkeypatch.delenv("REMOTE_VERIFIER_MAX_CANDIDATES", raising=False)
+    monkeypatch.setattr(provider, "SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES", 50)
+
+    assert _effective_verification_candidate_limit(10, exhaustive=False) == 10
+    assert _effective_verification_candidate_limit(30, exhaustive=False) == 30
+    assert _effective_verification_candidate_limit(60, exhaustive=False) == 50
+
+
+def test_sunaq_remote_verifier_preserves_explicit_legacy_cap(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda role: role == "verifier")
+    monkeypatch.setattr(
+        provider,
+        "_answer_context_budget",
+        lambda: {
+            "max_documents": 30,
+            "max_chars_per_document": 4000,
+            "max_total_chars": 100000,
+        },
+    )
+    monkeypatch.setenv("REMOTE_VERIFIER_MAX_CANDIDATES", "10")
+    monkeypatch.setattr(provider, "REMOTE_VERIFIER_MAX_CANDIDATES", 10)
+    monkeypatch.setattr(provider, "SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES", 50)
+
+    assert _effective_verification_candidate_limit(30, exhaustive=False) == 10
+
+
+def test_progress_owner_cannot_be_replaced():
+    request_id = "123e4567-e89b-12d3-a456-426614174000"
+    with provider._PROGRESS_LOCK:
+        provider._PROGRESS_STATES.clear()
+
+    provider._set_progress(request_id, "alice", "search", "Alice search")
+    provider._set_progress(request_id, "bob", "answer", "Bob answer")
+
+    with provider._PROGRESS_LOCK:
+        state = dict(provider._PROGRESS_STATES[request_id])
+    assert state["owner"] == "alice"
+    assert state["stage"] == "search"
+    assert state["label"] == "Alice search"
+
+
+def test_capacity_notice_warns_near_profile_ceiling_without_claiming_known_overflow():
+    assert _verification_capacity_notice(48, 48, 50, exhaustive=False)
+    assert _verification_capacity_notice(47, 47, 50, exhaustive=False) == ""
+    assert _verification_capacity_notice(30, 29, 30, exhaustive=False) == ""
+    assert _verification_capacity_notice(48, 48, 50, exhaustive=True) == ""
+
+
+def test_candidate_verifier_reports_batch_progress():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    provider_source = (root / "rag" / "openai_provider.py").read_text(encoding="utf-8")
+    assert 'Prüfe Dokument {first} von {len(bounded)}' in provider_source
+    assert 'Prüfe Dokumente {first}–{last} von {len(bounded)}' in provider_source
+
+
+def test_stronger_model_suggestion_respects_current_and_allowed_models(monkeypatch):
+    monkeypatch.setattr(
+        provider,
+        "_model_access_for_identity",
+        lambda _user_id: (["sunaq-standard", "sunaq-thorough"], "sunaq-standard"),
+    )
+
+    # Regression: when Thorough is already active and Deep is not allowed,
+    # never offer Thorough again as a supposedly stronger model.
+    assert provider._stronger_model_suggestion(
+        "Vogelsang 280",
+        "client:user",
+        current_model_id="sunaq-thorough",
+    ) is None
+
+    monkeypatch.setattr(
+        provider,
+        "_model_access_for_identity",
+        lambda _user_id: (
+            ["sunaq-standard", "sunaq-thorough", "sunaq-deep"],
+            "sunaq-standard",
+        ),
+    )
+    suggestion = provider._stronger_model_suggestion(
+        "Vogelsang 280",
+        "client:user",
+        current_model_id="sunaq-thorough",
+    )
+    assert suggestion is not None
+    assert suggestion["model"] == "sunaq-deep"
+    assert suggestion["label"] == "Mit Tief erneut suchen"
+
+
+def test_refinement_suggestions_always_offer_manual_refinement(monkeypatch):
+    monkeypatch.setattr(
+        provider,
+        "_model_access_for_identity",
+        lambda _user_id: (["sunaq-standard"], "sunaq-standard"),
+    )
+    suggestions = provider._refinement_suggestions(
+        "Eboracum GmbH",
+        "client:user",
+        current_model_id="sunaq-standard",
+    )
+    assert suggestions == [{"label": "Anfrage präzisieren", "action": "focus"}]

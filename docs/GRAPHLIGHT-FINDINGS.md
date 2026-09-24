@@ -1,6 +1,6 @@
 # Graph-Lite Findings curation
 
-**Reference:** `0.8.5-rc5` (development)
+**Reference:** `0.8.6-rc1`
 
 Graph-Lite turns selected, verified research findings into **curated, document-grounded graph observations**. It is deliberately conservative: a ResearchFinding is provenance-bearing evidence that a query frame matched a document; it is not automatically a global fact.
 
@@ -14,7 +14,7 @@ ordinary search -> verified evidence -> optional Finding
                                   -> improved shared entity/relation knowledge
 ```
 
-Deployments that do not need shared graph learning, or that prefer a smaller persistence/security surface, can disable Research Findings and continue to use the normal RAG path. Disabling Findings does not disable live ACL, Elasticsearch retrieval, optional Qdrant retrieval, verification or answer generation.
+Deployments that do not need shared graph learning, or that prefer a smaller persistence/security surface, can disable Research Findings and continue to use the normal SunaQ path. Disabling Findings does not disable live ACL, Elasticsearch retrieval, optional Qdrant retrieval, verification or answer generation.
 
 ## Curation model
 
@@ -70,7 +70,7 @@ The `ResearchRun-[:PRODUCED]->ResearchFinding` relationship also carries a per-r
 
 ## Research-centred curation workflow
 
-The Admin landing page is a list of ResearchRuns with open, currently ACL-visible Findings. The administrator first selects a canonical Nextcloud user. AKI then:
+The Admin landing page is a list of ResearchRuns with open, currently ACL-visible Findings. The administrator first selects a canonical Nextcloud user. SunaQ then:
 
 1. loads ResearchRuns performed by that user;
 2. collects their supporting document IDs;
@@ -84,9 +84,9 @@ A whole ResearchRun, or selected Findings only within that run, may be dismissed
 
 ## Lazy ACL self-cleanup
 
-RC5 adds a deliberately narrow self-cleanup path to the same Finding ACL checks used by RAG Admin and `/curation/`.
+RC5 adds a deliberately narrow self-cleanup path to the same Finding ACL checks used by SunaQ Admin and `/curation/`.
 
-When a live Nextcloud ACL request completes successfully and a numeric supporting `files:<id>` is not returned for the selected/current canonical user, AKI may remove that user's `ResearchRun-[:PRODUCED]->ResearchFinding` provenance **only while the Finding is still uncurated**. If no ResearchRun for any user references that uncurated Finding afterwards, the shared Finding node is garbage-collected.
+When a live Nextcloud ACL request completes successfully and a numeric supporting `files:<id>` is not returned for the selected/current canonical user, SunaQ may remove that user's `ResearchRun-[:PRODUCED]->ResearchFinding` provenance **only while the Finding is still uncurated**. If no ResearchRun for any user references that uncurated Finding afterwards, the shared Finding node is garbage-collected.
 
 The lazy cleanup never deletes curated Finding knowledge. A Finding is preserved when any of the following applies:
 
@@ -96,7 +96,7 @@ The lazy cleanup never deletes curated Finding knowledge. A Finding is preserved
 
 The cleanup is also deliberately non-destructive on uncertainty. Timeout, TLS/network failure, Nextcloud backend error, rejected/invalid credentials, disabled live ACL or a source that is not a numeric Nextcloud `files:<id>` cause fail-closed visibility but **no deletion**.
 
-This is lazy cleanup, not a periodic reconciler and not a general document purge. It currently runs when Findings are ACL-filtered for RAG Admin or self-service curation. Qdrant synchronization does not trigger Neo4j deletion.
+This is lazy cleanup, not a periodic reconciler and not a general document purge. It currently runs when Findings are ACL-filtered for SunaQ Admin or self-service curation. Qdrant synchronization does not trigger Neo4j deletion.
 
 ## Durable manual state
 
@@ -149,7 +149,7 @@ Neither `PERFORMED` nor `PRODUCED` grants access to the supporting document. Eve
 
 The Admin **Observations** and **Relations** views use the same document boundary. An administrator must select a canonical Nextcloud user; rows are then included only when that user's current credential passes live ACL for the supporting Document. The views fail closed when the user, credential, ACL service or document binding is missing.
 
-This is user-scoped evidence filtering inside a trusted administration surface, not isolation from the RAG administrator. The administrator can switch the selected canonical user and therefore inspect evidence visible to that account. Ordinary users should never receive RAG-Admin credentials.
+This is user-scoped evidence filtering inside a trusted administration surface, not isolation from the SunaQ administrator. The administrator can switch the selected canonical user and therefore inspect evidence visible to that account. Ordinary users should never receive SunaQ Admin credentials.
 
 The Observations page is a work queue by default. Its `needs_review` state includes only unresolved, ambiguous or provisional automatic observations without a curator decision. Manually confirmed/corrected observations and `manual_not_entity` decisions remain auditable through their explicit filters but no longer reappear in the default queue. The selected state is enforced both in the Neo4j query and defensively on the returned rows.
 
@@ -167,9 +167,9 @@ research_findings:
     session_max_seconds: 7200
 ```
 
-The RAG administrator can additionally enable or disable Findings curation per canonical user.
+The SunaQ administrator can additionally enable or disable Findings curation per canonical user.
 
-When self-service is enabled, `/curation/` uses Nextcloud Login Flow v2. It does not create a separate RAG password and does not reuse/store the resulting app password as a normal provider credential. The app password belongs only to an encrypted temporary curation session. The login identity is supplied by Nextcloud after the flow completes; no username is trusted from a curation form. The current self-service view exposes only ResearchRuns belonging to that canonical user.
+When self-service is enabled, `/curation/` uses Nextcloud Login Flow v2. It does not create a separate SunaQ password and does not reuse/store the resulting app password as a normal provider credential. The app password belongs only to an encrypted temporary curation session. The login identity is supplied by Nextcloud after the flow completes; no username is trusted from a curation form. The current self-service view exposes only ResearchRuns belonging to that canonical user.
 
 The session has a hard absolute lifetime; the default is 7200 seconds (two hours). Activity updates diagnostics only and never extends `expires_at`. Every curation request verifies that the session is active, unexpired, the canonical user is still enabled and the per-user curation permission is still present.
 

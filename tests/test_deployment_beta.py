@@ -3,6 +3,8 @@ import subprocess
 
 import yaml
 
+from rag.sunaq_models import load_model_registry
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -110,7 +112,8 @@ def test_bind_mounts_are_selinux_relabelled():
 
 def test_standard_defaults_to_no_reranker_and_no_model_download():
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
-    assert cfg["reranker"]["backend"] == "none"
+    standard = load_model_registry(cfg).get("sunaq-standard")
+    assert standard.section("reranker")["backend"] == "none"
     installer = _standard_installer_text()
     assert "DOWNLOAD_RERANKER=0" in installer
     assert "--with-reranker-download" in installer
@@ -131,9 +134,10 @@ def test_optional_external_services_are_not_bundled():
 
 def test_evidence_controller_is_off_by_default():
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
-    assert cfg["evidence_control"]["mode"] == "off"
+    standard = load_model_registry(cfg).get("sunaq-standard")
+    assert standard.section("evidence_control")["mode"] == "off"
     env = (ROOT / "provider.env.example").read_text()
-    assert "Legacy fallback only; config.yaml evidence_control.mode is canonical." in env
+    assert "Legacy fallback only; the active SunaQ model is canonical." in env
     assert "EVIDENCE_DECISION_MODE=off" in env
     provider = (ROOT / "rag/openai_provider.py").read_text()
     assert 'PROVIDER_CONFIG.get("evidence_control")' in provider
@@ -170,8 +174,9 @@ def test_openwebui_provider_config_is_installer_authoritative():
 
 def test_sync_graph_discovery_is_opt_in_by_default():
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
+    standard = load_model_registry(cfg).get("sunaq-standard")
     assert cfg["sync"]["graph_queue"]["enabled"] is False
-    assert "structural_relations" not in cfg["graph_retrieval"]
+    assert "structural_relations" not in standard.section("graph_retrieval")
     sync_source = (ROOT / "rag/sync.py").read_text()
     assert 'cfg_get(cfg, "sync.graph_queue.enabled", default=False)' in sync_source
 
@@ -367,8 +372,8 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 
-def test_public_baseline_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.5-rc5.1"'
+def test_release_repository_hygiene():
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.6-rc1"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
@@ -414,7 +419,7 @@ def test_installer_never_executes_state_from_unrecognized_prefix(tmp_path):
     )
 
     assert result.returncode == 2
-    assert "not recognized as an AKI RAG installation" in result.stderr
+    assert "not recognized as a SunaQ installation" in result.stderr
     assert not sentinel.exists()
 
 
@@ -546,27 +551,35 @@ def test_common_optional_frontend_proxy_switches_exist_in_both_profiles():
         assert option in super_light, option
 
 
+def test_legacy_prefix_is_preferred_when_new_default_prefix_is_empty():
+    standard = _standard_installer_text()
+    super_light = (ROOT / "install/profiles/install-super-light.sh").read_text()
+    for source in (standard, super_light):
+        assert '[[ ! -e "$PREFIX" ]] || [[ -d "$PREFIX" && -z "$(find "$PREFIX"' in source
+        assert 'PREFIX="$LEGACY_PREFIX"' in source
+
+
 def test_standard_rerun_preflight_detects_existing_and_running_services():
     installer = _standard_installer_text()
-    assert '[INFO] Existing AKI RAG installation detected at $PREFIX.' in installer
+    assert '[INFO] Existing SunaQ installation detected at $PREFIX.' in installer
     assert 'for name in api provider graph-worker sync-worker mail-worker' in installer
     assert 'systemctl is-active --quiet "$unit"' in installer
     assert 'ps --services --filter status=running' in installer
     assert 'Could not inspect the existing Docker Compose stack' in installer
-    assert '[WARN] Existing AKI RAG services are running:' in installer
+    assert '[WARN] Existing SunaQ services are running:' in installer
     assert 'no installation changes were made' in installer.lower()
     assert installer.index("preflight_existing_install") < installer.index("confirm_plan", installer.index("preflight_existing_install"))
 
 
 def test_standard_neo4j_schema_init_runs_from_application_root_with_progress():
     installer = _standard_installer_text()
-    marker = 'log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"'
+    marker = 'log "Waiting for Neo4j and applying the idempotent SunaQ schema upgrade"'
     start = installer.index(marker)
     block = installer[start:start + 2600]
     assert 'cd "$PREFIX"' in block
     assert '"$PREFIX/.venv/bin/python" -m rag.graph --config "$PREFIX/config.yaml" init' in block
     assert "Neo4j/schema initialization still waiting" in block
-    assert "AKI schema upgrade completed after" in block
+    assert "SunaQ schema upgrade completed after" in block
 
 
 def test_standard_proxy_health_uses_configured_https_port():

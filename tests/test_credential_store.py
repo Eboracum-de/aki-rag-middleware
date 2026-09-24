@@ -67,3 +67,36 @@ def test_client_scopes_cannot_reuse_each_others_nextcloud_binding(tmp_path: Path
     store.set_credential(a, "nextcloud", "alice", "app-secret")
     assert store.get_credential(a, "nextcloud") is not None
     assert store.get_credential(b, "nextcloud") is None
+
+
+def test_user_sunaq_model_settings_roundtrip_and_validate_default(tmp_path: Path):
+    store = CredentialStore(tmp_path / "users.sqlite")
+    user = store.ensure_canonical_user("https://cloud.example", "alice")
+
+    assert store.get_model_settings(user.canonical_user_id) is None
+
+    settings = store.set_model_settings(
+        user.canonical_user_id,
+        default_model_id="sunaq-standard",
+        allowed_model_ids=["sunaq-standard", "sunaq-thorough", "sunaq-standard"],
+    )
+    assert settings.default_model_id == "sunaq-standard"
+    assert settings.allowed_model_ids == ("sunaq-standard", "sunaq-thorough")
+
+    loaded = store.get_model_settings(user.canonical_user_id)
+    assert loaded is not None
+    assert loaded.default_model_id == "sunaq-standard"
+    assert loaded.allowed_model_ids == ("sunaq-standard", "sunaq-thorough")
+
+    try:
+        store.set_model_settings(
+            user.canonical_user_id,
+            default_model_id="sunaq-thorough",
+            allowed_model_ids=["sunaq-standard"],
+        )
+        assert False, "disallowed default must fail"
+    except ValueError as exc:
+        assert "default SunaQ model" in str(exc)
+
+    assert store.clear_model_settings(user.canonical_user_id) is True
+    assert store.get_model_settings(user.canonical_user_id) is None

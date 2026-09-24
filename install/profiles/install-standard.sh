@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap a blank Linux VM into a usable AKI RAG Middleware node.
+# Bootstrap a blank Linux VM into a usable SunaQ / Eboracum Research Gateway node.
 # 0.8.5-rc4.3 standard profile implementation.
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PREFIX="/opt/nextcloud-rag"
+PREFIX="/opt/sunaq"
+LEGACY_PREFIX="/opt/nextcloud-rag"
+PREFIX_EXPLICIT=0
 RAG_USER="rag"
 RAG_GROUP="rag"
 NEXTCLOUD_URL=""
@@ -42,7 +44,7 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --prefix PATH             Install directory (default: /opt/nextcloud-rag)
+  --prefix PATH             Install directory (default: /opt/sunaq)
   --user USER               Service user (default: rag)
   --nextcloud-url URL       Override Nextcloud base URL in config.yaml
   --ca-certificate FILE     Trust one private CA certificate for Nextcloud; repeatable
@@ -87,7 +89,7 @@ USAGE
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix) PREFIX="$2"; shift 2 ;;
+    --prefix) PREFIX="$2"; PREFIX_EXPLICIT=1; shift 2 ;;
     --user) RAG_USER="$2"; RAG_GROUP="$2"; shift 2 ;;
     --nextcloud-url) [[ $# -ge 2 ]] || { echo "--nextcloud-url requires a URL" >&2; exit 2; }; NEXTCLOUD_URL="$2"; shift 2 ;;
     --ca-certificate) [[ $# -ge 2 ]] || { echo "--ca-certificate requires a file" >&2; exit 2; }; CA_CERTIFICATES+=("$2"); shift 2 ;;
@@ -125,10 +127,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fresh installs use /opt/sunaq. Existing 0.8.5 installations remain in place
+# unless --prefix is explicitly supplied.
+if [[ $PREFIX_EXPLICIT -eq 0 && -d "$LEGACY_PREFIX" ]] && { [[ ! -e "$PREFIX" ]] || [[ -d "$PREFIX" && -z "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; }; then
+  if [[ -f "$LEGACY_PREFIX/.sunaq-installation" || -f "$LEGACY_PREFIX/.aki-rag-installation" || ( -d "$LEGACY_PREFIX/rag" && -f "$LEGACY_PREFIX/config.yaml" && -d "$LEGACY_PREFIX/install" ) ]]; then
+    echo "[INFO] Legacy SunaQ/AKI installation detected at $LEGACY_PREFIX; continuing in place."
+    PREFIX="$LEGACY_PREFIX"
+  fi
+fi
+
 # Validate an existing prefix before reading any state from it. The state file is
 # data written by AKI, never shell code: an operator may pass --prefix while
 # running this installer as root.
-PREFIX_RECOGNIZED_AKI=0
+PREFIX_RECOGNIZED_SUNAQ=0
 validate_install_prefix() {
   if [[ -e "$PREFIX" && ! -d "$PREFIX" ]]; then
     echo "Install prefix exists but is not a directory: $PREFIX" >&2
@@ -136,18 +147,18 @@ validate_install_prefix() {
   fi
   if [[ -d "$PREFIX" ]] && [[ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
     local source_is_prefix=0
-    local recognized_aki=0
+    local recognized_sunaq=0
     [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$PREFIX")" ]] && source_is_prefix=1
-    [[ -f "$PREFIX/.aki-rag-installation" ]] && recognized_aki=1
+    [[ -f "$PREFIX/.sunaq-installation" || -f "$PREFIX/.aki-rag-installation" ]] && recognized_sunaq=1
     if [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]]; then
-      recognized_aki=1
+      recognized_sunaq=1
     fi
-    if [[ $source_is_prefix -ne 1 && $recognized_aki -ne 1 ]]; then
-      echo "Refusing to install into non-empty directory that is not recognized as an AKI RAG installation: $PREFIX" >&2
-      echo "Choose a dedicated --prefix (recommended: /opt/nextcloud-rag). Existing files were not modified." >&2
+    if [[ $source_is_prefix -ne 1 && $recognized_sunaq -ne 1 ]]; then
+      echo "Refusing to install into non-empty directory that is not recognized as a SunaQ installation: $PREFIX" >&2
+      echo "Choose a dedicated --prefix (recommended: /opt/sunaq). Existing files were not modified." >&2
       exit 2
     fi
-    PREFIX_RECOGNIZED_AKI=1
+    PREFIX_RECOGNIZED_SUNAQ=1
   fi
 }
 
@@ -165,7 +176,7 @@ read_state_bool() {
 
 load_install_state() {
   local state_file="$PREFIX/install/install-state.env"
-  [[ $PREFIX_RECOGNIZED_AKI -eq 1 && -f "$state_file" ]] || return 0
+  [[ $PREFIX_RECOGNIZED_SUNAQ -eq 1 && -f "$state_file" ]] || return 0
 
   local state_local_qdrant=0
   local state_local_neo4j=0
@@ -268,7 +279,7 @@ probe_service_url() {
     echo "[CHECK] $label endpoint reachable."
   else
     echo "[WARN] $label endpoint is not reachable with current host curl/TLS trust." >&2
-    echo "       Installation will continue; verify the configured URL/service before using AKI." >&2
+    echo "       Installation will continue; verify the configured URL/service before using SunaQ." >&2
   fi
 }
 
@@ -297,7 +308,7 @@ print_plan() {
 
   cat <<PLAN
 
-AKI RAG Middleware installation plan
+SunaQ / Eboracum Research Gateway installation plan
 --------------------------------------
 Install prefix:          $PREFIX
 Service user:            $RAG_USER
@@ -354,9 +365,9 @@ confirm_plan() {
 }
 
 preflight_existing_install() {
-  [[ $PREFIX_RECOGNIZED_AKI -eq 1 ]] || return 0
+  [[ $PREFIX_RECOGNIZED_SUNAQ -eq 1 ]] || return 0
 
-  echo "[INFO] Existing AKI RAG installation detected at $PREFIX."
+  echo "[INFO] Existing SunaQ installation detected at $PREFIX."
 
   local running=()
   local name pid pidfile unit
@@ -437,13 +448,13 @@ preflight_existing_install() {
   fi
 
   if [[ ${#running[@]} -gt 0 ]]; then
-    echo "[WARN] Existing AKI RAG services are running: ${running[*]}" >&2
+    echo "[WARN] Existing SunaQ services are running: ${running[*]}" >&2
     echo "Stop the existing middleware and local containers before rerunning the installer; no installation changes were made." >&2
     echo "Typical first step: $PREFIX/stop-all.sh" >&2
     exit 2
   fi
 
-  echo "[INFO] Existing AKI RAG installation is stopped; rerun may update it."
+  echo "[INFO] Existing SunaQ installation is stopped; rerun may update it."
 }
 
 if [[ $PLAN_ONLY -eq 1 ]]; then
@@ -637,6 +648,22 @@ for item in rag prompts ontology install docs clients requirements.txt versions.
   rm -rf "$PREFIX/$item"
   cp -a "$SOURCE_DIR/$item" "$PREFIX/$item"
 done
+# SunaQ model packages are administrator-owned configuration after first
+# installation. Seed the directory once, then add only newly shipped package
+# directories on upgrades. Existing packages are never overwritten, preserving
+# local profile/LLM/prompt tuning while allowing new bundled profiles to appear.
+if [[ ! -d "$PREFIX/models" ]]; then
+  cp -a "$SOURCE_DIR/models" "$PREFIX/models"
+else
+  for source_model in "$SOURCE_DIR"/models/*; do
+    [[ -d "$source_model" ]] || continue
+    model_name="$(basename "$source_model")"
+    if [[ ! -e "$PREFIX/models/$model_name" ]]; then
+      cp -a "$source_model" "$PREFIX/models/$model_name"
+      log "Added new SunaQ model package: $model_name"
+    fi
+  done
+fi
 chmod 0755 "$PREFIX/install/maintenance-mode.sh"
 if [[ -n "$INSTALL_ENV_BACKUP" ]]; then
   mv "$INSTALL_ENV_BACKUP" "$PREFIX/install/.env"
@@ -654,12 +681,12 @@ done
 if [[ ! -e "$PREFIX/provider.env" ]]; then
   cp -a "$SOURCE_DIR/provider.env.example" "$PREFIX/provider.env"
 fi
-cat > "$PREFIX/.aki-rag-installation" <<MARKER
-AKI_RAG_INSTALLATION=1
+cat > "$PREFIX/.sunaq-installation" <<MARKER
+SUNAQ_INSTALLATION=1
 DEPLOYMENT_PROFILE=standard
 DEPLOYMENT_MODE=native
 MARKER
-chmod 0644 "$PREFIX/.aki-rag-installation"
+chmod 0644 "$PREFIX/.sunaq-installation"
 mkdir -p "$PREFIX/runtime" "$PREFIX/runtime/ca"
 chmod 700 "$PREFIX/runtime"
 NEXTCLOUD_CA_FILE=""
@@ -1102,7 +1129,7 @@ if [[ "$PLAYWRIGHT_ENABLED" -eq 1 ]]; then
 fi
 
 if [[ $WITH_NEO4J -eq 1 ]]; then
-  log "Waiting for Neo4j and applying the idempotent AKI schema upgrade"
+  log "Waiting for Neo4j and applying the idempotent SunaQ schema upgrade"
   NEO4J_SCHEMA_READY=0
   NEO4J_SCHEMA_ATTEMPTS=90
   NEO4J_SCHEMA_STARTED_AT=$(date +%s)
@@ -1118,7 +1145,7 @@ if [[ $WITH_NEO4J -eq 1 ]]; then
     ) >/dev/null 2>&1; then
       NEO4J_SCHEMA_READY=1
       elapsed=$(( $(date +%s) - NEO4J_SCHEMA_STARTED_AT ))
-      echo "[INFO] Neo4j is ready; AKI schema upgrade completed after ${elapsed}s."
+      echo "[INFO] Neo4j is ready; SunaQ schema upgrade completed after ${elapsed}s."
       break
     fi
     elapsed=$(( $(date +%s) - NEO4J_SCHEMA_STARTED_AT ))
@@ -1129,7 +1156,7 @@ if [[ $WITH_NEO4J -eq 1 ]]; then
     sleep 2
   done
   if [[ $NEO4J_SCHEMA_READY -ne 1 ]]; then
-    echo "Neo4j did not become ready or the AKI schema upgrade failed." >&2
+    echo "Neo4j did not become ready or the SunaQ schema upgrade failed." >&2
     (
       cd "$PREFIX"
       run_as_rag env NEO4J_PASSWORD="$NEO4J_PASSWORD" \

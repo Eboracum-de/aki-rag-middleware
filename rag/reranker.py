@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from pathlib import Path
 
 import httpx
@@ -524,14 +525,61 @@ class Reranker:
 # ------------------------------------------------------------
 
 reranker = Reranker()
+_profile_rerankers: dict[tuple, Reranker] = {}
+_profile_rerankers_lock = threading.Lock()
+
+
+def _merged_reranker_config(config_override: dict | None) -> dict:
+    if not config_override:
+        return dict(reranker_config)
+    merged = dict(reranker_config)
+    merged.update(dict(config_override))
+    return merged
+
+
+def _reranker_key(cfg: dict) -> tuple:
+    return (
+        str(cfg.get("backend", "none") or "none").strip().lower(),
+        str(cfg.get("model", MODEL_NAME) or MODEL_NAME).strip(),
+        str(cfg.get("device", DEVICE) or DEVICE).strip(),
+        int(cfg.get("max_length", MAX_LENGTH) or MAX_LENGTH),
+        int(cfg.get("batch_size", BATCH_SIZE) or BATCH_SIZE),
+        str(cfg.get("tei_url", TEI_URL) or "").strip().rstrip("/"),
+        float(cfg.get("timeout_seconds", TIMEOUT_SECONDS) or TIMEOUT_SECONDS),
+        int(cfg.get("tei_batch_size", TEI_BATCH_SIZE) or TEI_BATCH_SIZE),
+        str(cfg.get("fallback_backend", FALLBACK_BACKEND) or "none").strip().lower(),
+    )
+
+
+def _reranker_for_config(config_override: dict | None) -> Reranker:
+    if not config_override:
+        return reranker
+    cfg = _merged_reranker_config(config_override)
+    key = _reranker_key(cfg)
+    with _profile_rerankers_lock:
+        selected = _profile_rerankers.get(key)
+        if selected is None:
+            selected = Reranker(
+                backend=key[0],
+                model_name=key[1],
+                device=key[2],
+                max_length=key[3],
+                batch_size=key[4],
+                tei_url=key[5],
+                timeout_seconds=key[6],
+                tei_batch_size=key[7],
+                fallback_backend=key[8],
+            )
+            _profile_rerankers[key] = selected
+        return selected
 
 
 def load_reranker():
     reranker.load()
 
 
-def get_reranker_status():
-    return reranker.status()
+def get_reranker_status(config_override: dict | None = None):
+    return _reranker_for_config(config_override).status()
 
 
 def rerank_results(
@@ -540,8 +588,10 @@ def rerank_results(
     candidate_limit: int = 20,
     top_k: int = 8,
     min_score: float | None = None,
+    config_override: dict | None = None,
 ) -> list[dict]:
-    return reranker.rerank(
+    selected = _reranker_for_config(config_override)
+    return selected.rerank(
         query=query,
         results=results,
         candidate_limit=candidate_limit,

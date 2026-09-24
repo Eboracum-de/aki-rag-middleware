@@ -33,6 +33,7 @@ from rag.credential_store import CredentialStore, canonical_credential_owner
 from rag.carddav_sync import CardDAVClient, CardDAVSettings, sync_for_canonical_user
 from rag.mail_sync import probe_mailboxes
 from rag.acl import NextcloudLiveAcl
+from rag.sunaq_models import load_model_registry
 
 
 POLICIES = ("exclusive", "contextual", "search_only", "document_only")
@@ -141,6 +142,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
     user_store = CredentialStore(
         str(cfg_get(cfg, "auth.credential_store", default=cfg_get(cfg, "acl.credential_store", default="runtime/users.sqlite")) or "runtime/users.sqlite")
     )
+    model_registry = load_model_registry(cfg)
     curation_acl = NextcloudLiveAcl(cfg)
     admin_user_context_enabled = bool(cfg_get(cfg, "research_findings.curation.admin_user_context", default=True))
     user_self_service_enabled = bool(cfg_get(cfg, "research_findings.curation.user_self_service", default=False))
@@ -378,6 +380,43 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         values = await form_values(request)
         return {key: (items[-1] if items else "") for key, items in values.items()}
 
+    def user_model_view(canonical_user_id: str) -> tuple[list[dict[str, Any]], str]:
+        settings = user_store.get_model_settings(canonical_user_id)
+        configured = model_registry.list()
+        if settings is None:
+            # Match provider-side entitlement: an unconfigured user gets only
+            # the default profile. Additional profiles become visible after an
+            # explicit admin save.
+            allowed = {model_registry.default_model_id}
+            default_id = model_registry.default_model_id
+        else:
+            allowed = set()
+            for raw_id in settings.allowed_model_ids:
+                try:
+                    allowed.add(model_registry.canonical_id(raw_id))
+                except KeyError:
+                    continue
+            try:
+                default_id = model_registry.canonical_id(settings.default_model_id)
+            except KeyError:
+                default_id = ""
+            if default_id not in allowed:
+                default_id = (
+                    model_registry.default_model_id
+                    if model_registry.default_model_id in allowed
+                    else (next(iter(allowed)) if allowed else "")
+                )
+        rows = [
+            {
+                "id": model.model_id,
+                "name": model.name,
+                "description": model.description,
+                "allowed": model.model_id in allowed,
+            }
+            for model in configured
+        ]
+        return rows, default_id
+
     def nextcloud_document_url(document_id: str, path: str) -> str:
         if not nextcloud_base_url:
             return ""
@@ -518,6 +557,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
         contact_last_sync = "nie"
         if contact_settings is not None and contact_settings.last_sync_at:
             contact_last_sync = datetime.fromtimestamp(contact_settings.last_sync_at).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        sunaq_models, sunaq_default_model = user_model_view(canonical_user_id)
         return render(
             request,
             "user.html",
@@ -538,6 +578,8 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             has_nextcloud_credential=user_store.get_nextcloud_credential_for_canonical_user(canonical_user_id) is not None,
             mail_engine_enabled=bool(cfg_get(cfg, "mail.enabled", default=False)),
             web_engine_enabled=bool((web_cfg or {}).get("enabled", False)),
+            sunaq_models=sunaq_models,
+            sunaq_default_model=sunaq_default_model,
             user_self_service_enabled=user_self_service_enabled,
             curation_session_max_seconds=curation_session_max_seconds,
         )
@@ -563,6 +605,32 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             str(request.app.url_path_for("admin_user_detail", canonical_user_id=canonical_user_id)),
             "Benutzer aktiviert" if enabled_value else "Benutzer deaktiviert",
         )
+
+    @router.post("/users/{canonical_user_id}/models", name="admin_user_models", dependencies=auth)
+    async def admin_user_models(request: Request, canonical_user_id: str):
+        if user_store.get_canonical_user(canonical_user_id) is None:
+            raise HTTPException(status_code=404, detail="Unbekannter kanonischer Benutzer")
+        values = await form_values(request)
+        raw_allowed = values.get("allowed_model_id", [])
+        raw_default = (values.get("default_model_id", [""])[-1] or "").strip()
+        try:
+            allowed: list[str] = []
+            for raw_id in raw_allowed:
+                canonical = model_registry.canonical_id(raw_id)
+                if canonical not in allowed:
+                    allowed.append(canonical)
+            default_id = model_registry.canonical_id(raw_default)
+            user_store.set_model_settings(
+                canonical_user_id,
+                default_model_id=default_id,
+                allowed_model_ids=allowed,
+            )
+            return redirect(
+                str(request.app.url_path_for("admin_user_detail", canonical_user_id=canonical_user_id)),
+                f"SunaQ-Modelle gespeichert (Default: {default_id})",
+            )
+        except (KeyError, ValueError) as exc:
+            return error_page(request, exc, status_code=400)
 
     @router.post("/users/{canonical_user_id}/findings-curation", name="admin_user_findings_curation", dependencies=auth)
     async def admin_user_findings_curation(request: Request, canonical_user_id: str):

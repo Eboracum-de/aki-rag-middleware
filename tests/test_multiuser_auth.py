@@ -115,4 +115,4 @@ def test_login_flow_rejects_redirect_and_uses_named_user_agent(monkeypatch):
         raise AssertionError("redirect must fail explicitly")
 
     assert captured["allow_redirects"] is False
-    assert captured["headers"]["User-Agent"].startswith("Nextcloud-RAG-Middleware/")
+    assert captured["headers"]["User-Agent"] == "SunaQ"

@@ -4,13 +4,15 @@ This document covers the administrator-owned runtime state introduced for the
 multi-user beta. Normal administration should use the Admin UI or CLI. Direct
 SQLite changes are a diagnostic/emergency tool only.
 
-## 1. RAG Admin and user UI paths
+Fresh 0.8.6 installations use `/opt/sunaq` in the command examples below. A recognized legacy installation retains its existing installation prefix (for example `/opt/nextcloud-rag`); substitute that retained prefix consistently in commands and paths.
+
+## 1. SunaQ Admin and user UI paths
 
 The reverse proxy reserves paths by role:
 
 ```text
 /             selected user UI (OpenWebUI is optional)
-/rag-admin/   protected RAG administration
+/rag-admin/   protected SunaQ administration
 /curation/    optional Nextcloud-authenticated end-user Findings curation
 /rag-api/     protected middleware API/diagnostics
 /v1/          OpenAI-compatible provider (Bearer-authenticated)
@@ -18,7 +20,7 @@ The reverse proxy reserves paths by role:
 ```
 
 Without a user UI, `/` redirects to `/rag-admin/`. OpenWebUI keeps its own
-`/admin/...` path because the RAG Admin no longer occupies `/admin/`.
+`/admin/...` path because the SunaQ Admin no longer occupies `/admin/`.
 
 ## 2. Trusted frontend clients
 
@@ -26,7 +28,7 @@ A provider API key identifies a frontend client, not a person. Plaintext keys
 are shown only when created/rotated; `runtime/users.sqlite` stores their hashes.
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.provider_clients list
 sudo -u rag ./.venv/bin/python -m rag.provider_clients create office-ui --name "Office UI"
 sudo -u rag ./.venv/bin/python -m rag.provider_clients rotate office-ui
@@ -64,10 +66,27 @@ Frontend identities remain scoped as:
 client_id::external_user_id
 ```
 
+### Per-user SunaQ model access
+
+SunaQ model entitlement is separate from Nextcloud document authorization.
+
+**Schnell** (`sunaq-standard`) is the safe default. Administrators may enable
+**Gründlich** and/or **Tief** per canonical user in **SunaQ Admin → Users** and may
+choose that user's default profile. The provider's authenticated `/v1/models`
+response returns only currently allowed profiles.
+
+A user who is not configured for a stronger profile cannot select it through the
+SunaQ app or a generic provider client, and follow-up logic must not recommend it.
+If model entitlement changes while a SunaQ browser tab is already open, reload
+the app to refresh its model selector.
+
+The profile packages themselves live below `models/` and are loaded at
+API/provider startup. Editing a profile or prompt requires a process restart.
+
 Useful CLI commands:
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 sudo -u rag ./.venv/bin/python -m rag.user_admin list
 sudo -u rag ./.venv/bin/python -m rag.user_admin show demo-user
 sudo -u rag ./.venv/bin/python -m rag.user_admin reauth demo-user
@@ -81,7 +100,7 @@ settings remain. The next frontend request starts Login Flow v2 again.
 
 ### Do not impersonate a user during first authorization
 
-A Nextcloud administrator should **not** enter or imitate another user's identity in a frontend and then complete that user's first AKI/Nextcloud authorization from the administrator's browser/session. The frontend identity is part of the binding key:
+A Nextcloud administrator should **not** enter or imitate another user's identity in a frontend and then complete that user's first SunaQ/Nextcloud authorization from the administrator's browser/session. The frontend identity is part of the binding key:
 
 ```text
 client_id::external_user_id -> canonical Nextcloud user
@@ -100,7 +119,7 @@ it requires an explicit credential POST.
 
 ## 3.1 Research Findings curation access
 
-Research Findings can be curated centrally by RAG administrators and, optionally, by selected Nextcloud users.
+Research Findings can be curated centrally by SunaQ administrators and, optionally, by selected Nextcloud users.
 
 ```yaml
 research_findings:
@@ -110,15 +129,15 @@ research_findings:
     session_max_seconds: 7200
 ```
 
-`admin_user_context` controls whether the protected RAG Admin may select a canonical user and curate that user's ResearchRuns. The Admin view uses that user's existing stored Nextcloud credential for the live ACL check; selecting a user does not create a new identity binding.
+`admin_user_context` controls whether the protected SunaQ Admin may select a canonical user and curate that user's ResearchRuns. The Admin view uses that user's existing stored Nextcloud credential for the live ACL check; selecting a user does not create a new identity binding.
 
-`user_self_service` exposes `/curation/` without the RAG-Admin Basic-Auth layer. It is disabled by default. Each canonical user also has a separate **Findings curation** permission in RAG Admin → Users; normal research access does not imply permission to modify shared Graph-Lite knowledge.
+`user_self_service` exposes `/curation/` without the SunaQ Admin Basic-Auth layer. It is disabled by default. Each canonical user also has a separate **Findings curation** permission in SunaQ Admin → Users; normal research access does not imply permission to modify shared Graph-Lite knowledge.
 
-Self-service authentication uses Nextcloud Login Flow v2 once per curation session. No RAG user password exists. A successful flow creates a temporary Nextcloud app password which is stored only in the encrypted `curation_sessions` table.
+Self-service authentication uses Nextcloud Login Flow v2 once per curation session. No SunaQ user password exists. A successful flow creates a temporary Nextcloud app password which is stored only in the encrypted `curation_sessions` table.
 
 The default absolute session lifetime is two hours. `session_max_seconds` is configurable; request activity does not extend it. Every request re-checks expiry, canonical-user enablement and the per-user curation permission.
 
-RAG Admin and self-service curation also use the live-ACL check as a **lazy cleanup point** for stale uncurated Finding provenance. After a successful ACL request definitively denies a numeric Nextcloud `files:<id>`, AKI removes only the selected/current canonical user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge for Findings that have never been curated. A shared uncurated Finding is deleted only when no ResearchRun for any user still references it. Curated Findings are retained. ACL/backend/TLS/network/credential errors never trigger this cleanup.
+SunaQ Admin and self-service curation also use the live-ACL check as a **lazy cleanup point** for stale uncurated Finding provenance. After a successful ACL request definitively denies a numeric Nextcloud `files:<id>`, SunaQ removes only the selected/current canonical user's `ResearchRun-[:PRODUCED]->ResearchFinding` edge for Findings that have never been curated. A shared uncurated Finding is deleted only when no ResearchRun for any user still references it. Curated Findings are retained. ACL/backend/TLS/network/credential errors never trigger this cleanup.
 
 At logout/expiry the session is invalidated locally before Nextcloud app-password revocation is attempted. Failed revocations stay `revocation_pending` and cannot authorize requests. On every API start all surviving temporary curation sessions are invalidated and their app passwords are submitted for revocation again.
 
@@ -127,7 +146,7 @@ The self-service cookie is `HttpOnly`, `Secure`, `SameSite=Strict` and scoped to
 ## 4. Credential encryption administration
 
 ```bash
-cd /opt/nextcloud-rag
+cd /opt/sunaq
 ./.venv/bin/python -m rag.secret_admin status
 sudo ./.venv/bin/python -m rag.secret_admin init-key --group rag
 sudo -u rag ./.venv/bin/python -m rag.secret_admin migrate
@@ -321,7 +340,7 @@ RC5 distinguishes four identity relationships:
 - `NOT_SAME_AS`: persisted negative decision so the pair is not re-suggested;
 - `MERGED_INTO`: explicit stronger consolidation. One Entity becomes a tombstone and evidence/identity references are redirected to the chosen survivor.
 
-The normal candidate queue offers **Identisch** (non-destructive `SAME_AS`) and **Verschieden**. A technical merge remains a separate operation in Entity details and should be used only when two AKI identity nodes are themselves redundant, not merely because two independent users/address books contain records for the same real person or organization.
+The normal candidate queue offers **Identisch** (non-destructive `SAME_AS`) and **Verschieden**. A technical merge remains a separate operation in Entity details and should be used only when two SunaQ identity nodes are themselves redundant, not merely because two independent users/address books contain records for the same real person or organization.
 
 This global Entity curation is separate from **Research Findings** curation. The `research_findings.curation.admin_user_context` and `user_self_service` switches govern Finding/ResearchRun review and its live-ACL user context; they do not turn the global Entity/alias/identity layer into a per-user graph. End-user self-service for `SAME_AS` / `NOT_SAME_AS` is not exposed in RC5: a future user-facing implementation must filter provenance so it cannot reveal that a contact exists only in another user's private address book.
 
@@ -367,12 +386,12 @@ Debian CA bundle. A rerun rebuilds the image after CA changes.
 
 For the **native standard deployment**, install the CA into the host OS trust
 store. If the Python HTTP stack uses a separate CA bundle, set
-`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` in the RAG environment to the host's
+`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` in the SunaQ environment to the host's
 combined system bundle. Service-specific `ca_file` options (for example
 Elasticsearch) remain available when a private CA should apply only to one
 backend.
 
-The TLS certificate served by the RAG nginx and the trust anchors used by RAG
+The TLS certificate served by the SunaQ nginx and the trust anchors used by SunaQ
 as an HTTPS client are different concerns. Replacing `server.crt/server.key`
 does not automatically make the issuing CA trusted by API/provider clients.
 
@@ -381,7 +400,7 @@ does not automatically make the issuing CA trusted by API/provider clients.
 For diagnostics only:
 
 ```bash
-sudo -u rag sqlite3 /opt/nextcloud-rag/runtime/users.sqlite
+sudo -u rag sqlite3 /opt/sunaq/runtime/users.sqlite
 .tables
 .schema credentials
 ```
@@ -471,7 +490,7 @@ When enabled, v1 resolves the authenticated user's actual Nextcloud UID and
 current group IDs server-side through the OCS current-user endpoint using the stored
 Nextcloud app credential. It matches that UID against `owner` / `users` and the
 server-derived group IDs against `groups` in Elasticsearch and Qdrant. Prefiltering
-therefore does not depend on AKI Recherche or another frontend supplying group
+therefore does not depend on SunaQ Recherche or another frontend supplying group
 headers. If the OCS identity lookup is unavailable or malformed, only the metadata
 prefilter is skipped for that request and retrieval falls back to the established
 unfiltered path; final live WebDAV ACL still applies. Circles are intentionally not
@@ -554,11 +573,11 @@ For role-specific LLM routing and remote evidence limits, see
 ## Administrator-managed CPU model services
 
 A tested CPU-oriented layout keeps model services outside the middleware install
-prefix, for example `/opt/nextcloud-rag-models`. The middleware does not own or
+prefix, for example `/opt/sunaq-models`. The middleware does not own or
 upgrade these containers. A practical reference combination is Ollama 0.24.0
 with `qwen3-embedding:4b` plus a TEI CPU service running
 `Alibaba-NLP/gte-multilingual-reranker-base`. Bind both services to loopback when
-they run on the RAG VM.
+they run on the SunaQ VM.
 
 For Ollama embedding-only use, keeping one loaded model resident avoids repeated
 large disk reads on quiet/busy transitions:
@@ -576,7 +595,7 @@ time or on a suitable system.
 ## Docker persistent data
 
 Bundled Qdrant, Neo4j and OpenWebUI use Docker named volumes rather than visible
-subdirectories below `/opt/nextcloud-rag`. Inspect them with:
+subdirectories below `/opt/sunaq`. Inspect them with:
 
 ```bash
 docker volume ls
@@ -592,7 +611,7 @@ be granted merely to access the middleware.
 For an Elasticsearch instance without authentication, do not expose TCP/9200 on
 the ordinary LAN. A pragmatic legacy setup is a dedicated isolated VM network
 with one backend NIC per VM, no gateway and a firewall rule allowing TCP/9200
-only from the RAG VM. Elasticsearch can bind only its HTTP interface to that
+only from the SunaQ VM. Elasticsearch can bind only its HTTP interface to that
 backend address while keeping cluster transport local.
 
 
@@ -639,21 +658,21 @@ retrieval_policy:
 ```
 
 Neo4j entity resolution/query expansion is independent of the graph *document*
-retrieval arm. A super-light system can therefore use Neo4j aliases and AKI
+retrieval arm. A super-light system can therefore use Neo4j aliases and SunaQ
 research findings while `retrieval_policy.internal.graph: disabled` and
 `graph_retrieval.enabled: false`.
 
-## AKI Recherche 0.2.6
+## SunaQ Recherche 0.3.0
 
-The Nextcloud client is under `clients/nextcloud/akirag`. It is intentionally a
+The Nextcloud client is under `clients/nextcloud/sunaq`. It is intentionally a
 thin search frontend: Nextcloud session → server-side proxy → OpenAI-compatible
 provider. It sends the current Nextcloud UID as `X-RAG-User-ID`; the provider key
 never reaches browser JavaScript.
 
-AKI Recherche renders a safe Markdown subset without raw HTML and adds per-user-message
+SunaQ Recherche renders a safe Markdown subset without raw HTML and adds per-user-message
 controls. Saved conversations are written as readable `.md` files in the user's visible
-`AKI-Chats/` folder; the machine state remains in hidden `.<chat-id>.akirag.json`
-sidecars. New/updated Markdown archives persist `source_origin=chat_archive` plus the
+`SunaQ-Chats/` folder; the machine state remains in hidden `.<chat-id>.sunaq.json`
+sidecars. Legacy `AKI-Chats/` / `.akirag.json` archives remain readable for compatibility. New/updated Markdown archives persist `source_origin=chat_archive` plus the
 stable Nextcloud `files:<id>` and register that origin immediately through the trusted
 provider/API path; the existing path classifier remains a recovery fallback.
 
@@ -665,10 +684,10 @@ It adds per-user-message controls:
 
 The old and edited variants are never sent together as competing user turns.
 
-### AKI installation/configuration
+### SunaQ installation/configuration
 
-The app targets Nextcloud 23+. Install the `akirag` directory below the Nextcloud
-`apps/` tree and enable it with `occ app:enable akirag`. Configure the middleware
+The app targets Nextcloud 23+. Install the `sunaq` directory below the Nextcloud
+`apps/` tree and enable it with `occ app:enable sunaq`. Configure the middleware
 base URL and provider API key under **Settings → Administration → Additional
 settings**. The key is stored server-side through Nextcloud encryption and is not
 exposed to browser JavaScript.
@@ -677,7 +696,7 @@ If the configured middleware URL points to an RFC1918/private address, Nextcloud
 reject it with `Host violates local access rules`; in a deliberately internal
 deployment the global Nextcloud option `allow_local_remote_servers => true` permits
 that server-side proxy connection. The Nextcloud host must also trust the middleware
-TLS issuer. Version 0.2.3 registers the navigation through `<navigations>` and ships
+TLS issuer. SunaQ Recherche registers the navigation through `<navigations>` and ships
 a dedicated compact `img/app.svg`, so the app appears in the normal Nextcloud app
 navigation rather than requiring a manual URL.
 
@@ -689,9 +708,9 @@ A confirmed entity decision creates document-grounded observation/mention proven
 
 Finding curation is shared work. Equivalent Findings coalesce so later authorized users can reuse existing curator decisions. Per-user provenance is represented by `CanonicalUser -> ResearchRun -> ResearchFinding`, and the Admin Findings/Observations/Relations views require a selected canonical-user context. Supporting documents are checked live with that selected user's Nextcloud credential before EvidenceFrame/document details are rendered.
 
-RAG Admin remains a **trusted operator surface** rather than a personal Nextcloud-user surface: the administrator may deliberately switch canonical-user context and inspect evidence visible to that selected user. This is not a missing live-ACL check, but it also is not tenant isolation against the RAG administrator. Do not expose `/rag-admin/` to ordinary users. End-user `/curation/` is separately authenticated through Nextcloud Login Flow and currently limits users to their own ResearchRuns.
+SunaQ Admin remains a **trusted operator surface** rather than a personal Nextcloud-user surface: the administrator may deliberately switch canonical-user context and inspect evidence visible to that selected user. This is not a missing live-ACL check, but it also is not tenant isolation against the SunaQ administrator. Do not expose `/rag-admin/` to ordinary users. End-user `/curation/` is separately authenticated through Nextcloud Login Flow and currently limits users to their own ResearchRuns.
 
-Personal `Mailarchiv/`, `Webarchiv/` and `AKI-Chats/` content is initially private because it is stored in the owning user's Nextcloud file tree. Sharing folders through normal Nextcloud shares is the supported collaboration mechanism; retrieval still performs the live ACL check for the querying user. `/chatarchive` is optional: it is useful as retained working memory, but a saved chat can contain copied/derived text whose lifecycle is independent from the original source document. See `THREAT-MODEL.md` and `DATA-LIFECYCLE.md`.
+Personal `Mailarchiv/`, `Webarchiv/` and `SunaQ-Chats/` content is initially private because it is stored in the owning user's Nextcloud file tree. Sharing folders through normal Nextcloud shares is the supported collaboration mechanism; retrieval still performs the live ACL check for the querying user. `/chatarchive` is optional: it is useful as retained working memory, but a saved chat can contain copied/derived text whose lifecycle is independent from the original source document. See `THREAT-MODEL.md` and `DATA-LIFECYCLE.md`.
 
 
 ## Security/lifecycle operator notes

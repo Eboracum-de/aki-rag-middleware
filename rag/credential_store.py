@@ -169,6 +169,14 @@ class UserWebSettings:
 
 
 @dataclass(frozen=True)
+class UserModelSettings:
+    canonical_user_id: str
+    default_model_id: str
+    allowed_model_ids: tuple[str, ...]
+    updated_at: float
+
+
+@dataclass(frozen=True)
 class ContactSyncSettings:
     canonical_user_id: str
     enabled: bool
@@ -319,6 +327,14 @@ class CredentialStore:
                     archive_enabled INTEGER NOT NULL DEFAULT 1,
                     target_path TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY(canonical_user_id) REFERENCES canonical_users(canonical_user_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS user_model_settings (
+                    canonical_user_id TEXT PRIMARY KEY,
+                    default_model_id TEXT NOT NULL DEFAULT '',
+                    allowed_model_ids_json TEXT NOT NULL DEFAULT '[]',
                     updated_at REAL NOT NULL,
                     FOREIGN KEY(canonical_user_id) REFERENCES canonical_users(canonical_user_id)
                         ON DELETE CASCADE
@@ -874,6 +890,83 @@ class CredentialStore:
             cur = con.execute(
                 "UPDATE canonical_users SET findings_curation_enabled=?,updated_at=? WHERE canonical_user_id=?",
                 (int(bool(enabled)), time.time(), str(canonical_user_id or "").strip()),
+            )
+            return cur.rowcount > 0
+
+    def get_model_settings(self, canonical_user_id: str) -> UserModelSettings | None:
+        user_id = str(canonical_user_id or "").strip()
+        if not user_id:
+            return None
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM user_model_settings WHERE canonical_user_id=?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            raw_allowed = json.loads(str(row["allowed_model_ids_json"] or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_allowed = []
+        allowed = tuple(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in (raw_allowed if isinstance(raw_allowed, list) else [])
+                if str(value or "").strip()
+            )
+        )
+        return UserModelSettings(
+            canonical_user_id=user_id,
+            default_model_id=str(row["default_model_id"] or "").strip(),
+            allowed_model_ids=allowed,
+            updated_at=float(row["updated_at"] or 0.0),
+        )
+
+    def set_model_settings(
+        self,
+        canonical_user_id: str,
+        *,
+        default_model_id: str,
+        allowed_model_ids: list[str] | tuple[str, ...],
+    ) -> UserModelSettings:
+        user_id = str(canonical_user_id or "").strip()
+        if not user_id or self.get_canonical_user(user_id) is None:
+            raise ValueError("unknown canonical user")
+        allowed = list(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in allowed_model_ids
+                if str(value or "").strip()
+            )
+        )
+        default_id = str(default_model_id or "").strip()
+        if not allowed:
+            raise ValueError("at least one SunaQ model must be allowed")
+        if default_id not in allowed:
+            raise ValueError("default SunaQ model must be in allowed models")
+        now = time.time()
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO user_model_settings(
+                    canonical_user_id,default_model_id,allowed_model_ids_json,updated_at
+                ) VALUES(?,?,?,?)
+                ON CONFLICT(canonical_user_id) DO UPDATE SET
+                    default_model_id=excluded.default_model_id,
+                    allowed_model_ids_json=excluded.allowed_model_ids_json,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, default_id, json.dumps(allowed, ensure_ascii=False), now),
+            )
+        settings = self.get_model_settings(user_id)
+        assert settings is not None
+        return settings
+
+    def clear_model_settings(self, canonical_user_id: str) -> bool:
+        with self._connect() as con:
+            cur = con.execute(
+                "DELETE FROM user_model_settings WHERE canonical_user_id=?",
+                (str(canonical_user_id or "").strip(),),
             )
             return cur.rowcount > 0
 

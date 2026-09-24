@@ -1,4 +1,4 @@
-"""OpenAI-compatible adapter for the existing AKI RAG Middleware middleware.
+"""OpenAI-compatible provider for SunaQ.
 
 Architecture:
     OpenAI-compatible UI/client -> this provider (:8766) -> RAG middleware (:8765)
@@ -40,12 +40,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 import os
 import re
 import time
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -62,6 +64,7 @@ from rag.search_text import normalize_query_quotes
 from rag.research_log import ResearchLog
 from rag.llm_backend import build_llm_backend
 from rag.llm_roles import build_role_backends
+from rag.sunaq_models import RuntimeModel, load_model_registry
 from rag.logging_utils import get_logger
 from rag.credential_store import CredentialStore, scope_identity
 from rag.internal_auth import provider_api_headers
@@ -105,6 +108,7 @@ def _load_provider_config() -> dict[str, Any]:
 
 PROVIDER_CONFIG = _load_provider_config()
 configure_tls_compat(PROVIDER_CONFIG)
+SUNAQ_MODEL_REGISTRY = load_model_registry(PROVIDER_CONFIG)
 RETRIEVAL_PLANNER = load_retrieval_planner_settings(PROVIDER_CONFIG)
 RETRIEVAL_POLICY = load_retrieval_policy(PROVIDER_CONFIG)
 CONFIGURED_INTERNAL_ARMS = configured_internal_arms(PROVIDER_CONFIG)
@@ -127,7 +131,7 @@ RETRIEVAL_RECORD_DIRECTORY = Path(
 )
 
 MODEL_ID = os.getenv("PROVIDER_MODEL_ID", "nextcloud-hybrid-rag")
-MODEL_NAME = os.getenv("PROVIDER_MODEL_NAME", "AKI RAG Middleware")
+MODEL_NAME = os.getenv("PROVIDER_MODEL_NAME", "SunaQ")
 RAG_MIDDLEWARE_URL = os.getenv("RAG_MIDDLEWARE_URL", "http://127.0.0.1:8765").rstrip("/")
 
 
@@ -361,46 +365,404 @@ EVIDENCE_PER_RESULT_MAX_CHARS = int(os.getenv("EVIDENCE_PER_RESULT_MAX_CHARS", "
 
 # Remote trust-boundary budgets. They apply only when a role resolves to a
 # public/remote endpoint (or is explicitly marked remote with *_LLM_SCOPE).
+# Legacy remote limits remain the compatibility fallback for installations that
+# do not use packaged SunaQ answer-context budgets.
 REMOTE_LLM_MAX_CHARS_PER_DOCUMENT = max(500, int(os.getenv("REMOTE_LLM_MAX_CHARS_PER_DOCUMENT", "3000")))
 REMOTE_LLM_MAX_TOTAL_CHARS = max(2000, int(os.getenv("REMOTE_LLM_MAX_TOTAL_CHARS", "20000")))
 REMOTE_VERIFIER_MAX_CANDIDATES = max(1, int(os.getenv("REMOTE_VERIFIER_MAX_CANDIDATES", "10")))
 REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT = max(500, int(os.getenv("REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT", "2000")))
 REMOTE_ANSWER_MAX_DOCUMENTS = max(1, int(os.getenv("REMOTE_ANSWER_MAX_DOCUMENTS", "8")))
 
-llm_role_backends = build_role_backends(
-    default_backend=LLM_BACKEND_TYPE,
-    default_base_url=LLM_BASE_URL,
-    default_model=LLM_MODEL,
-    default_api_key=LLM_API_KEY,
-    default_verify_tls=LLM_VERIFY_TLS,
-    default_ca_file=LLM_CA_FILE,
-    models={
-        "default": LLM_MODEL,
-        "planner": RETRIEVAL_PLANNER.model or FOLLOWUP_MODEL or LLM_MODEL,
-        "verifier": RETRIEVAL_PLANNER.model or LLM_MODEL,
-        "evidence": EVIDENCE_MODEL,
-        "answer": ANSWER_MODEL,
-    },
+# Packaged SunaQ profiles may deliberately spend larger budgets, but never
+# beyond these administrator-controlled trust-boundary ceilings.
+SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT = max(
+    500, int(os.getenv("SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT", "8000"))
 )
+SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS = max(
+    2000, int(os.getenv("SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS", "250000"))
+)
+SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES = max(
+    1, int(os.getenv("SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES", "50"))
+)
+SUNAQ_REMOTE_HARD_VERIFIER_MAX_CHARS_PER_DOCUMENT = max(
+    500, int(os.getenv("SUNAQ_REMOTE_HARD_VERIFIER_MAX_CHARS_PER_DOCUMENT", "6000"))
+)
+SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS = max(
+    1, int(os.getenv("SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS", "50"))
+)
+
+
+def _sunaq_remote_cap(hard_cap: int, legacy_cap: int, legacy_env_name: str) -> int:
+    """Apply a preserved explicit 0.8.5 REMOTE_* cap without shrinking fresh profiles.
+
+    Fresh 0.8.6 templates leave legacy REMOTE_* variables unset. Upgraded
+    installations may retain them in provider.env; in that case the smaller
+    legacy value remains an administrator-controlled data-exposure cap.
+    """
+    if legacy_env_name in os.environ:
+        return min(int(hard_cap), int(legacy_cap))
+    return int(hard_cap)
+
+
+@dataclass(frozen=True)
+class ProviderRuntimeModel:
+    model: RuntimeModel
+    retrieval_planner: Any
+    evidence_decision_mode: str
+    role_backends: dict[str, Any]
+
+
+def _build_provider_runtime_model(model: RuntimeModel) -> ProviderRuntimeModel:
+    planner = load_retrieval_planner_settings(model.config)
+    evidence_cfg = dict(model.config.get("evidence_control") or {})
+    evidence_mode = str(
+        evidence_cfg.get("mode")
+        or EVIDENCE_DECISION_MODE
+        or "off"
+    ).strip().lower()
+    if evidence_mode not in {"off", "review"}:
+        raise RuntimeError(
+            f"SunaQ model {model.model_id}: evidence_control.mode must be off or review"
+        )
+    role_backends = build_role_backends(
+        default_backend=LLM_BACKEND_TYPE,
+        default_base_url=LLM_BASE_URL,
+        default_model=LLM_MODEL,
+        default_api_key=LLM_API_KEY,
+        default_verify_tls=LLM_VERIFY_TLS,
+        default_ca_file=LLM_CA_FILE,
+        models={
+            "default": LLM_MODEL,
+            "planner": planner.model or FOLLOWUP_MODEL or LLM_MODEL,
+            "verifier": planner.model or LLM_MODEL,
+            "evidence": EVIDENCE_MODEL,
+            "answer": ANSWER_MODEL,
+        },
+        role_overrides=model.roles,
+    )
+    return ProviderRuntimeModel(
+        model=model,
+        retrieval_planner=planner,
+        evidence_decision_mode=evidence_mode,
+        role_backends=role_backends,
+    )
+
+
+SUNAQ_PROVIDER_MODELS = {
+    model.model_id: _build_provider_runtime_model(model)
+    for model in SUNAQ_MODEL_REGISTRY.list()
+}
+_DEFAULT_RUNTIME_MODEL = SUNAQ_PROVIDER_MODELS[SUNAQ_MODEL_REGISTRY.default_model_id]
+_ACTIVE_RUNTIME_MODEL: ContextVar[ProviderRuntimeModel | None] = ContextVar(
+    "sunaq_provider_runtime_model", default=None
+)
+
+_PROGRESS_TTL_SECONDS = max(60.0, float(os.getenv("SUNAQ_PROGRESS_TTL_SECONDS", "900")))
+_PROGRESS_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,128}$")
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS_STATES: dict[str, dict[str, Any]] = {}
+_ACTIVE_PROGRESS_ID: ContextVar[str] = ContextVar("sunaq_progress_id", default="")
+_ACTIVE_PROGRESS_OWNER: ContextVar[str] = ContextVar("sunaq_progress_owner", default="")
+_ACTIVE_SUGGESTIONS: ContextVar[tuple[dict[str, str], ...]] = ContextVar(
+    "sunaq_suggestions", default=()
+)
+
+
+def _set_suggestions(items: list[dict[str, str]] | tuple[dict[str, str], ...]) -> None:
+    clean: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for raw in list(items or [])[:4]:
+        if not isinstance(raw, dict):
+            continue
+        label = str(raw.get("label") or "").strip()[:120]
+        action = str(raw.get("action") or "").strip().lower()
+        query = str(raw.get("query") or "").strip()[:4000]
+        model = str(raw.get("model") or "").strip()[:96]
+        if not label or action not in {"query", "rerun", "focus"}:
+            continue
+        if action in {"query", "rerun"} and not query:
+            continue
+        key = (label, action, query, model)
+        if key in seen:
+            continue
+        seen.add(key)
+        item = {"label": label, "action": action}
+        if query:
+            item["query"] = query
+        if model:
+            item["model"] = model
+        clean.append(item)
+    _ACTIVE_SUGGESTIONS.set(tuple(clean))
+
+
+def _suggestions() -> list[dict[str, str]]:
+    return [dict(item) for item in _ACTIVE_SUGGESTIONS.get()]
+
+
+def _stronger_model_suggestion(
+    question: str,
+    user_id: str | None,
+    current_model_id: str | None = None,
+) -> dict[str, str] | None:
+    """Offer a stronger allowed SunaQ model when a verification window was hit."""
+    try:
+        allowed, _ = _model_access_for_identity(user_id)
+    except PermissionError:
+        return None
+    current = (
+        SUNAQ_PROVIDER_MODELS.get(str(current_model_id or "").strip())
+        or _active_runtime_model()
+    )
+    current_search = current.model.section("search")
+    current_score = (
+        int(current.retrieval_planner.max_retrieval_rounds),
+        int(current.retrieval_planner.exhaustive_verification_candidate_limit),
+        int(current.retrieval_planner.bounded_verification_candidate_limit),
+        int(current.retrieval_planner.verification_candidate_limit),
+        int(current_search.get("rerank_candidates", 0) or 0),
+    )
+    candidates: list[tuple[tuple[int, int, int, int, int], ProviderRuntimeModel]] = []
+    for model_id in allowed:
+        runtime = SUNAQ_PROVIDER_MODELS.get(model_id)
+        if runtime is None or runtime.model.model_id == current.model.model_id:
+            continue
+        search_cfg = runtime.model.section("search")
+        score = (
+            int(runtime.retrieval_planner.max_retrieval_rounds),
+            int(runtime.retrieval_planner.exhaustive_verification_candidate_limit),
+            int(runtime.retrieval_planner.bounded_verification_candidate_limit),
+            int(runtime.retrieval_planner.verification_candidate_limit),
+            int(search_cfg.get("rerank_candidates", 0) or 0),
+        )
+        if score > current_score:
+            candidates.append((score, runtime))
+    if not candidates:
+        return None
+    _, target = max(candidates, key=lambda pair: pair[0])
+    return {
+        "label": f"Mit {target.model.name} erneut suchen",
+        "action": "rerun",
+        "query": str(question or "").strip(),
+        "model": target.model.model_id,
+    }
+
+
+
+def _refinement_suggestions(
+    question: str,
+    user_id: str | None,
+    current_model_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Deterministic next actions for broad/limited retrieval outcomes."""
+    items: list[dict[str, str]] = []
+    stronger = _stronger_model_suggestion(
+        question,
+        user_id,
+        current_model_id=current_model_id,
+    )
+    if stronger is not None:
+        items.append(stronger)
+    items.append({
+        "label": "Anfrage präzisieren",
+        "action": "focus",
+    })
+    return items
+
+
+def _cleanup_progress_locked(now: float) -> None:
+    stale = [
+        request_id
+        for request_id, state in _PROGRESS_STATES.items()
+        if now - float(state.get("updated_at") or 0.0) > _PROGRESS_TTL_SECONDS
+    ]
+    for request_id in stale:
+        _PROGRESS_STATES.pop(request_id, None)
+
+
+def _set_progress(
+    request_id: str,
+    owner: str,
+    stage: str,
+    label: str,
+) -> None:
+    request_id = str(request_id or "").strip()
+    if not request_id or not _PROGRESS_ID_RE.fullmatch(request_id):
+        return
+    now = time.time()
+    with _PROGRESS_LOCK:
+        _cleanup_progress_locked(now)
+        previous = _PROGRESS_STATES.get(request_id) or {}
+        if previous and str(previous.get("owner") or "") != str(owner or ""):
+            return
+        _PROGRESS_STATES[request_id] = {
+            "request_id": request_id,
+            "owner": str(owner or ""),
+            "stage": str(stage or "").strip(),
+            "label": str(label or "").strip(),
+            "model": _active_model_id(),
+            "created_at": float(previous.get("created_at") or now),
+            "updated_at": now,
+        }
+
+
+def _progress(stage: str, label: str) -> None:
+    request_id = _ACTIVE_PROGRESS_ID.get()
+    if request_id:
+        _set_progress(request_id, _ACTIVE_PROGRESS_OWNER.get(), stage, label)
+
+
+def _read_progress(request_id: str, owner: str) -> dict[str, Any] | None:
+    request_id = str(request_id or "").strip()
+    if not _PROGRESS_ID_RE.fullmatch(request_id):
+        return None
+    now = time.time()
+    with _PROGRESS_LOCK:
+        _cleanup_progress_locked(now)
+        state = _PROGRESS_STATES.get(request_id)
+        if state is None or str(state.get("owner") or "") != str(owner or ""):
+            return None
+        return {
+            key: value
+            for key, value in state.items()
+            if key != "owner"
+        }
+
+
+# Compatibility aliases remain available to diagnostics/tests outside a request.
+llm_role_backends = _DEFAULT_RUNTIME_MODEL.role_backends
 llm_backend = llm_role_backends["default"].backend
 
+
+def _active_runtime_model() -> ProviderRuntimeModel:
+    return _ACTIVE_RUNTIME_MODEL.get() or _DEFAULT_RUNTIME_MODEL
+
+
+def _model_access_for_identity(
+    user_id: str | None,
+) -> tuple[list[str], str]:
+    """Return canonical allowed model ids and the effective default.
+
+    Standard is the safe default entitlement. Additional SunaQ profiles are
+    opt-in per user through RAG Admin. A persisted setting is fail-closed if it
+    references no currently configured model.
+    """
+    default_model = SUNAQ_MODEL_REGISTRY.default_model_id
+    if not user_id:
+        return [default_model], default_model
+
+    user = _provider_client_store().get_canonical_user_for_identity(str(user_id))
+    if user is None:
+        return [default_model], default_model
+
+    settings = _provider_client_store().get_model_settings(user.canonical_user_id)
+    if settings is None:
+        return [default_model], default_model
+
+    allowed: list[str] = []
+    for raw_id in settings.allowed_model_ids:
+        try:
+            canonical = SUNAQ_MODEL_REGISTRY.canonical_id(raw_id)
+        except KeyError:
+            continue
+        if canonical not in allowed:
+            allowed.append(canonical)
+    if not allowed:
+        raise PermissionError(
+            "No configured SunaQ model remains allowed for this user; contact an administrator"
+        )
+
+    try:
+        preferred = SUNAQ_MODEL_REGISTRY.canonical_id(settings.default_model_id)
+    except KeyError:
+        preferred = ""
+    if preferred not in allowed:
+        preferred = (
+            SUNAQ_MODEL_REGISTRY.default_model_id
+            if SUNAQ_MODEL_REGISTRY.default_model_id in allowed
+            else allowed[0]
+        )
+    return allowed, preferred
+
+
+def _select_runtime_model(
+    model_id: str | None,
+    *,
+    user_id: str | None = None,
+) -> ProviderRuntimeModel:
+    allowed, preferred = _model_access_for_identity(user_id)
+    requested = str(model_id or "").strip()
+    model = SUNAQ_MODEL_REGISTRY.get(requested or preferred)
+    if model.model_id not in allowed:
+        raise PermissionError(
+            f"SunaQ model {model.model_id!r} is not allowed for this user"
+        )
+    return SUNAQ_PROVIDER_MODELS[model.model_id]
+
+
+def _retrieval_planner():
+    active = _ACTIVE_RUNTIME_MODEL.get()
+    return active.retrieval_planner if active is not None else RETRIEVAL_PLANNER
+
+
+def _evidence_decision_mode() -> str:
+    active = _ACTIVE_RUNTIME_MODEL.get()
+    return active.evidence_decision_mode if active is not None else EVIDENCE_DECISION_MODE
+
+
+def _active_model_id() -> str:
+    return _active_runtime_model().model.model_id
+
+
+def _profile_section(name: str) -> dict[str, Any]:
+    return _active_runtime_model().model.section(name)
+
+
 def _role_backend(role: str):
-    return llm_role_backends.get(role) or llm_role_backends["default"]
+    active = _ACTIVE_RUNTIME_MODEL.get()
+    selected = active.role_backends if active is not None else llm_role_backends
+    return selected.get(role) or selected["default"]
+
 
 def _role_model(role: str, requested: str | None = None) -> str:
-    # An explicit rc2 role-model override has highest priority. Otherwise keep
-    # the mature call-site-specific model selection (planner config, legacy
-    # ANSWER_MODEL/EVIDENCE_MODEL, helper model) for backwards compatibility.
-    explicit = str(os.getenv(f"{role.upper()}_LLM_MODEL", "") or "").strip() if role != "default" else ""
+    # During a packaged SunaQ request the precompiled role backend is
+    # authoritative. The per-task "requested" model is a legacy/default fallback
+    # only and must not override a selected profile's role routing.
+    # Outside requests retain the established environment/legacy behaviour.
+    active = _ACTIVE_RUNTIME_MODEL.get()
+    if active is not None:
+        selected = active.role_backends.get(role) or active.role_backends["default"]
+        return str(selected.model or requested or LLM_MODEL)
+    explicit = (
+        str(os.getenv(f"{role.upper()}_LLM_MODEL", "") or "").strip()
+        if role != "default"
+        else ""
+    )
     if explicit:
         return explicit
     return str(requested or _role_backend(role).model or LLM_MODEL)
 
+
 def _role_remote(role: str) -> bool:
     return bool(_role_backend(role).remote)
-# RC8: config.yaml is canonical. provider.env MAX_RETRIEVAL_ROUNDS is retained
-# only by load_retrieval_planner_settings() as a legacy fallback when the YAML
-# key is absent.
+
+
+def _answer_context_budget() -> dict[str, int] | None:
+    """Return the active packaged model's answer-context budget, if configured."""
+    cfg = _active_runtime_model().model.section("answer_context")
+    if not cfg:
+        return None
+    return {
+        "max_documents": max(1, int(cfg.get("max_documents") or 1)),
+        "max_chars_per_document": max(
+            500, int(cfg.get("max_chars_per_document") or PER_RESULT_MAX_CHARS)
+        ),
+        "max_total_chars": max(
+            2000, int(cfg.get("max_total_chars") or CONTEXT_MAX_CHARS)
+        ),
+    }
+
+
+# Default/legacy diagnostic value. Runtime requests use _retrieval_planner().
 MAX_RETRIEVAL_ROUNDS = RETRIEVAL_PLANNER.max_retrieval_rounds
 ENTITY_RECALL_BACKOFF_ENABLED = os.getenv(
     "ENTITY_RECALL_BACKOFF_ENABLED", "true"
@@ -435,6 +797,12 @@ WEB_GATE_SYSTEM_PROMPT = _load_prompt(WEB_GATE_PROMPT_FILE)
 RETRIEVAL_PLANNER_SYSTEM_PROMPT = _load_prompt(RETRIEVAL_PLANNER_PROMPT_FILE)
 QUERY_REWRITER_SYSTEM_PROMPT = _load_prompt(QUERY_REWRITER_PROMPT_FILE)
 CANDIDATE_VERIFIER_SYSTEM_PROMPT = _load_prompt(CANDIDATE_VERIFIER_PROMPT_FILE)
+
+def _prompt(name: str, default: str) -> str:
+    """Return the active SunaQ model prompt override or the global default."""
+    value = _active_runtime_model().model.prompts.get(str(name or "").strip().lower())
+    return value if value is not None else default
+
 
 FOLLOWUP_REWRITE_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -609,7 +977,7 @@ RETRIEVAL_PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
                 "required": ["kind", "query"],
                 "additionalProperties": False,
             },
-            "maxItems": RETRIEVAL_PLANNER.max_queries_per_round,
+            "maxItems": _retrieval_planner().max_queries_per_round,
         },
     },
     "required": ["stop", "reason", "exhaustive", "query_frame", "retrieval_arms", "probes"],
@@ -806,11 +1174,11 @@ research_log = ResearchLog(
 
 # Role-aware backend registry is initialized above after all legacy model
 # overrides are loaded. ``llm_backend`` remains the default-backend alias.
-app = FastAPI(title="AKI RAG Middleware - OpenAI Provider", version=VERSION)
+app = FastAPI(title="SunaQ", version=VERSION)
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = MODEL_ID
+    model: str | None = None
     messages: list[dict[str, Any]]
     stream: bool = False
 
@@ -1162,7 +1530,7 @@ async def _decide_web_use(question: str, retrieval_query: str) -> dict[str, Any]
     try:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": WEB_GATE_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("web_gate", WEB_GATE_SYSTEM_PROMPT)},
                 {"role": "user", "content": user},
             ],
             temperature=0.0,
@@ -1357,7 +1725,7 @@ async def _compile_natural_instruction(
     try:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": NATURAL_INSTRUCTION_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("natural_instruction", NATURAL_INSTRUCTION_SYSTEM_PROMPT)},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
@@ -1436,7 +1804,7 @@ async def _derive_after_web_queries(
     try:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": WEB_AFTER_QUERY_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("web_after_query", WEB_AFTER_QUERY_SYSTEM_PROMPT)},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
@@ -1896,7 +2264,7 @@ async def _rewrite_query_with_context(
     try:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": FOLLOWUP_REWRITE_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("followup", FOLLOWUP_REWRITE_SYSTEM_PROMPT)},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
@@ -1972,11 +2340,13 @@ async def _rag_search(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
+    _progress("retrieving", "Dokumente werden gesucht und Berechtigungen geprüft …")
     async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/search",
             json={
                 "query": question,
+                "model": _active_model_id(),
                 "limit": int(limit if limit is not None else SEARCH_LIMIT),
                 "entity_recall": bool(entity_recall),
                 "retrieval_arms": sorted(retrieval_arms) if retrieval_arms else None,
@@ -2022,7 +2392,7 @@ async def _rag_query_context(
         async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
             response = await client.post(
                 f"{RAG_MIDDLEWARE_URL}/query-context",
-                json={"query": question},
+                json={"query": question, "model": _active_model_id()},
                 headers=headers,
             )
             response.raise_for_status()
@@ -2192,16 +2562,16 @@ async def _rewrite_search_spec(
         "Wenn files aktiv ist, muss elastic_query eine sinnvolle positive Volltextsuche enthalten. "
         "Explizite unterscheidende Namen/Kennungen nicht verlieren."
     )
-    model = RETRIEVAL_PLANNER.model or ANSWER_MODEL
+    model = _retrieval_planner().model or ANSWER_MODEL
 
     async def run_once(extra: str = "") -> dict[str, Any]:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": QUERY_REWRITER_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("query_rewriter", QUERY_REWRITER_SYSTEM_PROMPT)},
                 {"role": "user", "content": prompt + extra},
             ],
             temperature=0.0,
-            max_tokens=RETRIEVAL_PLANNER.max_tokens,
+            max_tokens=_retrieval_planner().max_tokens,
             think=False,
             model=model,
             role="planner",
@@ -2268,7 +2638,7 @@ def _planner_result_context(results: list[SearchResult]) -> str:
     if not results:
         return "(keine sichtbaren Dokumenttreffer)"
     blocks: list[str] = []
-    remaining = RETRIEVAL_PLANNER.context_max_chars
+    remaining = _retrieval_planner().context_max_chars
     for result in results[:20]:
         raw = result.raw or {}
         snippet = str(
@@ -2524,7 +2894,7 @@ async def _retrieval_planner_decision(
 ) -> dict[str, Any]:
     """Ask the thinking model only for additional conservative probes."""
     deterministic_exhaustive = detect_exhaustive_intent(question)
-    if not RETRIEVAL_PLANNER.enabled:
+    if not _retrieval_planner().enabled:
         return {
             "stop": True,
             "reason": "retrieval_planner_disabled",
@@ -2539,7 +2909,7 @@ async def _retrieval_planner_decision(
     prior = _planner_result_context(results)
     prompt = (
         f"ORIGINALFRAGE:\n{question}\n\n"
-        f"RETRIEVAL-RUNDE: {round_no} von {RETRIEVAL_PLANNER.max_retrieval_rounds}\n"
+        f"RETRIEVAL-RUNDE: {round_no} von {_retrieval_planner().max_retrieval_rounds}\n"
         f"ERLAUBTE ARME (verbindlich): {', '.join(selected)}\n"
         f"SPRACHNEUTRALE SICHERE CONSTRAINTS: {safe_constraint_summary(question)}\n"
         f"BEREITS VERWENDETE PROBES:\n" + ("\n".join(seen_probe_queries) or "(nur Originalfrage)") + "\n\n"
@@ -2547,20 +2917,20 @@ async def _retrieval_planner_decision(
         "Erzeuge nur zusaetzliche Probes. Die Originalfrage wird vom System immer beibehalten."
     )
     planner_messages = [
-        {"role": "system", "content": RETRIEVAL_PLANNER_SYSTEM_PROMPT},
+        {"role": "system", "content": _prompt("planner", RETRIEVAL_PLANNER_SYSTEM_PROMPT)},
         {"role": "user", "content": prompt},
     ]
-    planner_model = RETRIEVAL_PLANNER.model or ANSWER_MODEL
+    planner_model = _retrieval_planner().model or ANSWER_MODEL
     # Initial query expansion may use configured thinking.  Follow-up rounds are
     # a bounded stop/continue decision over already retrieved evidence and do
     # not benefit from a long hidden reasoning pass.
-    planner_think = RETRIEVAL_PLANNER.thinking if initial else False
+    planner_think = _retrieval_planner().thinking if initial else False
 
     async def run_planner(*, think: bool | str | None) -> dict[str, Any]:
         raw = await _ollama_complete(
             planner_messages,
             temperature=0.0,
-            max_tokens=RETRIEVAL_PLANNER.max_tokens,
+            max_tokens=_retrieval_planner().max_tokens,
             think=think,
             model=planner_model,
             role="planner",
@@ -2623,7 +2993,7 @@ async def _retrieval_planner_decision(
     # max_queries_per_round is the budget for *additional* planner rewrites.
     # The deterministic per-arm views of the original wording are technical
     # retrieval views and do not consume this budget.
-    max_additional = RETRIEVAL_PLANNER.max_queries_per_round
+    max_additional = _retrieval_planner().max_queries_per_round
     probes = normalize_generated_probes(
         question,
         value.get("probes") or [],
@@ -2656,11 +3026,26 @@ def _verification_context(
     start_index: int = 1,
 ) -> str:
     blocks: list[str] = []
-    per_doc = RETRIEVAL_PLANNER.verification_max_chars_per_document
+    per_doc = _retrieval_planner().verification_max_chars_per_document
     total_limit = 10**9
     if _role_remote("verifier"):
-        per_doc = min(per_doc, REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT)
-        total_limit = REMOTE_LLM_MAX_TOTAL_CHARS
+        if _answer_context_budget() is not None:
+            per_doc = min(
+                per_doc,
+                _sunaq_remote_cap(
+                    SUNAQ_REMOTE_HARD_VERIFIER_MAX_CHARS_PER_DOCUMENT,
+                    REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT,
+                    "REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT",
+                ),
+            )
+            total_limit = _sunaq_remote_cap(
+                SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS,
+                REMOTE_LLM_MAX_TOTAL_CHARS,
+                "REMOTE_LLM_MAX_TOTAL_CHARS",
+            )
+        else:
+            per_doc = min(per_doc, REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT)
+            total_limit = REMOTE_LLM_MAX_TOTAL_CHARS
     used = 0
     for offset, result in enumerate(results):
         index = start_index + offset
@@ -2826,9 +3211,18 @@ def _effective_verification_candidate_limit(
     latter remains hard bounded by ``RetrievalPlannerSettings`` (currently
     max. 60), so exhaustive intent cannot turn into an unbounded corpus scan.
     """
-    limit = int(candidate_limit or RETRIEVAL_PLANNER.verification_candidate_limit)
+    limit = int(candidate_limit or _retrieval_planner().verification_candidate_limit)
     if _role_remote("verifier") and not exhaustive:
-        limit = min(limit, REMOTE_VERIFIER_MAX_CANDIDATES)
+        remote_cap = (
+            _sunaq_remote_cap(
+                SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES,
+                REMOTE_VERIFIER_MAX_CANDIDATES,
+                "REMOTE_VERIFIER_MAX_CANDIDATES",
+            )
+            if _answer_context_budget() is not None
+            else REMOTE_VERIFIER_MAX_CANDIDATES
+        )
+        limit = min(limit, remote_cap)
     return max(1, limit)
 
 
@@ -2852,12 +3246,13 @@ async def _verify_exhaustive_candidates(
     if not results:
         return [], [], {"checked": 0, "matches": 0, "uncertain": 0, "elapsed_ms": 0}
 
+    _progress("verifying", "Dokumente werden inhaltlich geprüft …")
     verify_started = time.perf_counter()
     limit = _effective_verification_candidate_limit(
         candidate_limit, exhaustive=exhaustive
     )
     bounded = list(results[:limit])
-    batch_size = max(1, int(RETRIEVAL_PLANNER.verification_batch_size))
+    batch_size = max(1, int(_retrieval_planner().verification_batch_size))
     by_index: dict[int, str] = {}
     reasons: dict[int, str] = {}
     relation_bindings: dict[int, str] = {}
@@ -2895,12 +3290,12 @@ async def _verify_exhaustive_candidates(
         raw = await _ollama_complete(
             call_messages,
             temperature=0.0,
-            max_tokens=RETRIEVAL_PLANNER.verification_max_tokens,
+            max_tokens=_retrieval_planner().verification_max_tokens,
             # Candidate verification is a bounded classification task. Do not
             # inherit planner thinking: some Ollama/model combinations reject
             # `think` for structured-output calls.
             think=False,
-            model=RETRIEVAL_PLANNER.model or LLM_MODEL,
+            model=_retrieval_planner().model or LLM_MODEL,
             role="verifier",
             response_format=response_format,
         )
@@ -2932,7 +3327,7 @@ async def _verify_exhaustive_candidates(
             f"KANDIDATEN (bereits Live-ACL-geprueft):\n{context}"
         )
         messages = [
-            {"role": "system", "content": CANDIDATE_VERIFIER_SYSTEM_PROMPT},
+            {"role": "system", "content": _prompt("verifier", CANDIDATE_VERIFIER_SYSTEM_PROMPT)},
             {"role": "user", "content": prompt},
         ]
 
@@ -3018,7 +3413,14 @@ async def _verify_exhaustive_candidates(
 
     for batch_start in range(0, len(bounded), batch_size):
         batch = bounded[batch_start: batch_start + batch_size]
-        await process_batch(batch, batch_start + 1)
+        first = batch_start + 1
+        last = batch_start + len(batch)
+        if first == last:
+            label = f"Prüfe Dokument {first} von {len(bounded)} …"
+        else:
+            label = f"Prüfe Dokumente {first}–{last} von {len(bounded)} …"
+        _progress("verifying", label)
+        await process_batch(batch, first)
 
     matches: list[SearchResult] = []
     uncertain: list[SearchResult] = []
@@ -3117,17 +3519,19 @@ async def _rag_multi_search(
         headers["X-RAG-Request-ID"] = request_id
 
     if exhaustive:
-        verification_pool = RETRIEVAL_PLANNER.exhaustive_verification_candidate_limit
+        verification_pool = _retrieval_planner().exhaustive_verification_candidate_limit
     elif bounded_document_set:
-        verification_pool = RETRIEVAL_PLANNER.bounded_verification_candidate_limit
+        verification_pool = _retrieval_planner().bounded_verification_candidate_limit
     else:
-        verification_pool = RETRIEVAL_PLANNER.verification_candidate_limit
+        verification_pool = _retrieval_planner().verification_candidate_limit
     result_limit = max(SEARCH_LIMIT, verification_pool)
+    _progress("retrieving", "Dokumente werden gesucht und Berechtigungen geprüft …")
     async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/multi-search",
             json={
                 "original_query": original_query,
+                "model": _active_model_id(),
                 "probes": probes,
                 "limit": result_limit,
                 "exhaustive": bool(exhaustive),
@@ -3172,11 +3576,15 @@ async def _elastic_search(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
+    _progress("retrieving", "Dokumente werden gesucht und Berechtigungen geprüft …")
     async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/elastic/search",
             json={
-                "query": query, "limit": int(limit), "include_content": bool(include_content),
+                "query": query,
+                "model": _active_model_id(),
+                "limit": int(limit),
+                "include_content": bool(include_content),
                 "source_scopes": sorted(source_scopes) if source_scopes else None,
             },
             headers=headers,
@@ -3203,6 +3611,7 @@ async def _web_search(
         headers["X-RAG-User-ID"] = user_id
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
+    _progress("web", "Webquellen werden recherchiert …")
     async with _middleware_client(timeout=max(HTTP_TIMEOUT, 300.0)) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/web/search",
@@ -3367,7 +3776,7 @@ def _build_web_context(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any
 
 def _web_answer_messages(question: str, context: str) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": WEB_ANSWER_SYSTEM_PROMPT},
+        {"role": "system", "content": _prompt("web_answer", WEB_ANSWER_SYSTEM_PROMPT)},
         {
             "role": "user",
             "content": f"FRAGE:\n{question}\n\nWEB-EVIDENCE:\n{context}",
@@ -3382,7 +3791,7 @@ def _hybrid_web_answer_messages(
     web_context: str,
 ) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": HYBRID_WEB_ANSWER_SYSTEM_PROMPT},
+        {"role": "system", "content": _prompt("hybrid_web_answer", HYBRID_WEB_ANSWER_SYSTEM_PROMPT)},
         {
             "role": "user",
             "content": (
@@ -3443,11 +3852,13 @@ async def _rag_resolve_documents(
     if request_id:
         headers["X-RAG-Request-ID"] = request_id
 
+    _progress("retrieving", "Ausgewählte Dokumente werden geladen und Berechtigungen geprüft …")
     async with _middleware_client(timeout=HTTP_TIMEOUT) as client:
         response = await client.post(
             f"{RAG_MIDDLEWARE_URL}/documents/resolve",
             json={
                 "query": question,
+                "model": _active_model_id(),
                 "references": references,
             },
             headers=headers,
@@ -3724,11 +4135,11 @@ async def _store_positive_research_findings(
         "retrieval_query": retrieval_query,
         "source_scopes": sorted(source_scopes) if source_scopes else None,
         "provenance_code": "aki_research",
-        "provenance_label": "AKI Recherche",
+        "provenance_label": "SunaQ Recherche",
         "query_frame": normalize_query_frame(query_frame),
         "software_version": VERSION,
-        "planner_model": RETRIEVAL_PLANNER.model or ANSWER_MODEL,
-        "verifier_model": RETRIEVAL_PLANNER.model or LLM_MODEL,
+        "planner_model": _retrieval_planner().model or ANSWER_MODEL,
+        "verifier_model": _retrieval_planner().model or LLM_MODEL,
         "documents": documents,
     }
     try:
@@ -3779,12 +4190,66 @@ def _build_context(
     effective_per_result = int(per_result_max_chars)
     effective_total = int(context_max_chars)
     effective_results = results
+    profile_budget = _answer_context_budget()
+    if profile_budget is not None:
+        # Normal answer-context calls use the provider defaults as sentinels:
+        # the selected SunaQ profile replaces those defaults rather than being
+        # clipped by them. Explicit specialist calls (/use, /elastic) still
+        # pass their own budgets and remain bounded by the smaller value.
+        effective_per_result = (
+            profile_budget["max_chars_per_document"]
+            if int(per_result_max_chars) == int(PER_RESULT_MAX_CHARS)
+            else min(
+                effective_per_result,
+                profile_budget["max_chars_per_document"],
+            )
+        )
+        effective_total = (
+            profile_budget["max_total_chars"]
+            if int(context_max_chars) == int(CONTEXT_MAX_CHARS)
+            else min(
+                effective_total,
+                profile_budget["max_total_chars"],
+            )
+        )
+        if not preserve_all_results:
+            effective_results = effective_results[:profile_budget["max_documents"]]
+
     remote_answer = _role_remote("answer")
     if remote_answer:
-        effective_per_result = min(effective_per_result, REMOTE_LLM_MAX_CHARS_PER_DOCUMENT)
-        effective_total = min(effective_total, REMOTE_LLM_MAX_TOTAL_CHARS)
-        if not preserve_all_results:
-            effective_results = results[:REMOTE_ANSWER_MAX_DOCUMENTS]
+        if profile_budget is not None:
+            effective_per_result = min(
+                effective_per_result,
+                _sunaq_remote_cap(
+                    SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT,
+                    REMOTE_LLM_MAX_CHARS_PER_DOCUMENT,
+                    "REMOTE_LLM_MAX_CHARS_PER_DOCUMENT",
+                ),
+            )
+            effective_total = min(
+                effective_total,
+                _sunaq_remote_cap(
+                    SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS,
+                    REMOTE_LLM_MAX_TOTAL_CHARS,
+                    "REMOTE_LLM_MAX_TOTAL_CHARS",
+                ),
+            )
+            if not preserve_all_results:
+                effective_results = effective_results[
+                    :_sunaq_remote_cap(
+                        SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS,
+                        REMOTE_ANSWER_MAX_DOCUMENTS,
+                        "REMOTE_ANSWER_MAX_DOCUMENTS",
+                    )
+                ]
+        else:
+            effective_per_result = min(
+                effective_per_result,
+                REMOTE_LLM_MAX_CHARS_PER_DOCUMENT,
+            )
+            effective_total = min(effective_total, REMOTE_LLM_MAX_TOTAL_CHARS)
+            if not preserve_all_results:
+                effective_results = results[:REMOTE_ANSWER_MAX_DOCUMENTS]
 
     def header_for(result: SearchResult) -> str:
         source_date = str(result.raw.get("source_date") or "").strip()
@@ -3965,6 +4430,7 @@ async def _evidence_decision(
     *,
     force_broad: bool = False,
 ) -> dict[str, Any]:
+    _progress("evidence", "Evidenz wird geprüft …")
     force_instruction = ""
     if force_broad:
         force_instruction = (
@@ -3996,7 +4462,7 @@ async def _evidence_decision(
     ) -> dict[str, Any]:
         raw = await _ollama_complete(
             [
-                {"role": "system", "content": EVIDENCE_DECISION_SYSTEM_PROMPT},
+                {"role": "system", "content": _prompt("evidence", EVIDENCE_DECISION_SYSTEM_PROMPT)},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
@@ -4213,7 +4679,7 @@ def _render_rag_prompt(
     selected_document_count: int | None = None,
 ) -> str:
     base = (
-        RAG_ANSWER_TEMPLATE
+        _prompt("answer", RAG_ANSWER_TEMPLATE)
         .replace("{{context}}", context)
         .replace("{{retrieval_query}}", retrieval_query)
     )
@@ -4257,7 +4723,7 @@ def _rag_answer_messages(
 def _direct_messages(request_messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     # UI helper tasks may legitimately depend on the immediate chat, so keep a
     # small recent slice here. Do not inherit OpenWebUI/client system prompts.
-    result: list[dict[str, str]] = [{"role": "system", "content": DIRECT_SYSTEM_PROMPT}]
+    result: list[dict[str, str]] = [{"role": "system", "content": _prompt("direct", DIRECT_SYSTEM_PROMPT)}]
     for item in _prior_conversation(request_messages):
         result.append(item)
     latest = _latest_user_message(request_messages)
@@ -4329,7 +4795,7 @@ def _direct_answer_messages(question: str, kind: str) -> list[dict[str, str]]:
         f"Aktuelle lokale Serverzeit: {now.isoformat(timespec='seconds')}\n"
         f"Direktmodus: {kind}"
     )
-    system = DIRECT_ANSWER_SYSTEM_PROMPT.replace("{{runtime_context}}", runtime_context)
+    system = _prompt("direct_answer", DIRECT_ANSWER_SYSTEM_PROMPT).replace("{{runtime_context}}", runtime_context)
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": question},
@@ -4487,7 +4953,7 @@ def _source_marker(result: SearchResult) -> str:
 
 
 def _source_handoff_suffix(results: list[SearchResult]) -> str:
-    """Invisible complete document-set handoff for the next /use turn."""
+    """Legacy helper retained for tests/compatibility; new answers do not emit it."""
     markers = [_source_marker(result) for result in results]
     markers = [marker for marker in markers if marker]
     return ("\n" + "".join(markers)) if markers else ""
@@ -5100,15 +5566,22 @@ def _filename_lookup_response(
 
 
 def _completion_response(content: str, completion_id: str) -> dict[str, Any]:
-    return {
+    _progress("complete", "Fertig.")
+    response = {
         "id": completion_id,
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": MODEL_ID,
+        "model": _active_model_id(),
         "choices": [
             {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
         ],
     }
+    suggestions = _suggestions()
+    if suggestions:
+        # OpenAI-compatible extension. Clients that do not know it ignore it;
+        # the bundled Nextcloud client renders it as action buttons.
+        response["suggestions"] = suggestions
+    return response
 
 
 def _sse_chunk(
@@ -5129,7 +5602,7 @@ def _sse_chunk(
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
-        "model": MODEL_ID,
+        "model": _active_model_id(),
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -5145,7 +5618,7 @@ def _static_response(content: str, completion_id: str, stream: bool) -> Any:
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": int(time.time()),
-            "model": MODEL_ID,
+            "model": _active_model_id(),
             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
         }
         yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
@@ -5157,7 +5630,7 @@ def _static_response(content: str, completion_id: str, stream: bool) -> Any:
     return StreamingResponse(generator(), media_type="text/event-stream")
 
 
-_COMMAND_HELP = """AKI RAG Middleware – Kurzreferenz
+_COMMAND_HELP = """SunaQ – Kurzreferenz
 
 Natürliche Steueranweisungen können in genau EINEM führenden Klammerblock stehen, z. B.
 (Nutze diese Dokumente und suche anschließend im Web): Fasse den Vorgang zusammen und recherchiere den aktuellen Stand.
@@ -5262,6 +5735,39 @@ def _verification_notice_candidate_count(
     return max(count, es_total)
 
 
+def _verification_capacity_notice(
+    candidate_count: int,
+    verified_count: int,
+    configured_window: int,
+    *,
+    exhaustive: bool,
+) -> str:
+    """Warn near the ranked-candidate ceiling without claiming hidden hits exist.
+
+    This uses only the ACL-visible/ranked pool.  It deliberately does not inspect
+    or expose raw backend totals, which may include documents the caller cannot
+    access.  The notice is therefore a coverage caution, not a statement that
+    additional matching documents are known to exist.
+    """
+    if exhaustive:
+        return ""
+    candidate_count = max(0, int(candidate_count))
+    verified_count = max(0, int(verified_count))
+    configured_window = max(1, int(configured_window))
+    if candidate_count != verified_count:
+        return ""
+    # 95% keeps the notice focused on runs that are genuinely close to the
+    # profile ceiling (e.g. Deep 48/50) rather than routine medium-sized runs.
+    if candidate_count * 20 < configured_window * 19:
+        return ""
+    return (
+        "*Hinweis: Alle aktuell gerankten Kandidaten wurden geprüft, das "
+        "Kandidatenfenster dieses Profils ist jedoch nahezu ausgeschöpft. "
+        "Weitere relevante Dokumente außerhalb dieses Fensters können daher "
+        "nicht ausgeschlossen werden.*"
+    )
+
+
 def _verification_limit_notice(
     candidate_count: int,
     verified_count: int,
@@ -5359,11 +5865,20 @@ async def _llm_health(timeout: float = 4.0) -> dict[str, Any]:
         "status": status,
         "roles": roles,
         "remote_limits": {
-            "max_chars_per_document": REMOTE_LLM_MAX_CHARS_PER_DOCUMENT,
-            "max_total_chars": REMOTE_LLM_MAX_TOTAL_CHARS,
-            "verifier_max_candidates": REMOTE_VERIFIER_MAX_CANDIDATES,
-            "verifier_max_chars_per_document": REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT,
-            "answer_max_documents": REMOTE_ANSWER_MAX_DOCUMENTS,
+            "legacy": {
+                "max_chars_per_document": REMOTE_LLM_MAX_CHARS_PER_DOCUMENT,
+                "max_total_chars": REMOTE_LLM_MAX_TOTAL_CHARS,
+                "verifier_max_candidates": REMOTE_VERIFIER_MAX_CANDIDATES,
+                "verifier_max_chars_per_document": REMOTE_VERIFIER_MAX_CHARS_PER_DOCUMENT,
+                "answer_max_documents": REMOTE_ANSWER_MAX_DOCUMENTS,
+            },
+            "sunaq_profile_hard_caps": {
+                "max_chars_per_document": SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT,
+                "max_total_chars": SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS,
+                "verifier_max_candidates": SUNAQ_REMOTE_HARD_VERIFIER_MAX_CANDIDATES,
+                "verifier_max_chars_per_document": SUNAQ_REMOTE_HARD_VERIFIER_MAX_CHARS_PER_DOCUMENT,
+                "answer_max_documents": SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS,
+            },
         },
     }
 
@@ -5465,7 +5980,7 @@ def _format_health(payload: dict[str, Any], llm: dict[str, Any] | None = None) -
 
     web_label = str(web.get("provider") or "Web Search")
     lines = [
-        f"AKI RAG Middleware – Health: {overall.upper()}",
+        f"SunaQ – Health: {overall.upper()}",
         "",
         f"Provider            OK",
         f"LLM roles           {state(llm)}",
@@ -5531,7 +6046,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": overall,
         "version": VERSION,
-        "model": MODEL_ID,
+        "model": _active_model_id(),
         "rag_middleware": RAG_MIDDLEWARE_URL,
         "middleware": middleware,
         "llm": llm_status,
@@ -5541,8 +6056,8 @@ async def health() -> dict[str, Any]:
             "verifier": _role_backend("verifier").model,
             "answer": _role_backend("answer").model,
             "evidence": _role_backend("evidence").model,
-            "followup": FOLLOWUP_MODEL,
-            "natural_instruction": NATURAL_INSTRUCTION_MODEL,
+            "legacy_followup_default": FOLLOWUP_MODEL,
+            "legacy_natural_instruction_default": NATURAL_INSTRUCTION_MODEL,
         },
         "llm_roles": {role: selected.info() for role, selected in llm_role_backends.items() if role != "default"},
         "stream_reasoning": STREAM_REASONING,
@@ -5554,18 +6069,18 @@ async def health() -> dict[str, Any]:
         "natural_instruction_mode": NATURAL_INSTRUCTION_MODE,
         "nextcloud_base_url": NEXTCLOUD_BASE_URL,
         "prompt_dir": str(PROMPT_DIR),
-        "evidence_decision_mode": EVIDENCE_DECISION_MODE,
-        "max_retrieval_rounds": MAX_RETRIEVAL_ROUNDS,
+        "evidence_decision_mode": _evidence_decision_mode(),
+        "max_retrieval_rounds": _retrieval_planner().max_retrieval_rounds,
         "retrieval_planner": {
-            "enabled": RETRIEVAL_PLANNER.enabled,
-            "thinking": RETRIEVAL_PLANNER.thinking,
-            "max_retrieval_rounds": RETRIEVAL_PLANNER.max_retrieval_rounds,
-            "max_queries_per_round": RETRIEVAL_PLANNER.max_queries_per_round,
-            "model": RETRIEVAL_PLANNER.model or LLM_MODEL,
-            "max_tokens": RETRIEVAL_PLANNER.max_tokens,
-            "context_max_chars": RETRIEVAL_PLANNER.context_max_chars,
-            "max_complete_documents": RETRIEVAL_PLANNER.max_complete_documents,
-            "overflow_acl_scan_limit": RETRIEVAL_PLANNER.overflow_acl_scan_limit,
+            "enabled": _retrieval_planner().enabled,
+            "thinking": _retrieval_planner().thinking,
+            "max_retrieval_rounds": _retrieval_planner().max_retrieval_rounds,
+            "max_queries_per_round": _retrieval_planner().max_queries_per_round,
+            "model": _retrieval_planner().model or LLM_MODEL,
+            "max_tokens": _retrieval_planner().max_tokens,
+            "context_max_chars": _retrieval_planner().context_max_chars,
+            "max_complete_documents": _retrieval_planner().max_complete_documents,
+            "overflow_acl_scan_limit": _retrieval_planner().overflow_acl_scan_limit,
         },
         "research_log_enabled": RESEARCH_LOG_ENABLED,
         "research_log_db": str(RESEARCH_LOG_DB),
@@ -5574,13 +6089,62 @@ async def health() -> dict[str, Any]:
     }
 
 
+@app.get("/v1/status/{request_id}")
+async def request_status(
+    request_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    client_id = _check_auth(authorization)
+    external_user_id = (
+        request.headers.get("x-rag-user-id")
+        or request.headers.get("x-openwebui-user-id")
+        or request.headers.get("x-open-webui-user-id")
+    )
+    user_id = None
+    if external_user_id:
+        try:
+            user_id = scope_identity(client_id, str(external_user_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Invalid RAG user identity") from exc
+    owner = f"{client_id}|{user_id or ''}"
+    state = _read_progress(request_id, owner)
+    if state is None:
+        # Deliberately indistinguishable from an unknown/expired request.
+        raise HTTPException(status_code=404, detail="Request status not found")
+    return state
+
+
 @app.get("/v1/models")
-async def list_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    _check_auth(authorization)
-    return {
-        "object": "list",
-        "data": [{"id": MODEL_ID, "object": "model", "created": 0, "owned_by": "local-rag", "name": MODEL_NAME}],
-    }
+async def list_models(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    client_id = _check_auth(authorization)
+    external_user_id = (
+        request.headers.get("x-rag-user-id")
+        or request.headers.get("x-openwebui-user-id")
+        or request.headers.get("x-open-webui-user-id")
+    )
+    user_id = None
+    if external_user_id:
+        try:
+            user_id = scope_identity(client_id, str(external_user_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Invalid RAG user identity") from exc
+    try:
+        allowed, default_id = _model_access_for_identity(user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    data: list[dict[str, Any]] = []
+    for model in SUNAQ_MODEL_REGISTRY.list():
+        if model.model_id not in allowed:
+            continue
+        item = model.public_info()
+        item["default"] = model.model_id == default_id
+        data.append(item)
+    return {"object": "list", "data": data}
 
 
 @app.post("/v1/archive/chat/register")
@@ -5659,6 +6223,32 @@ async def chat_completions(
             user_id = scope_identity(client_id, str(external_user_id))
         except ValueError:
             user_id = None
+
+    try:
+        runtime_model = _select_runtime_model(body.model, user_id=user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    _ACTIVE_RUNTIME_MODEL.set(runtime_model)
+    _set_suggestions([])
+
+    raw_progress_id = str(request.headers.get("x-rag-request-id") or "").strip()
+    progress_id = (
+        raw_progress_id
+        if _PROGRESS_ID_RE.fullmatch(raw_progress_id)
+        else completion_id
+    )
+    progress_owner = f"{client_id}|{user_id or ''}"
+    _ACTIVE_PROGRESS_ID.set(progress_id)
+    _ACTIVE_PROGRESS_OWNER.set(progress_owner)
+    _progress("received", "Anfrage wird vorbereitet …")
+
+    log.info(
+        "SunaQ model: requested=%r selected=%s",
+        body.model,
+        runtime_model.model.model_id,
+    )
     log.info(
         "identity: client=%r external_user=%r scoped=%r source_ip=%r",
         client_id, external_user_id, user_id,
@@ -5791,6 +6381,18 @@ async def chat_completions(
             # Explicit source selection is authoritative. A UI choosing only
             # internal scopes must not silently fall back to the live web arm.
             web_capability = False
+
+        if source_scopes is None:
+            log.info(
+                "Request %s source scopes: implicit default documents",
+                completion_id,
+            )
+        else:
+            log.info(
+                "Request %s source scopes: explicit=%s",
+                completion_id,
+                ",".join(sorted(source_scopes)),
+            )
 
         if retrieval_directives and not question:
             content = (
@@ -6458,7 +7060,7 @@ async def chat_completions(
         )
         planner_previous_doc_ids: set[str] = set()
         active_search_spec: dict[str, Any] | None = None
-        rewrite_model = RETRIEVAL_PLANNER.model or ANSWER_MODEL
+        rewrite_model = _retrieval_planner().model or ANSWER_MODEL
         followup_evidence_results: list[SearchResult] = []
         followup_evidence_loaded = False
 
@@ -6506,19 +7108,19 @@ async def chat_completions(
         retrieval_rounds = (
             range(0)
             if (use_references or implicit_filename_use or elastic_mode)
-            else range(1, MAX_RETRIEVAL_ROUNDS + 1)
+            else range(1, _retrieval_planner().max_retrieval_rounds + 1)
         )
 
         for round_no in retrieval_rounds:
             try:
                 if planner_enabled_task:
                     if planner_exhaustive:
-                        retrieval_candidate_limit = RETRIEVAL_PLANNER.exhaustive_verification_candidate_limit
+                        retrieval_candidate_limit = _retrieval_planner().exhaustive_verification_candidate_limit
                     elif planner_bounded_document_set:
-                        retrieval_candidate_limit = RETRIEVAL_PLANNER.bounded_verification_candidate_limit
+                        retrieval_candidate_limit = _retrieval_planner().bounded_verification_candidate_limit
                     else:
                         retrieval_candidate_limit = max(
-                            SEARCH_LIMIT, RETRIEVAL_PLANNER.verification_candidate_limit
+                            SEARCH_LIMIT, _retrieval_planner().verification_candidate_limit
                         )
                     payload, ranked_results = await _rag_search(
                         retrieval_query,
@@ -6626,8 +7228,8 @@ async def chat_completions(
                     )
 
                 if (
-                    RETRIEVAL_PLANNER.enabled
-                    and round_no < MAX_RETRIEVAL_ROUNDS
+                    _retrieval_planner().enabled
+                    and round_no < _retrieval_planner().max_retrieval_rounds
                     and not diminishing_returns
                 ):
                     next_rewrite = await _rewrite_search_spec(
@@ -6673,11 +7275,11 @@ async def chat_completions(
 
             if planner_enabled_task and ranked_results and list_mode is None:
                 if planner_exhaustive:
-                    verification_limit = RETRIEVAL_PLANNER.exhaustive_verification_candidate_limit
+                    verification_limit = _retrieval_planner().exhaustive_verification_candidate_limit
                 elif planner_bounded_document_set:
-                    verification_limit = RETRIEVAL_PLANNER.bounded_verification_candidate_limit
+                    verification_limit = _retrieval_planner().bounded_verification_candidate_limit
                 else:
-                    verification_limit = RETRIEVAL_PLANNER.verification_candidate_limit
+                    verification_limit = _retrieval_planner().verification_candidate_limit
                 preverification_count = len(ranked_results)
                 continuity_extra = sum(
                     1
@@ -6712,17 +7314,37 @@ async def chat_completions(
                     payload,
                     exhaustive=planner_exhaustive,
                 )
-                retrieval_limit_notice = _verification_limit_notice(
+                hard_limit_notice = _verification_limit_notice(
                     notice_candidate_count,
                     verified_count,
                     exhaustive=planner_exhaustive,
                     bounded_document_set=planner_bounded_document_set,
                 )
-                if retrieval_limit_notice:
-                    log.info(
-                        "Request %s candidate verification window limited: ranked=%d checked=%d configured_window=%d",
-                        completion_id, preverification_count, verified_count, effective_verification_limit,
+                capacity_notice = ""
+                if not hard_limit_notice:
+                    capacity_notice = _verification_capacity_notice(
+                        preverification_count,
+                        verified_count,
+                        effective_verification_limit,
+                        exhaustive=planner_exhaustive,
                     )
+                retrieval_limit_notice = hard_limit_notice or capacity_notice
+                if retrieval_limit_notice:
+                    _set_suggestions(_refinement_suggestions(
+                        question,
+                        user_id,
+                        current_model_id=runtime_model.model.model_id,
+                    ))
+                    if hard_limit_notice:
+                        log.info(
+                            "Request %s candidate verification window limited: ranked=%d checked=%d configured_window=%d",
+                            completion_id, preverification_count, verified_count, effective_verification_limit,
+                        )
+                    else:
+                        log.info(
+                            "Request %s candidate verification window near capacity: ranked=%d checked=%d configured_window=%d",
+                            completion_id, preverification_count, verified_count, effective_verification_limit,
+                        )
                 log.info(
                     "RC8 candidate verify: mode=%s checked=%d match=%d uncertain=%d rejected=%d format=%s errors=%d retries=%d elapsed_ms=%d",
                     ("exhaustive" if planner_exhaustive else ("bounded" if planner_bounded_document_set else "normal")),
@@ -6756,11 +7378,16 @@ async def chat_completions(
                     "documents": verification.get("reviewed_documents") or [],
                     "provenance": {
                         "query_rewriter_model": rewrite_model,
-                        "verifier_model": RETRIEVAL_PLANNER.model or LLM_MODEL,
+                        "verifier_model": _retrieval_planner().model or LLM_MODEL,
                         "answer_model": generation_model,
                     },
                 })
-                if planner_exhaustive and len(verified_results) > RETRIEVAL_PLANNER.max_complete_documents:
+                if planner_exhaustive and len(verified_results) > _retrieval_planner().max_complete_documents:
+                    _set_suggestions(_refinement_suggestions(
+                        question,
+                        user_id,
+                        current_model_id=runtime_model.model.model_id,
+                    ))
                     content = (
                         "Die Suche ergibt mehr passende Dokumente, als vollständig und zuverlässig "
                         "in einer Antwort verarbeitet werden können. Bitte grenzen Sie die Suche "
@@ -6847,6 +7474,11 @@ async def chat_completions(
                     web_fallback_pending = not explicit_mixed_web
                     log.info("Request %s internal retrieval too_unspecific; continuing with web=%s", completion_id, True)
                     break
+                _set_suggestions(_refinement_suggestions(
+                    question,
+                    user_id,
+                    current_model_id=runtime_model.model.model_id,
+                ))
                 _research_call(
                     "finish_query", query_id=completion_id, status="too_unspecific",
                     final_retrieval_query=retrieval_query, answer_text=content,
@@ -6873,6 +7505,11 @@ async def chat_completions(
                     web_fallback_pending = True
                     log.info("Request %s internal retrieval unspecific; web fallback may be evaluated", completion_id)
                     break
+                _set_suggestions(_refinement_suggestions(
+                    question,
+                    user_id,
+                    current_model_id=runtime_model.model.model_id,
+                ))
                 _research_call(
                     "finish_query",
                     query_id=completion_id,
@@ -6937,7 +7574,7 @@ async def chat_completions(
             )
             review_context, review_results = _build_review_context(ranked_results)
 
-            if EVIDENCE_DECISION_MODE == "review":
+            if _evidence_decision_mode() == "review":
                 _research_call(
                     "log_documents",
                     round_id=round_id,
@@ -6968,7 +7605,7 @@ async def chat_completions(
 
                 if action == "retry":
                     if (
-                        round_no < MAX_RETRIEVAL_ROUNDS
+                        round_no < _retrieval_planner().max_retrieval_rounds
                         and not planner_enabled_task
                         and not entity_recall_backoff
                         and _eligible_entity_recall_backoff(payload)
@@ -6997,6 +7634,11 @@ async def chat_completions(
                         web_fallback_pending = True
                         log.info("Evidence requested retry; no internal pass left, web fallback may be evaluated")
                         break
+                    _set_suggestions(_refinement_suggestions(
+                        question,
+                        user_id,
+                        current_model_id=runtime_model.model.model_id,
+                    ))
                     _research_call(
                         "finish_query",
                         query_id=completion_id,
@@ -7047,6 +7689,15 @@ async def chat_completions(
                     return _static_response(content, completion_id, body.stream)
 
                 if action == "clarify":
+                    _set_suggestions([
+                        {
+                            "label": str(option.get("label") or "").strip(),
+                            "action": "query",
+                            "query": str(option.get("query") or "").strip(),
+                        }
+                        for option in (decision.get("clarification_options") or [])
+                        if isinstance(option, dict)
+                    ])
                     content = _format_clarification(decision)
                     _research_call(
                         "finish_query",
@@ -7059,7 +7710,7 @@ async def chat_completions(
 
                 if action == "insufficient":
                     if (
-                        round_no < MAX_RETRIEVAL_ROUNDS
+                        round_no < _retrieval_planner().max_retrieval_rounds
                         and not planner_enabled_task
                         and not entity_recall_backoff
                         and _eligible_entity_recall_backoff(payload)
@@ -7248,6 +7899,7 @@ async def chat_completions(
             )
             return _static_response(content, completion_id, body.stream)
 
+    _progress("answering", "Antwort wird erstellt …")
     if not body.stream:
         try:
             answer = await _ollama_complete(
@@ -7331,7 +7983,7 @@ async def chat_completions(
                 query=retrieval_query,
                 heading=internal_heading,
                 include_all_visible=planner_exhaustive,
-            ) + _source_handoff_suffix(results)
+            )
             if auto_web_sources:
                 content += _web_source_suffix(auto_web_sources)
             if retrieval_limit_notice:
@@ -7375,7 +8027,7 @@ async def chat_completions(
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": int(time.time()),
-            "model": MODEL_ID,
+            "model": _active_model_id(),
             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
         }
         yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
@@ -7520,7 +8172,7 @@ async def chat_completions(
                 query=retrieval_query,
                 heading=internal_heading,
                 include_all_visible=planner_exhaustive,
-            ) + _source_handoff_suffix(results)
+            )
             if auto_web_sources:
                 suffix += _web_source_suffix(auto_web_sources)
             if suffix:

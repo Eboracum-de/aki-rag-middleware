@@ -69,7 +69,7 @@ def web_archive_root() -> str:
 def chat_archive_root() -> str:
     cfg = _load_app_yaml()
     chat = cfg.get("chat_archive", {}) or {}
-    return normalize_path(str(chat.get("root") or "AKI-Chats")) or "AKI-Chats"
+    return normalize_path(str(chat.get("root") or "SunaQ-Chats")) or "SunaQ-Chats"
 
 
 @lru_cache(maxsize=1)
@@ -211,16 +211,22 @@ def web_archive_roots() -> tuple[str, ...]:
 
 def chat_archive_roots() -> tuple[str, ...]:
     root = chat_archive_root()
-    return (root,) if root else ()
+    roots = {root} if root else set()
+    # 0.2.x Nextcloud client archive location remains readable after the SunaQ
+    # app-id migration. Fresh installs use SunaQ-Chats.
+    roots.add("AKI-Chats")
+    roots.discard("")
+    return tuple(sorted(roots, key=str.casefold))
 
 
 def internal_exclude_paths() -> list[str]:
-    """Roots excluded from ordinary implicit internal retrieval.
+    """Roots excluded from ordinary implicit document retrieval.
 
-    Mail remains part of the historical/default internal pool. Web archives and
-    AKI chat exports are opt-in to avoid answer-on-answer feedback loops.
+    All archive sources are opt-in. Mail is deliberately explicit as well, so
+    generic OpenAI-compatible clients have one simple provider-side default.
     """
     roots: set[str] = set(chat_archive_roots())
+    roots.update(mail_archive_roots())
     if exclude_web_archive_from_internal():
         roots.update(web_archive_roots())
     roots.discard("")
@@ -239,6 +245,7 @@ def is_machine_sidecar_path(path: str) -> bool:
     return bool(
         name == ".mailmeta.json"
         or (name.startswith(".") and name.endswith(".mailmeta.json"))
+        or (name.startswith(".") and name.endswith(".sunaq.json"))
         or (name.startswith(".") and name.endswith(".akirag.json"))
         or (name.startswith(".") and name.endswith(".metadata.json"))
     )
@@ -290,8 +297,9 @@ def source_scope_allows_record(document_id: str, path: str, scopes: Iterable[str
     if origin not in SPECIAL_ORIGINS:
         origin = classify_source_origin(path, document_id=document_id)
     if normalized is None:
-        # Historical default: ordinary documents + mail, but not archived web or chats.
-        return origin in {"internal", "mail_archive"}
+        # Client-neutral implicit default: ordinary Nextcloud documents only.
+        # Archive sources, including mail, require explicit opt-in.
+        return origin == "internal"
     mapping = {
         "internal": "documents",
         "mail_archive": "mailarchive",

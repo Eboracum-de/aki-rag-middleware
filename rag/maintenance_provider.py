@@ -1,6 +1,6 @@
-"""Minimal OpenAI-compatible provider used while AKI is in maintenance mode.
+"""Minimal OpenAI-compatible provider used while SunaQ is in maintenance mode.
 
-The maintenance provider deliberately does not import the normal provider, RAG API,
+The maintenance provider deliberately does not import the normal provider, SunaQ API,
 LLM backends, Elasticsearch, Qdrant or Neo4j. It only authenticates the registered
 provider-client Bearer key and returns a stable maintenance response.
 """
@@ -24,13 +24,13 @@ from rag.version import VERSION
 
 
 MODEL_ID = os.getenv("PROVIDER_MODEL_ID", "nextcloud-hybrid-rag")
-MODEL_NAME = os.getenv("PROVIDER_MODEL_NAME", "AKI RAG Middleware")
+MODEL_NAME = os.getenv("PROVIDER_MODEL_NAME", "SunaQ")
 MAINTENANCE_MESSAGE = os.getenv(
     "RAG_MAINTENANCE_MESSAGE",
-    "RAG ist im Maintenance-Modus. Bitte versuchen Sie es später erneut.",
+    "SunaQ ist im Maintenance-Modus. Bitte versuchen Sie es später erneut.",
 ).strip() or "RAG ist im Maintenance-Modus. Bitte versuchen Sie es später erneut."
 
-app = FastAPI(title="AKI RAG Middleware Maintenance Provider", version=VERSION)
+app = FastAPI(title="SunaQ Maintenance Provider", version=VERSION)
 
 
 class ChatCompletionRequest(BaseModel):
@@ -137,7 +137,7 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
                 "id": MODEL_ID,
                 "object": "model",
                 "created": 0,
-                "owned_by": "local-rag",
+                "owned_by": "sunaq",
                 "name": MODEL_NAME + " (Maintenance)",
             }
         ],

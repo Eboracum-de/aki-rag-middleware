@@ -1,6 +1,6 @@
 # Commercial licensing policy
 
-AKI RAG Middleware is published as free/open-source software under **GNU AGPL-3.0-only**.
+SunaQ is published as free/open-source software under **GNU AGPL-3.0-only**.
 
 Eboracum GmbH intends to preserve the option of making the same Eboracum-owned code available under separate commercial/proprietary terms when an organization needs rights that are not compatible with its intended use of the AGPL version.
 

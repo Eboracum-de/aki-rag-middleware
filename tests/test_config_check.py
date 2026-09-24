@@ -1,8 +1,21 @@
+from pathlib import Path
+
+import yaml
+
 from rag.config_check import check_config
 
 
+ROOT = Path(__file__).resolve().parent.parent
+LEGACY_MODELS_DIR = ROOT / "tests" / "__no_sunaq_models__"
+
+
 def messages(cfg):
-    return [(issue.level, issue.message) for issue in check_config(cfg)]
+    # These small synthetic configs intentionally exercise the compatibility
+    # single-model path instead of loading the repository's shipped models.
+    return [
+        (issue.level, issue.message)
+        for issue in check_config(cfg, models_dir=LEGACY_MODELS_DIR)
+    ]
 
 
 def test_rejects_no_document_retrieval_arm():
@@ -110,3 +123,20 @@ def test_rejects_unknown_evidence_control_mode():
         level == "error" and "evidence_control.mode must be off or review" in message
         for level, message in found
     )
+
+
+
+def test_shipped_standard_config_validates_effective_sunaq_models():
+    cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+    found = [(issue.level, issue.message) for issue in check_config(cfg)]
+    assert not any(level == "error" for level, _ in found)
+
+
+def test_shipped_super_light_config_validates_model_deployment_overrides():
+    cfg = yaml.safe_load(
+        (ROOT / "install" / "super-light" / "config.super-light.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    found = [(issue.level, issue.message) for issue in check_config(cfg)]
+    assert found == []

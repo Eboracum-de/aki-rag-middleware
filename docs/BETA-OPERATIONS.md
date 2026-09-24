@@ -1,6 +1,6 @@
 # Beta operations runbook
 
-**Reference:** `0.8.5-rc5`  
+**Reference:** `0.8.6-rc1`  
 **Target:** controlled beta deployment behind an administrator-managed network boundary
 
 This document is the short operational path for the current beta candidate. For
@@ -9,20 +9,20 @@ administration see `ADMINISTRATION.md`.
 
 ## 1. Supported deployment matrix
 
-0.8.5 keeps functional profile and deployment mechanism separate, but only two
+0.8.6 keeps functional profile and deployment mechanism separate, but only two
 combinations are regression-tested and accepted for the beta:
 
 | Functional profile | Deployment | Status |
 | --- | --- | --- |
 | `standard` | `native` | supported/tested |
 | `super-light` | `dockerized` | supported/tested |
-| `standard` | `dockerized` | not a 0.8.5 supported mapping |
-| `super-light` | `native` | not a 0.8.5 supported mapping |
+| `standard` | `dockerized` | not a 0.8.6-rc1 supported mapping |
+| `super-light` | `native` | not a 0.8.6-rc1 supported mapping |
 
 Super-Light is one configuration of the same middleware, not a fork. Nextcloud,
 its FullTextSearch Elasticsearch and the LLM endpoint are administrator-managed
-dependencies outside the RAG stack; they may be on separate systems or, where
-ports/resources permit, on the same host. Locally the RAG stack runs API, provider,
+dependencies outside the SunaQ stack; they may be on separate systems or, where
+ports/resources permit, on the same host. Locally the SunaQ stack runs API, provider,
 Neo4j Graph-Lite and Playwright; bundled nginx is optional. Playwright is part of the Super-Light stack by default and requires no `--with-playwright` switch. Qdrant and the local reranker are disabled.
 
 ## 2. Super-Light installation
@@ -65,14 +65,14 @@ sudo ./install/install.sh \
 `--no-x509-strict` does **not** disable normal CA-chain, hostname/SAN, signature
 or validity checks. Do not replace it with `verify_tls:false` in normal operation.
 
-The CA option covers AKI -> Nextcloud traffic. For the reverse direction
-(Nextcloud AKI Recherche app -> AKI HTTPS endpoint), an internal AKI server CA
+The CA option covers SunaQ -> Nextcloud traffic. For the reverse direction
+(Nextcloud SunaQ Recherche app -> SunaQ HTTPS endpoint), an internal SunaQ server CA
 must also be imported into Nextcloud's own certificate store; a successful
 host-shell `curl` is not sufficient evidence for Nextcloud's HTTP client.
 
 ### Same host as Nextcloud/Apache
 
-When Super-Light runs on the same host as Nextcloud and Apache already owns 80/443, keep Apache public and move the bundled RAG nginx to internal ports such as 81/444:
+When Super-Light runs on the same host as Nextcloud and Apache already owns 80/443, keep Apache public and move the bundled SunaQ nginx to internal ports such as 81/444:
 
 ```bash
 sudo ./install/install.sh \
@@ -87,15 +87,15 @@ sudo ./install/install.sh \
   -y
 ```
 
-Apache should then proxy only `/v1/`, `/auth/nextcloud/`, `/rag-admin/`, `/rag-api/` and `/curation/` to `https://127.0.0.1:444`. Leave `/` with Nextcloud. Keep the internal RAG ports blocked from untrusted networks; the installer-generated nginx certificate is self-signed unless replaced. A complete Apache `ProxyPass` example and the backend-TLS notes are in `install/INSTALL.md`.
+Apache should then proxy only `/v1/`, `/auth/nextcloud/`, `/rag-admin/`, `/rag-api/` and `/curation/` to `https://127.0.0.1:444`. Leave `/` with Nextcloud. Keep the internal SunaQ ports blocked from untrusted networks; the installer-generated nginx certificate is self-signed unless replaced. A complete Apache `ProxyPass` example and the backend-TLS notes are in `install/INSTALL.md`.
 
 
 ### Reruns and recorded installation command
 
-The installer also refuses a non-empty `--prefix` that is not recognized as an AKI RAG installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh installs should use a dedicated empty path; current installations carry `.aki-rag-installation` plus installer state for future reruns.
+The installer also refuses a non-empty `--prefix` that is not recognized as an SunaQ installation. This is a safety boundary because profile refreshes replace selected top-level paths such as `rag/`, `docs/` and `clients/`. A typo such as pointing `--prefix` at an unrelated application directory must therefore fail before any files are changed. Fresh 0.8.6 installs should use the default dedicated `/opt/sunaq` path. Recognized older installations keep their existing prefix and legacy marker compatibility; new installs write `.sunaq-installation` plus installer state for future reruns.
 
 
-After installation, keep `/opt/nextcloud-rag/install/last-install-command.sh` with the
+After installation, keep `/opt/sunaq/install/last-install-command.sh` with the
 host's operational records. The installer writes the exact shell-escaped wrapper command
 used on the last run so later maintenance does not depend on reconstructing profile,
 URLs, CA files or optional component switches from memory.
@@ -103,7 +103,7 @@ URLs, CA files or optional component switches from memory.
 Before a rerun, review the stored command and run the equivalent command with `--plan`
 first. The Super-Light installer performs an early preflight for required source paths,
 the installation prefix, CA files and Docker availability. If an existing stack is detected, the preflight inspects its Compose services. **Any
-running AKI RAG service is a hard preflight error** and no installation changes are made;
+running SunaQ service is a hard preflight error** and no installation changes are made;
 stop the complete Super-Light Compose stack before a rerun. A recognized installation
 whose stack is fully stopped is allowed through the repair/rerun path. Missing input
 files or an unreachable installed Docker daemon also fail before the source tree is
@@ -113,11 +113,15 @@ A rerun preserves the site's existing `config.yaml`; it does **not** merge newly
 
 ## 3. First post-install configuration
 
-The installer prints the RAG Admin credential and provider API key and records the local runtime values in `/opt/nextcloud-rag/runtime.env`. Treat that file as a secret. Fresh installs and reruns enter maintenance mode: the provider authenticates trusted client keys but returns only the maintenance response, while normal API/background workers remain stopped. Configure the actual LLM and optional Web Search credentials before user acceptance, then leave maintenance mode with:
+Fresh installs use `/opt/sunaq`. If this is an upgrade of a recognized legacy
+installation, substitute its retained prefix in the commands below.
+
+
+The installer prints the SunaQ Admin credential and provider API key and records the local runtime values in `/opt/sunaq/runtime.env`. Treat that file as a secret. Fresh installs and reruns enter maintenance mode: the provider authenticates trusted client keys but returns only the maintenance response, while normal API/background workers remain stopped. Configure the actual LLM and optional Web Search credentials before user acceptance, then leave maintenance mode with:
 
 ```bash
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh status
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+sudo /opt/sunaq/install/maintenance-mode.sh status
+sudo /opt/sunaq/install/maintenance-mode.sh off
 ```
 
 Use `maintenance-mode.sh on` again before key rotation, restore work or comparable maintenance.
@@ -125,7 +129,7 @@ Use `maintenance-mode.sh on` again before key rotation, restore work or comparab
 Useful Super-Light commands:
 
 ```bash
-cd /opt/nextcloud-rag/install/super-light
+cd /opt/sunaq/install/super-light
 ./status-super-light.sh
 docker-compose ps
 docker-compose logs --tail=100 api provider
@@ -138,36 +142,36 @@ Admin UI or supplied CLIs.
 
 ### 3.1 Backup and restore
 
-RC5 provides the console-first recovery tool `install/backup-restore.sh`. Create and restore operations require AKI maintenance mode; `verify` is read-only. Use a backup target **outside** the installation prefix:
+RC5 provides the console-first recovery tool `install/backup-restore.sh`. Create and restore operations require SunaQ maintenance mode; `verify` is read-only. Use a backup target **outside** the installation prefix:
 
 ```bash
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
-sudo /opt/nextcloud-rag/install/backup-restore.sh create /srv/aki-backups
+sudo /opt/sunaq/install/maintenance-mode.sh on
+sudo /opt/sunaq/install/backup-restore.sh create /srv/aki-backups
 ```
 
-`create` writes a timestamped directory such as `aki-rag-backup-20260922-123702Z` and verifies it before publishing it. The recovery set contains AKI-owned configuration/runtime state, SQLite state including `runtime/users.sqlite`, the matching credential master key, private CA/TLS/operator state below the installation prefix and bundled Neo4j when selected. It deliberately does not back up Nextcloud, Elasticsearch, rebuildable Qdrant, external Neo4j, OpenWebUI/Playwright state or model caches.
+`create` writes a timestamped directory such as `aki-rag-backup-20260922-123702Z` and verifies it before publishing it. The recovery set contains SunaQ-owned configuration/runtime state, SQLite state including `runtime/users.sqlite`, the matching credential master key, private CA/TLS/operator state below the installation prefix and bundled Neo4j when selected. It deliberately does not back up Nextcloud, Elasticsearch, rebuildable Qdrant, external Neo4j, OpenWebUI/Playwright state or model caches.
 
 Treat the recovery directory as a secret: it contains service credentials and the credential master key. Store it with restrictive permissions and, where appropriate, encrypted/off-host.
 
 Verify an existing recovery set independently with:
 
 ```bash
-sudo /opt/nextcloud-rag/install/backup-restore.sh verify \
+sudo /opt/sunaq/install/backup-restore.sh verify \
   /srv/aki-backups/aki-rag-backup-YYYYMMDD-HHMMSSZ
 ```
 
 Restore only after verifying the selected set and while maintenance mode is active:
 
 ```bash
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh on
-sudo /opt/nextcloud-rag/install/backup-restore.sh restore \
+sudo /opt/sunaq/install/maintenance-mode.sh on
+sudo /opt/sunaq/install/backup-restore.sh restore \
   /srv/aki-backups/aki-rag-backup-YYYYMMDD-HHMMSSZ --yes
 ```
 
-Restore is intentionally conservative: the supported deployment profile/mode and installation prefix must match the recovery set. Existing SQLite main/WAL/SHM state covered by the set is replaced coherently; bundled Neo4j is restored when included. A successful restore **leaves AKI in maintenance mode**. Run smoke/health/live-ACL checks and at least one authenticated document query before returning to normal service:
+Restore is intentionally conservative: the supported deployment profile/mode and installation prefix must match the recovery set. Existing SQLite main/WAL/SHM state covered by the set is replaced coherently; bundled Neo4j is restored when included. A successful restore **leaves SunaQ in maintenance mode**. Run smoke/health/live-ACL checks and at least one authenticated document query before returning to normal service:
 
 ```bash
-sudo /opt/nextcloud-rag/install/maintenance-mode.sh off
+sudo /opt/sunaq/install/maintenance-mode.sh off
 ```
 
 The RC5 Super-Light acceptance test exercised a real `users.sqlite` loss: the provider failed closed with an invalid-client 401, then the verified restore recovered the registered provider-client/user credential state and normal authenticated requests. The same recovery set included the bundled Neo4j snapshot/restore step.
@@ -176,10 +180,10 @@ On Super-Light, a warning that `/app/runtime/ca/...` is an external `ca_file` ca
 
 For cross-system recovery order, key/master-key pairing and deletion/lifecycle scope, see `DATA-LIFECYCLE.md`.
 
-## 4. AKI Recherche 0.2.6
+## 4. SunaQ Recherche 0.3.0
 
-AKI is the preferred slim Nextcloud UI for this beta. It targets Nextcloud 23+.
-Install the `akirag` app in Nextcloud, enable it, then configure **Middleware URL**
+SunaQ Recherche is the preferred slim Nextcloud UI for this beta. It targets Nextcloud 23+.
+Install the `sunaq` app in Nextcloud, enable it, then configure **SunaQ URL**
 and **Provider API key** under **Settings → Administration → Additional settings**.
 
 The app proxies server-side and sends the current Nextcloud UID; the provider key
@@ -196,7 +200,7 @@ to true and make sure the Nextcloud host trusts the middleware TLS issuer.
 After a user has completed Login Flow, open:
 
 ```text
-RAG Admin → Users → <Nextcloud login> → Kontakt-DB
+SunaQ Admin → Users → <Nextcloud login> → Kontakt-DB
 ```
 
 Enable/configure the source and choose **Jetzt synchronisieren**. CardDAV uses the
@@ -207,7 +211,7 @@ internal join key.
 CLI equivalent:
 
 ```bash
-cd /opt/nextcloud-rag/install/super-light
+cd /opt/sunaq/install/super-light
 ./contacts.sh list
 ./contacts.sh status --user alice
 ./contacts.sh books --user alice
@@ -229,16 +233,14 @@ Every normal request first produces one small SearchSpec. In
 Super-Light its lexical fields are compiled to Elasticsearch; `semantic_query`
 is retained for portability but is not executed because Qdrant is disabled.
 Neo4j may add known seed/alias forms before the Elasticsearch request. The actual
-Elasticsearch JSON query is logged at INFO for this path. Additional retrieval
-rounds use the same SearchSpec pipeline and are disabled simply by setting
-`max_retrieval_rounds: 1` (or by disabling additional rounds in the legacy-named
-`retrieval_planner` section).
+Elasticsearch JSON query is logged at INFO for this path. The shipped rc1 profiles deliberately use one retrieval round. Additional rounds
+are deferred until the budget-only profile comparison has been accepted.
 
 The absence of a reranker does **not** disable deduplication. Near-identical text
 and common PDF/ODT/copy variants are collapsed before the final candidate path.
-The normal verifier window is 10 authorized candidates in Super-Light (6 in the
-standard reference profile); bounded/exhaustive requests use separate configured
-limits.
+The normal verification/answer budget now comes from the selected SunaQ profile:
+Schnell 10, Gründlich 30 and Tief 50 candidates/documents, subject to deployment
+capabilities and administrator hard ceilings.
 
 Live Nextcloud ACL remains mandatory. Unauthorized results are removed and do not
 trigger adaptive retrieval/backfill merely to fill the context. In the current
@@ -274,11 +276,11 @@ Use at least one real account with ordinary documents and one second account wit
 different ACLs.
 
 1. `status-super-light.sh` reports API/provider/Neo4j/Playwright ready.
-2. AKI appears in Nextcloud navigation and opens without manual URL entry.
+2. SunaQ appears in Nextcloud navigation and opens without manual URL entry.
 3. User 1 completes Login Flow and can query an authorized document.
 4. User 2 cannot receive evidence for a document they cannot access.
 5. Kontakt-DB sync succeeds for one user; Neo4j shows ContactRecords/provenance.
-6. Review one identity candidate: **Identisch** must create non-destructive `SAME_AS` with both Entities still active; **Verschieden** must create `NOT_SAME_AS`. Use technical merge separately only for a true redundant AKI Entity.
+6. Review one identity candidate: **Identisch** must create non-destructive `SAME_AS` with both Entities still active; **Verschieden** must create `NOT_SAME_AS`. Use technical merge separately only for a true redundant SunaQ Entity.
 7. With two files that have the same valid extracted-content hash, verify they consume one duplicate group while live ACL still checks both file IDs and can promote the authorized copy if the ranked representative is denied.
 8. A normal document question works with the Super-Light 10-candidate verifier window.
 9. A Web Research run archives a source as desktop/Landscape PDF plus hidden metadata.
@@ -289,7 +291,7 @@ different ACLs.
 14. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
 15. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
 
-The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and RAG Admin checks with Playwright active by default. Standard/native passed installation, document search and RAG Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout. RC5 incremental field acceptance additionally covers the ACL prefilter/two-user unspecific behavior, Markdown chat continuation and the Super-Light backup/restore roundtrip described above.
+The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and SunaQ Admin checks with Playwright active by default. Standard/native passed installation, document search and SunaQ Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout. RC5 incremental field acceptance additionally covers the ACL prefilter/two-user unspecific behavior, Markdown chat continuation and the Super-Light backup/restore roundtrip described above.
 
 ## 9. Resource reference
 
@@ -309,7 +311,7 @@ will be used. Nextcloud, Elasticsearch and the LLM are external in this figure.
 
 ## 10. Beta freeze
 
-0.8.5-rc5 is the current deployment/operations release-candidate baseline; 0.8.5-rc4.3 remains the preceding accepted/public baseline.
+0.8.6-rc1 is the current deployment/operations release-candidate baseline.
 Expected follow-up work before broader feature expansion is security/curation
 hardening, documentation consistency and adversarial code-vs-docs tests (ACL,
 aliases, Findings, archive boundaries and untrusted content). A change that alters
@@ -325,7 +327,7 @@ Archive scopes (`/mailarchive`, `/webarchive`, `/chatarchive`) filter on mirrore
 A full Elasticsearch reset/reindex is explicit administrator work. Afterwards run:
 
 ```bash
-cd /opt/nextcloud-rag/install/super-light
+cd /opt/sunaq/install/super-light
 docker-compose exec api python -m rag.source_registry reconcile
 ```
 

@@ -1,15 +1,15 @@
-# AKI RAG Middleware
-## Architecture and design baseline 0.8.5-rc5
+# SunaQ / Eboracum Research Gateway
+## Architecture and design baseline 0.8.6-rc1
 
-**Updated:** 22 September 2026  
+**Updated:** 23 September 2026  
 **Status:** Release Candidate  
-**Reference version:** `0.8.5-rc5`
+**Reference version:** `0.8.6-rc1` (draft)
 
 ---
 
 ## 1. Overview
 
-AKI RAG Middleware connects an existing Nextcloud document estate to several retrieval paths and an LLM answer layer. It is not a document store and does not maintain an independent authorization database.
+SunaQ connects an existing Nextcloud document estate to several retrieval paths and a replaceable reasoning/answer backend. It is not a document store and does not maintain an independent authorization database. The retrieval/evidence layer is the core: SunaQ decides what may be searched, what evidence is ACL-visible, how candidates are verified and what context is passed downstream.
 
 The core authorization rule is:
 
@@ -32,7 +32,7 @@ The reference architecture can combine:
 - optional public-Web research through Brave Search or SearXNG;
 - optional Nextcloud-backed Web, Mail and Chat archives.
 
-The model layers are independently configurable. Embedding models, rerankers, planner/verifier roles and answer models can be local or external according to administrator policy.
+The model layers are independently configurable. Embedding models, rerankers and planner/verifier/evidence/answer roles can be local or external according to administrator policy. In 0.8.6, user-visible SunaQ profiles select request-local research budgets and role routing without making the underlying LLM itself the product-level model.
 
 ---
 
@@ -80,7 +80,51 @@ Changing an answer model does not require re-indexing the vector corpus. Changin
 
 Public Web discovery, fetch, passage selection, relevance review and archiving are handled separately from private document retrieval.
 
-### 3.6 Graph-Lite is optional enrichment
+### 3.6 SunaQ profiles are research policies, not LLM identities
+
+The OpenAI-compatible `/v1/models` endpoint exposes SunaQ research profiles rather
+than raw backend-model names. The shipped rc1 profiles are **Schnell**,
+**Gründlich** and **Tief**.
+
+All three currently use one retrieval round, Evidence Review off and planner
+thinking off. Their intentional difference is the amount of candidate
+verification and answer context they may consume. This keeps the first profile
+experiment attributable to budget rather than mixing budget, extra retrieval
+rounds and model reasoning.
+
+Model access is server-side and per canonical user. Schnell is the default;
+stronger profiles are opt-in. A follow-up action may recommend a stronger model
+only when that model is actually allowed for the current user.
+
+### 3.7 SunaQ controls evidence; downstream systems consume it
+
+The current implementation supports Ollama and OpenAI-compatible LLM backends for
+planner/verifier/evidence/answer roles. Architecturally, the downstream endpoint
+is replaceable: an agent or workflow system can be used when it presents a
+compatible contract.
+
+The security boundary remains on the SunaQ side. A downstream system should not
+bypass SunaQ to query Nextcloud, Elasticsearch or Qdrant directly. For future
+agentic retrieval loops, the intended pattern is:
+
+```text
+backend detects evidence gap
+          |
+          v
+structured request for another search
+          |
+          v
+SunaQ validates scope / ACL / budget
+          |
+          v
+SunaQ executes retrieval and returns new evidence
+```
+
+External side effects such as sending mail are a separate future action layer and
+should require explicit capability/policy/approval checks rather than being an
+implicit property of an answer backend.
+
+### 3.8 Graph-Lite is optional enrichment
 
 Graph-Lite and Research Findings are not prerequisites for normal document search.
 
@@ -93,7 +137,7 @@ Curated identity and relation knowledge can improve query expansion, entity reso
 ## 4. High-level architecture
 
 ```text
-                  AKI Recherche / OpenWebUI / trusted API client
+                 SunaQ Recherche / OpenWebUI / trusted API client
                                    |
                          OpenAI-compatible provider
                                    |
@@ -121,9 +165,9 @@ Curated identity and relation knowledge can improve query expansion, entity reso
        optional Candidate Verifier                  |
                  +-----------------+----------------+
                                    |
-                             answer model
+                       reasoning/answer backend
                                    |
-                    sources + optional archives
+                 outcome + sources + provenance
 ```
 
 ---
@@ -175,27 +219,10 @@ SearchSpec:
   constraints:    year=2025
 ```
 
-Reference configuration:
-
-```yaml
-search:
-  es_limit: 50
-  vector_limit: 80
-  vector_threshold: 0.55
-  rrf_k: 60
-  rerank_candidates: 10
-  final_limit: 15
-
-retrieval_planner:
-  enabled: true
-  max_retrieval_rounds: 1
-  model: ""
-  max_tokens: 700
-  context_max_chars: 12000
-  verification_candidate_limit: 6
-  bounded_verification_candidate_limit: 30
-  exhaustive_verification_candidate_limit: 30
-```
+0.8.6 request budgets come from the selected SunaQ profile. The shipped rc1
+profiles use one retrieval round and candidate/answer windows of 10, 30 and 50
+documents for Schnell, Gründlich and Tief respectively. See
+`models/README.md` for the exact profile budgets and administrator hard caps.
 
 `max_retrieval_rounds: 1` means one rewrite followed by one retrieval run.
 
@@ -394,7 +421,7 @@ Research Findings are positive, document-bound verifier observations.
 
 A deterministic `finding_id` combines provenance, supporting document and canonical QueryFrame so repeated equivalent research can coalesce.
 
-Findings are an **optional learning layer**. The normal RAG pipeline does not depend on their curation.
+Findings are an **optional learning layer**. The normal SunaQ pipeline does not depend on their curation.
 
 A typical enrichment loop is:
 
@@ -426,7 +453,7 @@ CanonicalUser --PERFORMED--> ResearchRun --PRODUCED--> ResearchFinding
 
 The ResearchRun stores the original user query and retrieval/runtime provenance. Equivalent runs may therefore converge on the same globally curated Finding. Run-level dismissal controls the work queue only; it does not alter the shared Finding.
 
-Both the administrator user-context view and optional end-user self-service re-check the supporting document through live Nextcloud ACL before exposing Finding evidence. End-user curation uses a separate, short-lived Nextcloud Login Flow session rather than a persistent RAG password or the ordinary provider credential. Self-service is disabled by default and can be gated per canonical user.
+Both the administrator user-context view and optional end-user self-service re-check the supporting document through live Nextcloud ACL before exposing Finding evidence. End-user curation uses a separate, short-lived Nextcloud Login Flow session rather than a persistent SunaQ password or the ordinary provider credential. Self-service is disabled by default and can be gated per canonical user.
 
 ---
 
@@ -560,7 +587,7 @@ Legacy flat archives remain readable and are not moved automatically.
 
 ## 14. Frontends and provider boundary
 
-AKI Recherche is the bundled Nextcloud-native frontend.
+SunaQ Recherche is the bundled Nextcloud-native frontend.
 
 OpenWebUI or another OpenAI-compatible integration can use the same provider when registered as a Trusted Client.
 
@@ -586,13 +613,13 @@ and selects the corresponding server-side Nextcloud credential binding.
 
 Provider keys therefore belong only on trusted integration servers. Externally reachable provider endpoints should be restricted with network policy, reverse-proxy allowlists, mTLS or equivalent controls where appropriate.
 
-This boundary also allows AKI to be composed with other local RAG systems, agents or research tools when the administrator explicitly permits it.
+This boundary also allows SunaQ to be composed with other local reasoning systems, agents or research tools when the administrator explicitly permits it.
 
 ---
 
 ## 15. Process model and latency
 
-The normal AKI request path is served by long-running API/provider processes and is independent from Nextcloud's background-job scheduler.
+The normal SunaQ request path is served by long-running API/provider processes and is independent from Nextcloud's background-job scheduler.
 
 Total latency depends on:
 
@@ -676,26 +703,26 @@ The middleware uses explicit states for incomplete or uncertain processing:
 
 ## 18. Backup and recovery boundary
 
-RC5 adds recovery for **AKI-owned operational state**, not a transaction across the complete Nextcloud/RAG estate. The console recovery set groups state that must remain coherent: configuration/runtime state, AKI SQLite databases, `runtime/users.sqlite` with its matching credential master key, local private CA/TLS/operator files below the installation prefix and bundled Neo4j where selected.
+RC5 adds recovery for **SunaQ-owned operational state**, not a transaction across the complete Nextcloud/SunaQ estate. The console recovery set groups state that must remain coherent: configuration/runtime state, SunaQ SQLite databases, `runtime/users.sqlite` with its matching credential master key, local private CA/TLS/operator files below the installation prefix and bundled Neo4j where selected.
 
 The boundary is intentional:
 
 - **Nextcloud** remains the authoritative source/document/ACL platform and uses its own backup process;
 - **Elasticsearch/FullTextSearch** remains source-platform derived state and is restored/rebuilt separately;
 - **Qdrant** is rebuildable derived state and is excluded from the first recovery format;
-- **external Neo4j** is operator-managed and is not copied into the AKI recovery set;
+- **external Neo4j** is operator-managed and is not copied into the SunaQ recovery set;
 - **bundled Neo4j** is included because Graph-Lite/manual curation may contain non-reconstructible human work;
 - **credential SQLite + master key** are recovered as one unit because separating versions can make encrypted secrets unusable.
 
 Create/restore operations run behind the explicit maintenance gate. Restore verifies checksums, SQLite integrity and credential decryption before replacing state and deliberately leaves the service in maintenance mode afterwards. Operational command sequences are documented in `BETA-OPERATIONS.md`; cross-system restore ordering and lifecycle semantics are in `DATA-LIFECYCLE.md`.
 
-This is recovery, not a unified purge/rollback transaction: AKI does not atomically restore or delete Nextcloud, Elasticsearch, Qdrant and all derived stores together.
+This is recovery, not a unified purge/rollback transaction: SunaQ does not atomically restore or delete Nextcloud, Elasticsearch, Qdrant and all derived stores together.
 
 ---
 
 ## 19. Current release-candidate boundaries
 
-`0.8.5-rc5` is the current release-candidate baseline; `0.8.5-rc4.3` is the preceding accepted/public baseline.
+`0.8.6-rc1` is the current release-candidate baseline.
 
 Known limits include:
 
@@ -717,7 +744,7 @@ The current middleware separates four responsibilities:
 1. **candidate retrieval** — Elasticsearch, optional Qdrant, optional Graph/Web paths;
 2. **private-document authorization** — Nextcloud live ACL;
 3. **evidence review** — Candidate Verifier and Web relevance checks;
-4. **answer generation** — the configured answer model.
+4. **reasoning/outcome generation** — the configured downstream answer backend.
 
 This separation defines component boundaries and failure handling. It also permits individual retrieval/model components to be replaced without changing the live authorization rule.
 

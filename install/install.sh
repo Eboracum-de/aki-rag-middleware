@@ -6,9 +6,11 @@ set -euo pipefail
 # requirements do not leak into other profiles (notably old-OS super-light).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-printf -v AKI_INSTALL_INVOCATION '%q ' "$0" "$@"
-AKI_INSTALL_INVOCATION="${AKI_INSTALL_INVOCATION% }"
-export AKI_INSTALL_INVOCATION
+printf -v SUNAQ_INSTALL_INVOCATION '%q ' "$0" "$@"
+SUNAQ_INSTALL_INVOCATION="${SUNAQ_INSTALL_INVOCATION% }"
+# Compatibility for older profile implementations and reruns.
+AKI_INSTALL_INVOCATION="$SUNAQ_INSTALL_INVOCATION"
+export SUNAQ_INSTALL_INVOCATION AKI_INSTALL_INVOCATION
 PROFILE="standard"
 PROFILE_EXPLICIT=0
 DEPLOYMENT=""
@@ -86,14 +88,14 @@ if [[ -z "$DEPLOYMENT" ]]; then
 fi
 case "$DEPLOYMENT" in native|dockerized) ;; *) echo "Unknown deployment mode: $DEPLOYMENT" >&2; exit 2 ;; esac
 
-# 0.8.5 keeps profile and deployment explicit independent concepts while only
+# 0.8.6 keeps profile and deployment explicit independent concepts while only
 # advertising combinations that have been regression-tested.
 if [[ "$PROFILE:$DEPLOYMENT" == "standard:native" ]]; then
   exec "$SCRIPT_DIR/profiles/install-standard.sh" "${FORWARD[@]}"
 elif [[ "$PROFILE:$DEPLOYMENT" == "super-light:dockerized" ]]; then
   exec "$SCRIPT_DIR/profiles/install-super-light.sh" "${FORWARD[@]}"
 else
-  echo "Unsupported 0.8.5 combination: profile=$PROFILE deployment=$DEPLOYMENT" >&2
+  echo "Unsupported 0.8.6 combination: profile=$PROFILE deployment=$DEPLOYMENT" >&2
   echo "Supported: standard+native, super-light+dockerized" >&2
   exit 2
 fi

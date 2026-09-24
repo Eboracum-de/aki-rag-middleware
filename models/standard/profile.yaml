@@ -1,0 +1,117 @@
+id: sunaq-standard
+name: Schnell
+order: 10
+description: Ausgewogene Recherche mit den validierten 0.8.5-rc5.1 Budgets.
+default: true
+aliases:
+  - nextcloud-hybrid-rag
+legacy_config_overlay: true  # 0.8.5 upgrade bridge; inert on fresh 0.8.6 configs
+
+search:
+  es_limit: 50
+  vector_limit: 80
+  vector_threshold: 0.55
+  rrf_k: 60
+  rerank_candidates: 10
+  final_limit: 10
+  rerank_min_score: null
+
+retrieval_planner:
+  enabled: true
+  thinking: false
+  max_retrieval_rounds: 1
+  max_queries_per_round: 3
+  model: ""
+  max_tokens: 700
+  context_max_chars: 12000
+  max_complete_documents: 15
+  overflow_acl_scan_limit: 80
+  verification_candidate_limit: 10
+  bounded_verification_candidate_limit: 10
+  exhaustive_verification_candidate_limit: 10
+  verification_max_chars_per_document: 2500
+  verification_max_tokens: 900
+  verification_batch_size: 6
+
+evidence_control:
+  mode: "off"
+
+retrieval_signal:
+  enabled: true
+  reject_unspecific: true
+  unspecific_signal_floor: 0.08
+  min_curve_candidates: 8
+  head_size: 3
+  tail_fraction: 0.33
+  small_field_signal: 0.35
+  explicit_anchor_signal: 0.45
+  dominance_ratio: 1.50
+  dominance_margin: 0.10
+  secondary_weight_floor: 0.20
+  overlap_k: 10
+
+entity_resolution:
+  enabled: true
+  fail_open: true
+  retry_seconds: 30
+  fuzzy: true
+  fuzzy_threshold: 86.0
+  fuzzy_max_candidates: 5
+  fuzzy_expansion_min_similarity: 90.0
+
+graph_retrieval:
+  enabled: true
+  limit: 30
+  pair_weight: 0.65
+  relation_weight: 0.90
+  direct_relation_weight: 0.75
+  single_entity_weight: 0.30
+  hydrate_limit: 15
+  snippet_chars: 2400
+
+reranker:
+  backend: "none"
+  model: "BAAI/bge-reranker-v2-m3"
+  device: "cpu"
+  max_length: 512
+  batch_size: 4
+  tei_url: ""
+  timeout_seconds: 30
+  tei_batch_size: 32
+  fallback_backend: "none"
+
+context_enrichment:
+  enabled: true
+  head_chars: 2200
+  window_chars: 1800
+  max_windows: 2
+  max_chars: 7000
+
+answer_context:
+  max_documents: 10
+  max_chars_per_document: 2500
+  max_total_chars: 25000
+
+deployment_overrides:
+  super-light:
+    retrieval_planner:
+      # Budget-only experiment: keep the same 10-document Standard window.
+      verification_candidate_limit: 10
+      bounded_verification_candidate_limit: 10
+      exhaustive_verification_candidate_limit: 10
+    graph_retrieval:
+      # Neo4j remains available for entity/alias expansion only.
+      enabled: false
+    reranker:
+      backend: "none"
+
+
+# Underlying LLM routing is independent from the SunaQ model.
+# Add planner/verifier/evidence/answer overrides here when desired.
+roles: {}
+
+prompts:
+  planner: retrieval_planner.txt
+  verifier: candidate_verifier.txt
+  evidence: evidence_decision.txt
+  answer: rag_answer.txt

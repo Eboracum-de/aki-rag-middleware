@@ -31,8 +31,9 @@ def test_role_backend_inherits_default_and_can_override(monkeypatch):
     assert built["answer"].scope == "remote"
 
 
-def test_remote_answer_context_is_hard_bounded(monkeypatch):
+def test_legacy_remote_answer_context_is_hard_bounded(monkeypatch):
     monkeypatch.setattr(provider, "_role_remote", lambda role: role == "answer")
+    monkeypatch.setattr(provider, "_answer_context_budget", lambda: None)
     monkeypatch.setattr(provider, "REMOTE_ANSWER_MAX_DOCUMENTS", 2)
     monkeypatch.setattr(provider, "REMOTE_LLM_MAX_CHARS_PER_DOCUMENT", 1000)
     monkeypatch.setattr(provider, "REMOTE_LLM_MAX_TOTAL_CHARS", 1700)
@@ -60,3 +61,29 @@ def test_remote_verifier_caps_candidates(monkeypatch):
     if provider._role_remote("verifier"):
         limit = min(limit, provider.REMOTE_VERIFIER_MAX_CANDIDATES)
     assert limit == 3
+
+
+def test_sunaq_remote_answer_context_uses_profile_budget_below_hard_cap(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda role: role == "answer")
+    monkeypatch.setattr(
+        provider,
+        "_answer_context_budget",
+        lambda: {
+            "max_documents": 3,
+            "max_chars_per_document": 1200,
+            "max_total_chars": 3000,
+        },
+    )
+    monkeypatch.setattr(provider, "SUNAQ_REMOTE_HARD_ANSWER_MAX_DOCUMENTS", 5)
+    monkeypatch.setattr(provider, "SUNAQ_REMOTE_HARD_MAX_CHARS_PER_DOCUMENT", 2000)
+    monkeypatch.setattr(provider, "SUNAQ_REMOTE_HARD_MAX_TOTAL_CHARS", 5000)
+    results = [
+        provider.SearchResult(index=i, title=f"d{i}.pdf", text="x" * 5000, raw={})
+        for i in range(1, 6)
+    ]
+
+    context, included = provider._build_context(results)
+
+    assert len(included) == 3
+    assert "d4.pdf" not in context
+    assert len(context) <= 3000 + 20

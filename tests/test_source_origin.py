@@ -34,3 +34,19 @@ def test_per_user_web_archive_root_is_excluded(tmp_path, monkeypatch):
     assert source_origin.is_internal_excluded_path("Research/Alice-Web/2026-09/run/recherche.md")
     assert source_origin.classify_source_origin("Research/Alice-Web/x.txt") == "web_archive"
     assert not source_origin.is_internal_excluded_path("Research/Alice/x.txt")
+
+
+
+def test_sunaq_chat_archives_and_legacy_aki_archives_are_both_classified():
+    assert classify_source_origin("SunaQ-Chats/2026-09/Test.md") == "chat_archive"
+    assert classify_source_origin("AKI-Chats/2026-09/Legacy.md") == "chat_archive"
+    assert classify_source_origin("SunaQ-Chats/.deadbeef.sunaq.json") == "machine_metadata"
+    assert classify_source_origin("AKI-Chats/.deadbeef.akirag.json") == "machine_metadata"
+
+
+def test_elasticsearch_queries_exclude_sunaq_sidecars_before_candidate_limit():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "rag" / "search.py").read_text(encoding="utf-8")
+    assert source.count('{"wildcard": {"title.keyword": "*/.*.sunaq.json"}}') >= 2
