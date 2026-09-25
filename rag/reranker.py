@@ -556,6 +556,8 @@ def _reranker_for_config(config_override: dict | None) -> Reranker:
         return reranker
     cfg = _merged_reranker_config(config_override)
     key = _reranker_key(cfg)
+    if key == _reranker_key(dict(reranker_config)):
+        return reranker
     with _profile_rerankers_lock:
         selected = _profile_rerankers.get(key)
         if selected is None:

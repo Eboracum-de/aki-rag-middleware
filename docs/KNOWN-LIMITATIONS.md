@@ -1,6 +1,6 @@
 # Known limitations
 
-**Reference:** `0.8.6-rc1`
+**Reference:** `0.8.6-rc1.1`
 
 This file records current limits so that beta expectations match the code. Items
 listed here are not necessarily defects; several are deliberate scope boundaries.
@@ -22,10 +22,11 @@ listed here are not necessarily defects; several are deliberate scope boundaries
   polling status channel. The bundled SunaQ app does. A portable streaming
   `reasoning_content` bridge is deferred because it would require restructuring
   the current SSE orchestration.
-- The provider's implicit source default is ordinary documents only. Mail, web
-  archive, chat archive and live web require explicit selection. The bundled
-  SunaQ app currently starts with Documents + Mail selected and sends both
-  explicitly.
+- The provider's implicit source default is ordinary documents only. In SunaQ
+  Recherche 0.3.4, optional Mail/Webarchive/Chat/Web controls start hidden and
+  are shown only after the authenticated capability response confirms the global
+  and per-user gates. Explicit Slash-Directives are subject to the same server-side
+  policy; they do not bypass an administrator-disabled source.
 - Completeness remains bounded. A near-capacity warning means the ranked profile
   window is almost exhausted; it does not claim that additional ACL-visible
   documents are known to exist outside the window.
@@ -47,6 +48,16 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 - Super-Light still supplies several global service secrets through Compose environment files. A non-root account that can operate the Docker daemon/Compose stack can therefore render or inspect those values (for example with `docker-compose config`). Treat Docker-daemon access as privileged/root-equivalent, do not share full rendered Compose output, and restrict membership/access accordingly. Moving routine service-secret delivery to Docker secrets or file-mounted credentials remains deferred hardening.
 - Bundled nginx and OpenWebUI are opt-in in Super-Light. SunaQ Recherche is the
   reference slim Nextcloud UI for the current beta.
+- Super-Light prepares the SunaQ application/provider image during installation,
+  but the selected Neo4j image may still be pulled only when maintenance mode is
+  disabled for the first normal start. This can make `maintenance-mode.sh off`
+  perform an unexpected network download; pulling selected runtime images during
+  installation is deferred installer polish.
+- The bundled nginx starts with a generated bootstrap certificate. Replacing
+  `install/nginx/tls/server.crt` and `server.key` after nginx has already
+  started currently requires an explicit nginx reload/restart before the new
+  certificate is served. Pre-start site-certificate provisioning/reload handling
+  is deferred installer polish.
 - The locally built Playwright renderer pins Playwright/Python package versions and the
   Microsoft base-image tag (`v1.62.0-noble`), but the base image is not yet pinned by
   immutable digest. Digest pinning is deferred dependency hardening.
@@ -120,7 +131,7 @@ listed here are not necessarily defects; several are deliberate scope boundaries
 
 ## SunaQ Recherche
 
-- SunaQ Recherche 0.3.0 targets Nextcloud 23+. New saved chats live as readable Markdown in the user-owned visible `SunaQ-Chats/` Nextcloud folder with `.sunaq.json` machine state. Legacy `AKI-Chats/` / `.akirag.json` archives remain readable. Chats last written by older app versions remain HTML until that conversation is saved or renamed again. Chat archives are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
+- SunaQ Recherche 0.3.4 targets Nextcloud 23+. Each canonical user has exactly one configured Nextcloud chat-archive path and a per-user enable/disable gate below the global `chat_archive.enabled` switch; the default path is `SunaQ-Chats/`. SunaQ does not simultaneously scan an old `AKI-Chats/` folder and the new path. Operators upgrading an older RC can either configure that user to keep using `AKI-Chats/` or move the archive files once into the selected path. Path changes do not move files automatically. Legacy `.akirag.json` / HTML records remain readable within the selected path. Chat archives are a separate, optional `/chatarchive` source scope, not automatically trusted as primary document evidence. A saved chat is a new Nextcloud file with its own ACL/lifecycle; revoking the original source document does not automatically erase text already copied into the chat. Strict revocation deployments should leave chat archive disabled or define a retention/purge process.
 - The app is deliberately thin. Advanced provider diagnostics and administration
   remain in SunaQ Admin rather than being duplicated in SunaQ Recherche.
 

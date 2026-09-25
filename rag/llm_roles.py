@@ -158,9 +158,15 @@ def build_role_backends(
                     f"SunaQ model role {role!r} must use api_key_env; plaintext api_key is not allowed"
                 )
             backend_name = str(override.get("backend") or backend_name).strip().lower()
-            base_url = str(
+            new_base_url = str(
                 override.get("base_url") or override.get("url") or base_url
             ).strip().rstrip("/")
+            if new_base_url != base_url and "scope" not in override:
+                # A compatibility-environment scope describes that environment
+                # endpoint only. Reclassify a profile-selected endpoint unless
+                # the profile explicitly declares its scope.
+                scope_override = ""
+            base_url = new_base_url
             model = str(override.get("model") or model).strip()
             if "verify_tls" in override:
                 verify_tls = _truthy(override.get("verify_tls"), verify_tls)

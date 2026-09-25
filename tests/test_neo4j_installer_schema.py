@@ -25,7 +25,10 @@ def test_super_light_install_stays_provider_only_until_maintenance_is_disabled()
     assert 'SERVICES=(api provider mail-worker neo4j playwright-renderer)' not in script
     assert "compose exec -T api python -m rag.graph --config /app/config.yaml init" not in script
     assert 'command: ["python", "-m", "rag.provider_entrypoint"]' in compose
-    assert "compose up -d neo4j playwright-renderer api mail-worker" in maintenance
+    assert 'local services=(neo4j api)' in maintenance
+    assert 'if state_enabled LOCAL_PLAYWRIGHT' in maintenance
+    assert 'services=(neo4j playwright-renderer api)' in maintenance
+    assert "compose up -d neo4j playwright-renderer api mail-worker" not in maintenance
     assert "compose exec -T api python -m rag.graph --config /app/config.yaml init" in maintenance
     assert "Neo4j/schema: waiting" in maintenance
     assert "returning to maintenance mode" in maintenance

@@ -25,6 +25,11 @@ class Admin implements ISettings {
         return new TemplateResponse('sunaq', 'admin', [
             'middleware_url' => $this->appConfigValue('middleware_url', ''),
             'has_api_key' => $this->appConfigValue('api_key_encrypted', '') !== '',
+            'allow_insecure_http' => in_array(
+                strtolower($this->appConfigValue('allow_insecure_http', '0')),
+                ['1', 'true', 'yes', 'on'],
+                true
+            ),
         ]);
     }
 

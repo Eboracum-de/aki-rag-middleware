@@ -39,6 +39,13 @@ from rag.credential_store import CredentialStore, UserWebSettings
 from rag.llm_backend import build_llm_backend
 from rag.logging_utils import get_logger
 from rag.nextcloud_tls import nextcloud_verify_value
+from rag.policy_hooks import (
+    OUTBOUND_QUERY,
+    POST_FETCH,
+    PRE_FETCH,
+    PRE_PERSIST,
+    apply_policy_hook,
+)
 from rag.source_registry import register_document
 
 log = get_logger("web")
@@ -326,6 +333,13 @@ class WebSearchProvider:
         return False, f"unknown web search provider {self.provider!r}"
 
     async def search(self, query: str) -> list[SearchHit]:
+        query = apply_policy_hook(
+            OUTBOUND_QUERY,
+            content=query,
+            metadata={"provider": self.provider, "target": self.url},
+        )
+        if not isinstance(query, str):
+            raise TypeError("outbound_query policy hook must return str content")
         if self.provider == "brave":
             return await self._brave(query)
         if self.provider == "searxng":
@@ -389,10 +403,21 @@ class WebFetcher:
         status_code = 0
         redirect_count = 0
         try:
-            _validate_public_url(url, self.allow_private)
             async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify_tls, follow_redirects=False) as client:
                 response: httpx.Response | None = None
                 for _ in range(self.max_redirects + 1):
+                    current = apply_policy_hook(
+                        PRE_FETCH,
+                        content=current,
+                        metadata={
+                            "source": "web",
+                            "search_provider": hit.provider,
+                            "original_url": url,
+                            "redirect_count": redirect_count,
+                        },
+                    )
+                    if not isinstance(current, str):
+                        raise TypeError("pre_fetch policy hook must return str content")
                     _validate_public_url(current, self.allow_private)
                     response = await client.get(
                         current,
@@ -413,11 +438,24 @@ class WebFetcher:
                 if response is None:
                     raise RuntimeError("no HTTP response")
                 response.raise_for_status()
-                data = response.content
-                if len(data) > self.max_bytes:
-                    raise RuntimeError(f"source exceeds max_bytes={self.max_bytes}")
                 content_type = str(response.headers.get("content-type") or "application/octet-stream").lower()
                 final_url = str(response.url)
+                data = apply_policy_hook(
+                    POST_FETCH,
+                    content=response.content,
+                    metadata={
+                        "source": "web",
+                        "requested_url": current,
+                        "final_url": final_url,
+                        "content_type": content_type,
+                        "http_status": status_code,
+                    },
+                )
+                if not isinstance(data, (bytes, bytearray)):
+                    raise TypeError("post_fetch policy hook must return bytes content")
+                data = bytes(data)
+                if len(data) > self.max_bytes:
+                    raise RuntimeError(f"source exceeds max_bytes={self.max_bytes}")
 
             title = hit.title
             published = ""
@@ -798,11 +836,18 @@ class PlaywrightRenderer:
     async def render(self, source: FetchedSource) -> RenderedSnapshot | None:
         if not self.enabled or source.content_type != "text/html":
             return None
+        render_url = apply_policy_hook(
+            PRE_FETCH,
+            content=source.final_url,
+            metadata={"source": "playwright", "original_url": source.url},
+        )
+        if not isinstance(render_url, str):
+            raise TypeError("pre_fetch policy hook must return str content")
         async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify_tls) as client:
             response = await client.post(
                 self.url,
                 json={
-                    "url": source.final_url,
+                    "url": render_url,
                     "landscape": self.landscape,
                     "prefer_css_page_size": self.prefer_css_page_size,
                     "viewport_width": self.viewport_width,
@@ -938,6 +983,18 @@ class NextcloudWebArchive:
         content: bytes,
         content_type: str,
     ) -> str | None:
+        content = apply_policy_hook(
+            PRE_PERSIST,
+            content=content,
+            metadata={
+                "source": "web_archive",
+                "target": target,
+                "content_type": content_type,
+            },
+        )
+        if not isinstance(content, (bytes, bytearray)):
+            raise TypeError("pre_persist policy hook must return bytes content")
+        content = bytes(content)
         url = self._url(credential, target)
         response = await client.put(
             url,

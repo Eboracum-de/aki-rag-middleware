@@ -1,5 +1,5 @@
 # Super-light web profile: Playwright renderer is local/loopback and fail-open.
-enabled: true
+enabled: false
 search:
   provider: brave
   url: ''
@@ -26,7 +26,7 @@ relevance:
   min_score: 0.58
   max_sources: 5
 archive:
-  enabled: true
+  enabled: false
   exclude_from_internal_retrieval: true
   write_research_markdown: true
   write_text_snapshot: true
@@ -36,7 +36,7 @@ archive:
   write_metadata_json: true
   write_rendered_pdf: true
   renderer:
-    enabled: true
+    enabled: false
     background: true
     background_runs: 1
     url: http://127.0.0.1:8090/render
@@ -50,7 +50,7 @@ archive:
       height: 900
     persist_state: true
     cleanup:
-      cookie_consent: accept_all
-      dismiss_overlays: true
+      cookie_consent: "off"
+      dismiss_overlays: false
       remove_overlays: false
   timeout: 30

@@ -1,8 +1,8 @@
-# SunaQ / Eboracum Research Gateway
+# SunaQ technical reference
 ## Technical documentation and command reference
 
-**Version:** `0.8.6-rc1` (draft)  
-**Updated:** 23 September 2026
+**Version:** `0.8.6-rc1.1` (draft)  
+**Updated:** 25 September 2026
 
 This file is the consolidated technical reference for the current release-candidate snapshot. Internal development and migration drafts are not part of the release documentation. Where older notes conflict with the current implementation, this reference together with `config.yaml`, `models/*/profile.yaml`, `models/README.md`, `web.yaml`, `provider.env.example` and `versions.lock.yaml` describes the intended baseline.
 
@@ -56,6 +56,28 @@ The bundled provider sends both internal and provider-role credentials. Bundled 
 
 Core FastAPI routes expose their assigned zone in OpenAPI as `x-aki-security-zone`, and CI verifies the route/zone mapping. `X-RAG-User-ID` remains an identity lookup key used only after the trusted-provider boundary; it is **not** caller authentication. Direct access to port 8765 is unsupported. Native startup rejects non-loopback `RAG_API_HOST` unless `RAG_ALLOW_REMOTE_INTERNAL_API=true` is explicitly configured.
 
+### Architecture, preset, component-profile and deployment axes
+
+The rc1.1 documentation separates four concepts that were historically partly
+bundled together:
+
+- **SRC / ERG** describe the architecture/capability boundary. SRC is the
+  conservative Elasticsearch-centric baseline; ERG is the administrator-enabled
+  extension space.
+- **core / workgroup** are planned rc1.2 capability presets. `core` approximates
+  SRC; `workgroup` combines SRC with selected ERG components such as
+  Mail/Web/Chat and Findings/Graph-Lite.
+- **Super-Light / Standard** are component/resource profiles. Super-Light keeps
+  the local footprint small and Elasticsearch-centric; it is not synonymous
+  with SRC.
+- **native / dockerized** are deployment mechanisms. The axes are conceptually
+  independent, although rc1.1 supports and regression-tests only
+  `standard+native` and `super-light+dockerized`.
+
+The existing Standard-installer option `--core` is a **legacy resource
+shorthand for Qdrant + Neo4j**. It is unrelated to the planned rc1.2 `core`
+capability preset and should not be used as terminology for the SRC boundary.
+
 
 ---
 
@@ -69,7 +91,7 @@ sudo ./install/install.sh --plan --full
 
 ## 2.2 Standard/native installer options
 
-The public wrapper accepts `--profile standard|super-light` and `--deployment native|dockerized`. In the 0.8.5 line the regression-tested combinations are `standard+native` and `super-light+dockerized`. Common connection/frontend/proxy switches now use the same names in both profiles. Profile-specific resource switches remain separate because Super-Light deliberately has no Qdrant/reranker arm. On rerun, prior OpenWebUI/proxy selections are retained unless an explicit `--no-...` override is supplied. The options below belong to the standard/native profile.
+The public wrapper accepts `--profile standard|super-light` and `--deployment native|dockerized`. In the 0.8.6-rc1.1 line the supported and regression-tested combinations are `standard+native` and `super-light+dockerized`. Profile and deployment remain explicit, conceptually separate axes even though other combinations are not yet supported. Common connection/frontend/proxy switches use the same names in both profiles. Profile-specific resource switches remain separate because Super-Light deliberately has no Qdrant/reranker arm. On rerun, prior OpenWebUI/proxy selections are retained unless an explicit `--no-...` override is supplied. The options below belong to the standard/native profile.
 
 | Option | Meaning |
 |---|---|
@@ -81,7 +103,7 @@ The public wrapper accepts `--profile standard|super-light` and `--deployment na
 | `--skip-system-packages` | do not install OS packages/Docker |
 | `--with-qdrant` | install/start local Qdrant |
 | `--with-neo4j` | install/start local Neo4j |
-| `--core` | Qdrant + Neo4j |
+| `--core` | legacy Standard-installer resource shorthand: Qdrant + Neo4j; unrelated to the planned rc1.2 `core` capability preset |
 | `--with-openwebui` | install/start or retain the pinned OpenWebUI build |
 | `--no-openwebui` | explicitly disable/remove the OpenWebUI container; persistent volume is retained |
 | `--full` | Qdrant + Neo4j + OpenWebUI |
@@ -166,7 +188,7 @@ Before first start, review at least `config.yaml`, `provider.env` and `runtime.e
 
 ## 2.5 Maintenance mode
 
-RC5 introduces an explicit operator-controlled maintenance state. Fresh installs and installer reruns set:
+The RC5 line introduced an explicit operator-controlled maintenance state; rc1.1 retains it. Fresh installs and installer reruns set:
 
 ```text
 RAG_MAINTENANCE_MODE=true
@@ -194,11 +216,11 @@ While maintenance is **on**:
 
 This is intentionally not an unauthenticated bypass. If the provider-client registry is unavailable, the maintenance provider fails closed rather than accepting arbitrary callers.
 
-For **Super-Light/dockerized**, `maintenance-mode.sh off` starts Neo4j, Playwright, API and mail worker, waits for Neo4j/schema initialization, and only then recreates the normal provider. If schema/startup readiness fails, the script restores `RAG_MAINTENANCE_MODE=true` and returns to the maintenance provider.
+For **Super-Light/dockerized**, `maintenance-mode.sh off` starts Neo4j and the API, plus Playwright only when it was explicitly installed with `--with-playwright`. The mail worker is not part of the baseline startup. The wrapper waits for Neo4j/schema initialization and only then recreates the normal provider. If schema/startup readiness fails, it restores `RAG_MAINTENANCE_MODE=true` and returns to the maintenance provider.
 
 For **Standard/native**, the wrapper performs the corresponding systemd/native process switch. Systemd-managed switching requires root.
 
-Maintenance mode is required before RC5 `backup-restore.sh create` and `restore` operations and is the expected state for comparable invasive maintenance. The restore workflow deliberately leaves SunaQ in maintenance mode until health/smoke/live-ACL checks have completed; see `BETA-OPERATIONS.md` and `DATA-LIFECYCLE.md`.
+Maintenance mode is required before the retained `backup-restore.sh create` and `restore` operations and is the expected state for comparable invasive maintenance. The restore workflow deliberately leaves SunaQ in maintenance mode until health/smoke/live-ACL checks have completed; see `BETA-OPERATIONS.md` and `DATA-LIFECYCLE.md`.
 
 ---
 
@@ -320,16 +342,27 @@ A compact Neo4j seed/alias context is supplied before the rewrite. `elastic_quer
 
 `entities`, `concepts`, `constraints` and `verification_requirements` are analytical side products for Graph-Lite, verifier and provenance; they do not silently rewrite `elastic_query`.
 
-Backend results are fused, deduplicated and optionally reranked. The current normal path then applies live Nextcloud ACL and the Candidate Verifier. ACL denials do not trigger adaptive replacement searches, so the visible candidate window may become smaller. A fixed pre-rerank ACL pool is a documented future optimization, not the current implementation.
+Elasticsearch retrieval can optionally apply the implemented ACL metadata
+prefilter before later ranking work. Its first version uses Nextcloud
+owner/direct-user/group metadata; Circle membership is not yet evaluated. If the
+required identity/group context is unavailable, the prefilter is skipped rather
+than denying otherwise visible evidence. It is only a retrieval optimization:
+the final live WebDAV ACL remains authoritative.
+
+Backend results are fused, deduplicated and optionally reranked. The current
+normal path then applies live Nextcloud ACL and the Candidate Verifier. ACL
+denials do not trigger adaptive replacement searches, so the visible candidate
+window may become smaller. A fixed pre-rerank ACL pool remains a documented
+future optimization and is distinct from the implemented metadata prefilter.
 
 After Candidate Verification, SunaQ can optionally run **Evidence Control**.
-The shipped 0.8.6-rc1 profiles set `evidence_control.mode: off`; this does not
-disable the Candidate Verifier.
+The current rc1.1 shipped profiles set `evidence_control.mode: off`; this does
+not disable the Candidate Verifier.
 
 The configuration split above is part of the 0.8.6 model-package contract; see
 section 3.2 for loading, precedence, custom profiles, role routing and prompts.
 
-The shipped rc1 budgets are:
+The current shipped budgets are:
 
 | Profile | Verification window | Answer documents | Answer total chars |
 | --- | ---: | ---: | ---: |
@@ -338,7 +371,7 @@ The shipped rc1 budgets are:
 | Tief / `sunaq-deep` | 50 | 50 | 200,000 |
 
 All three currently use `max_retrieval_rounds: 1`, Evidence Review off and
-planner thinking off. This isolates budget effects for rc1 acceptance.
+planner thinking off. This keeps the current shipped profile comparison primarily focused on breadth and budget.
 
 Administrator-controlled remote hard ceilings remain separate from profile
 budgets. Legacy/non-packaged compatibility requests retain the older restrictive
@@ -375,11 +408,20 @@ acl:
   verify_tls: true
   timeout: 15
   batch_size: 100
+  prefilter:
+    enabled: false
 ```
 
 `credential_store` is the safe multi-user default. `acl-off` is diagnostic only. The API health payload reports `live_acl.enabled` and `identity_mode`; `enabled=true` should be part of acceptance for every shared deployment.
 
 The live authorization implementation performs a WebDAV `SEARCH` scoped to the current user's files and checks candidate `oc:fileid` values. Checks are batched: with the default `batch_size: 100`, 50 file IDs require **one authenticated WebDAV request**, not 50 requests. This makes the ordinary bounded-candidate check comparable to a normal Nextcloud/WebDAV round trip rather than a per-document network loop.
+
+The optional metadata prefilter runs earlier in Elasticsearch and is not an
+authorization mechanism. The first implementation evaluates owner/direct-user/
+group metadata only; Nextcloud Circles are not yet included. Leave it disabled
+where Circle-only shares must remain discoverable. Missing user/group context
+causes the prefilter to be skipped, while every final candidate still requires
+the live WebDAV check.
 
 Request-dependent `files_accesscontrol` policies can depend on source address, URL, time or user agent. Operators that rely on such rules should include their actual policy shapes in acceptance testing so the middleware request context matches the intended Nextcloud policy.
 
@@ -530,7 +572,7 @@ from legacy global tuning unless they explicitly opt into such behaviour.
 If no packaged model exists at all, SunaQ falls back to the legacy single-model
 compatibility path and uses global `config.yaml` settings.
 
-### Shipped rc1 profiles
+### Current rc1.1 shipped profiles
 
 | Profile | Search/final window | Verification window | Answer context |
 | --- | ---: | ---: | ---: |
@@ -541,9 +583,9 @@ compatibility path and uses global `config.yaml` settings.
 The profile packages differ in more than the final answer budget: they also own
 Elasticsearch/vector candidate limits, verifier/context budgets,
 entity-resolution breadth, graph-retrieval budgets and context-enrichment
-limits. For rc1 all three nevertheless keep one retrieval round, Evidence
-Review off and planner thinking off so the first field comparison remains
-primarily a breadth/budget experiment.
+limits. In rc1.1 all three still keep one retrieval round, Evidence Review off and
+planner thinking off, so the current field comparison remains primarily a
+breadth/budget experiment.
 
 ### LLM role routing inside a profile
 
@@ -614,7 +656,7 @@ shipped packages may be added.
 
 ## 3.3 `provider.env` / `runtime.env`
 
-`runtime.env` contains deployment/global service secrets and operational flags. In RC5 the maintenance-state flag is:
+`runtime.env` contains deployment/global service secrets and operational flags. The maintenance-state flag introduced in the RC5 line and retained in rc1.1 is:
 
 ```bash
 RAG_MAINTENANCE_MODE=true
@@ -761,7 +803,7 @@ cd /opt/sunaq
 - Provider;
 - Graph Worker only when Neo4j + GraphQueue are enabled;
 - ES → Qdrant Sync Worker only when `sync_worker.enabled=true` and Qdrant is enabled;
-- Mail Worker only when `mail.enabled=true`.
+- Mail Worker only when both `mail.enabled=true` and `mail.worker.enabled=true`.
 
 Individual starts:
 
@@ -1742,23 +1784,40 @@ For latency measurements, record the WebDAV SEARCH time separately from total an
 
 # 22. Current feature/freeze status
 
-**Implemented in the 0.8.6-rc1 candidate:**
+**Implemented in the current 0.8.6-rc1.1 candidate:**
 
-- common middleware core with `standard+native` and `super-light+dockerized`;
-- SunaQ research profiles Schnell/Gründlich/Tief with per-user entitlement;
-- request-local profile budgets, prompt packs and LLM-role routing;
-- Query Rewriter/SearchSpec + Elasticsearch + optional Qdrant; Neo4j
+- common middleware core with the supported mappings `standard+native` and
+  `super-light+dockerized`;
+- SunaQ research profiles Schnell/Gründlich/Tief with per-user entitlement,
+  request-local budgets, prompt packs and role-specific LLM routing;
+- Query Rewriter/SearchSpec + Elasticsearch, optional Qdrant and Neo4j
   seed/alias expansion;
-- live Nextcloud ACL without adaptive post-denial backfill;
-- bounded Candidate Verification with hard-limit and near-capacity signalling;
+- optional Elasticsearch ACL metadata prefilter over owner/direct-user/group
+  metadata, with live Nextcloud WebDAV ACL remaining the final authorization
+  boundary;
+- bounded Candidate Verification without adaptive post-denial backfill;
 - deterministic follow-up actions and identity-scoped request progress;
-- SunaQ Recherche 0.3.0 for Nextcloud 23+;
-- Brave/SearXNG Web Research and Nextcloud-backed Mail/Web/Chat archives;
+- SunaQ Recherche **0.3.4** for Nextcloud 23+;
+- Brave/SearXNG Web Research and optional Nextcloud-backed Mail/Web/Chat archives;
+- authenticated source-capability filtering: optional sources are available only
+  while the global service gate and the canonical user's gate are both enabled,
+  and unavailable controls stay hidden in the bundled client;
 - Graph-Lite Findings/curation, CardDAV seeds and multi-user Login Flow;
-- maintenance/recovery tooling inherited and hardened from rc5.1.
+- one administrator-selected chat-archive path plus per-user enable/disable gate
+  below the global `chat_archive.enabled` switch;
+- HTTPS-by-default credential-bearing SunaQ Recherche transport;
+- fresh-install minimal defaults: Web/Web archive, chat-archive evidence/writes,
+  Research-Finding persistence and mail worker remain off until enabled;
+- explicit SRC/ERG architecture terminology, with installer/configuration
+  enforcement deferred to rc1.2;
+- maintenance/recovery tooling inherited from earlier release candidates and
+  retained in the current line.
 
-**Intentionally outside rc1 scope:**
+**Intentionally outside the current rc1.1 baseline:**
 
+- supported SRC/ERG capability presets and consistency validation;
+- authoritative server-side conversation state;
+- configured policy/inspection adapters for the rc1.1 hook scaffold;
 - additional profile-specific retrieval rounds;
 - planner/model Thinking as a default profile differentiator;
 - a generic side-effect/action execution layer;
@@ -1766,29 +1825,43 @@ For latency measurements, record the WebDAV SEARCH time separately from total an
 - automatic global fact materialization from QueryFrames;
 - `standard+dockerized` as a released deployment path.
 
-See `models/README.md`, `KNOWN-LIMITATIONS.md` and `ROADMAP.md`.
+See `models/README.md`, `SRC-ERG.md`, `KNOWN-LIMITATIONS.md` and `ROADMAP.md`.
+
+### Policy/inspection hook scaffold
+
+`rag/policy_hooks.py` defines the common `ALLOW | BLOCK | QUARANTINE | MODIFY`
+contract and the stages `outbound_query`, `pre_fetch`, `post_fetch`,
+`pre_persist` and `pre_model_egress`. rc1.1 wires these into Web
+search/fetch/Playwright, Web-archive writes, IMAP message/attachment import,
+Mail-archive writes and LLM/embedding backend calls.
+
+No evaluator is installed by default, so every hook is an ALLOW-only no-op.
+Model/embedding hooks are invoked at the backend boundary for both local and
+remote endpoints; evaluator metadata includes backend/base URL/model so a later
+policy can distinguish trust zones without duplicating endpoint classification
+inside each caller.
 
 ---
 
 # 23. Release validation
 
-The 0.8.5-rc4 package baseline has been checked for:
+The rc1.1 candidate retains the release-tested 0.8.6-rc1 architecture baseline
+and adds targeted regression coverage for the post-public hardening changes:
+role-scope reclassification, explicit context-budget handling, reranker
+configuration/reuse, model alias collisions, per-user chat-archive selection and
+enablement, authenticated optional-source capability filtering,
+HTTPS-by-default Nextcloud provider transport, public `/v1/` pressure limits,
+chat-archive capability enforcement and deferred `/use` Findings enrichment.
 
-```text
-MANIFEST                 264/264 OK
-pytest                    375 passed
-YAML                      13 files OK
-XML                       2 files OK
-Shell syntax              OK
-Python compile            OK
-SunaQ/PHP                   9 files OK
-JavaScript syntax         OK
-Package hygiene           OK
-```
+The current branch is not considered release-validated merely because individual
+development commits pass tests. Promotion requires the final repository CI,
+manifest/hygiene checks and review state to be green on the release head, followed
+by the intended installation/acceptance checks for the supported deployment path.
 
-The rc4.3 release-candidate baseline has completed blank-VM acceptance for both supported deployment mappings. Super-Light/dockerized completed installation and passed document-search and SunaQ Admin checks with Playwright active as part of the normal stack. Standard/native completed installation and passed document-search and SunaQ Admin checks; the optional Playwright renderer was built and started automatically when selected. CI covers the shared regression suite, while the field passes exercise real Nextcloud/Elasticsearch/Neo4j and installer behavior.
-
-Registry images recorded in the Compose lock set are digest-pinned. The locally built Playwright renderer currently uses a version-tag-pinned Microsoft base image rather than an immutable base-image digest; this is documented deferred hardening in `KNOWN-LIMITATIONS.md`. Secrets are not part of the package.
+Registry images recorded in the Compose lock set are digest-pinned. The locally
+built Playwright renderer currently uses a version-tag-pinned Microsoft base image
+rather than an immutable base-image digest; this is documented deferred hardening
+in `KNOWN-LIMITATIONS.md`. Secrets are not part of the package.
 
 ## Role-specific LLM routing
 
@@ -1829,7 +1902,9 @@ Configuration:
 
 ```yaml
 research_findings:
-  enabled: true
+  # Fresh-install default: false. Enable only after accepting the durable
+  # Findings/curation lifecycle.
+  enabled: false
   timeout: 5
   max_documents_per_request: 30
   curation:
@@ -1852,7 +1927,7 @@ The legacy-compatible `finding_id` remains deterministic from provenance, docume
 
 Admin curation is user-context scoped. The SunaQ Admin selects a canonical Nextcloud user; the backend requires that the selected user actually produced the Finding and re-checks the supporting document through the user's current live Nextcloud ACL before returning Finding evidence. Unauthorized Findings are omitted from lists and counts.
 
-RC5 adds lazy cleanup at these Finding ACL-filter points. When a successful ACL check definitively denies a numeric Nextcloud `files:<id>`, the graph layer may remove the selected/current user's `PRODUCED` edges for Findings that are still completely uncurated. The shared Finding is deleted only after its last ResearchRun reference disappears. Finding curator status/suppression, `CURATED_ENTITY` edges or any Finding-derived RelationObservation prevent deletion. ACL/backend/TLS/network/credential errors and non-numeric/non-Nextcloud identifiers never trigger cleanup. This mechanism is not called by Qdrant sync and does not replace a future explicit cross-store `purge-document` workflow.
+The RC5 line introduced lazy cleanup at these Finding ACL-filter points; rc1.1 retains the same bounded behavior. When a successful ACL check definitively denies a numeric Nextcloud `files:<id>`, the graph layer may remove the selected/current user's `PRODUCED` edges for Findings that are still completely uncurated. The shared Finding is deleted only after its last ResearchRun reference disappears. Finding curator status/suppression, `CURATED_ENTITY` edges or any Finding-derived RelationObservation prevent deletion. ACL/backend/TLS/network/credential errors and non-numeric/non-Nextcloud identifiers never trigger cleanup. This mechanism is not called by Qdrant sync and does not replace a future explicit cross-store `purge-document` workflow.
 
 Optional end-user curation is exposed at `/curation/`. It uses Nextcloud Login Flow v2 once per curation session and creates no separate SunaQ password. The returned app password is stored only in the encrypted `curation_sessions` table, not in the normal provider credential namespace and not in `identity_bindings`.
 

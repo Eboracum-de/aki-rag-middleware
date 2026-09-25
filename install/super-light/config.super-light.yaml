@@ -154,7 +154,8 @@ graph_queue:
 # work already performed for the user query; it never starts a graph-extraction
 # LLM pass and never stores rejected/uncertain document-query pairs.
 research_findings:
-  enabled: true
+  # Optional knowledge/curation layer; disabled in the Secure Nextcloud RAG baseline.
+  enabled: false
   timeout: 5
   max_documents_per_request: 30
   curation:
@@ -225,6 +226,12 @@ dedup:
   near_text_ratio: 0.96
   min_text_chars: 500
   min_length_ratio: 0.8
+chat_archive:
+  # Chat history may exist in Nextcloud, but using it as retrieval evidence is
+  # an explicit administrator decision.
+  enabled: false
+  root: SunaQ-Chats
+
 mail_metadata:
   enabled: true
   timeout: 10

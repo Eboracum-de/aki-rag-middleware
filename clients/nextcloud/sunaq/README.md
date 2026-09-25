@@ -1,4 +1,4 @@
-# SunaQ Recherche 0.3.0
+# SunaQ Recherche 0.3.4
 
 Schlankes Nextcloud-23+-Frontend für SunaQ / Eboracum Research Gateway 0.8.6.
 
@@ -19,9 +19,16 @@ Schlankes Nextcloud-23+-Frontend für SunaQ / Eboracum Research Gateway 0.8.6.
   currently allowed for that user;
 - visible context-boundary hint: unrelated topics should use a new chat;
 - effective source scopes are shown next to each SunaQ answer;
-- persistent per-user chat history as Markdown plus metadata below
-  `SunaQ-Chats/`; legacy `AKI-Chats` / `.akirag.json` archives remain readable.
-- Legacy-HTML chat archives remain readable; when such a conversation is saved or renamed again, the current Markdown representation is written and the superseded managed HTML archive is removed.
+- source chips are filtered by authenticated server capabilities. Optional
+  sources that are globally disabled or not enabled for the current user are not
+  shown in the UI and are also rejected server-side when requested explicitly;
+- persistent per-user chat history as Markdown plus metadata when both the global
+  and per-user chat archive capability are enabled below one
+  administrator-selected Nextcloud path (default: `SunaQ-Chats/`);
+- legacy `.akirag.json` / Legacy-HTML records remain readable when they are
+  inside the selected archive path. SunaQ does not scan `SunaQ-Chats/` and `AKI-Chats/`
+  in parallel. For an older RC archive, either configure that user's target as
+  `AKI-Chats` or move the files once to the selected SunaQ path.
 
 The model list is loaded when the app starts. If an administrator changes a
 user's model entitlement while an existing browser tab remains open, reload the
@@ -36,10 +43,10 @@ state.
 
 The provider's client-neutral implicit default is **Documents only**.
 
-The SunaQ app intentionally starts with **Documents** and **Mail** selected and
-therefore sends both scopes explicitly unless the user changes the chips. Other
-OpenAI-compatible clients that send no source directive use the provider default
-and search ordinary documents only.
+The SunaQ app intentionally starts with **Documents only** selected. Other
+OpenAI-compatible clients that send no source directive use the same provider
+default. Mail/Web/chat scopes remain explicit choices, and administrator
+capability gates remain authoritative.
 
 Explicit directives in the user request override the UI selection:
 
@@ -69,7 +76,9 @@ navigation entry and ships its own `img/app.svg`.
 
 For an intentionally internal SunaQ URL, Nextcloud may require
 `allow_local_remote_servers => true`. The Nextcloud host must trust the TLS CA
-used by the middleware endpoint. Users still complete the middleware's one-time
+used by the middleware endpoint. Credential-bearing requests require HTTPS by
+default. Plain HTTP is available only through the explicit **Unsicheres HTTP**
+administrator opt-in for controlled lab/test networks. Users still complete the middleware's one-time
 Nextcloud Login Flow; the resulting app credential is reusable for live ACL and
 optional Kontakt-DB synchronization.
 
@@ -83,3 +92,11 @@ optional Kontakt-DB synchronization.
 - 0.2.6: readable Markdown chat archives with stable provenance.
 - 0.3.0: SunaQ app id/name, model selector, request progress, source chips and
   provider follow-up actions.
+- 0.3.1: per-user single chat-archive path and HTTPS-by-default provider
+  credential transport with an explicit lab-only HTTP opt-in.
+- 0.3.2: server-controlled chat persistence plus lifecycle cleanup for manually
+  deleted managed chat Markdown files.
+- 0.3.3: authenticated source-capability filtering and a per-user chat-archive
+  enable/disable switch layered below the global administrator gate.
+- 0.3.4: optional source chips are hidden by default and shown only after an
+  authenticated capability check confirms that the source is available.

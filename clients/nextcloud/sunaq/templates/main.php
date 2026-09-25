@@ -50,10 +50,10 @@ style('sunaq', 'style');
 
                         <div class="sunaq-scopes" aria-label="Quellen">
                             <label class="sunaq-scope-chip"><input type="checkbox" name="sunaq-scope" value="documents" checked><span>Dokumente</span></label>
-                            <label class="sunaq-scope-chip"><input type="checkbox" name="sunaq-scope" value="mailarchive" checked><span>Mail</span></label>
-                            <label class="sunaq-scope-chip"><input type="checkbox" name="sunaq-scope" value="webarchive"><span>Webarchiv</span></label>
-                            <label class="sunaq-scope-chip"><input type="checkbox" name="sunaq-scope" value="chatarchive"><span>Chats</span></label>
-                            <label class="sunaq-scope-chip"><input type="checkbox" name="sunaq-scope" value="web"><span>Web</span></label>
+                            <label class="sunaq-scope-chip" hidden><input type="checkbox" name="sunaq-scope" value="mailarchive"><span>Mail</span></label>
+                            <label class="sunaq-scope-chip" hidden><input type="checkbox" name="sunaq-scope" value="webarchive"><span>Webarchiv</span></label>
+                            <label class="sunaq-scope-chip" hidden><input type="checkbox" name="sunaq-scope" value="chatarchive"><span>Chats</span></label>
+                            <label class="sunaq-scope-chip" hidden><input type="checkbox" name="sunaq-scope" value="web"><span>Web</span></label>
                         </div>
                     </div>
 

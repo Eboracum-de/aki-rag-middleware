@@ -22,6 +22,23 @@ def test_web_alone_is_web_only_but_documents_plus_web_is_mixed():
     assert mixed.source_scopes == {'documents'}
 
 
+def test_chat_archive_evidence_is_admin_gated_by_default():
+    root = __import__("pathlib").Path(__file__).resolve().parent.parent
+    cfg = __import__("yaml").safe_load((root / "config.yaml").read_text())
+    assert cfg["chat_archive"]["enabled"] is False
+
+    provider_source = (root / "rag" / "openai_provider.py").read_text()
+    api_source = (root / "rag" / "api.py").read_text()
+    assert 'os.getenv("CHAT_ARCHIVE_ENABLED", _chat_archive_default)' in provider_source
+    assert 'def _disabled_requested_sources(' in provider_source
+    assert '"chatarchive": chat_enabled' in provider_source
+    assert 'classify_source_origin(' in api_source
+    assert '== "chat_archive"' in api_source
+    assert 'not CHAT_ARCHIVE_ENABLED' in api_source
+    assert '"chat_archive_enabled": chat_enabled' in provider_source
+    assert '"reason": "chat_archive_disabled"' in provider_source
+
+
 def test_explicit_archives_parse_without_changing_engine():
     parsed = _parse_retrieval_directives('/webarchive /chatarchive Vorgang')
     assert parsed.error is None
@@ -52,6 +69,31 @@ def test_source_origin_classifies_mail_and_chat_scopes(tmp_path, monkeypatch):
     assert not source_origin.source_scope_allows_path('AKI-Chats/abc.html', None)
 
 
+def test_chat_archive_root_history_remains_excluded_from_implicit_documents(tmp_path, monkeypatch):
+    import rag.source_origin as source_origin
+
+    db = tmp_path / "users.sqlite"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE user_chat_settings(canonical_user_id TEXT, target_path TEXT, updated_at REAL)"
+    )
+    con.execute(
+        "CREATE TABLE chat_archive_roots(target_path TEXT PRIMARY KEY, first_seen_at REAL, last_seen_at REAL)"
+    )
+    con.execute("INSERT INTO user_chat_settings VALUES('u1','SunaQ-Chats',1)")
+    con.execute("INSERT INTO chat_archive_roots VALUES('Research/Old-Chats',1,2)")
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(source_origin, "_credential_store_path", lambda: db)
+    source_origin._chat_archive_roots_for_stamp.cache_clear()
+    assert source_origin.classify_source_origin("Research/Old-Chats/old.md") == "chat_archive"
+    assert not source_origin.source_scope_allows_path("Research/Old-Chats/old.md", None)
+    assert source_origin.source_scope_allows_path(
+        "Research/Old-Chats/old.md", {"chatarchive"}
+    )
+
+
 def test_sunaq_client_has_scope_ui_and_server_side_chat_archive():
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent / 'clients' / 'nextcloud' / 'sunaq'
@@ -61,10 +103,13 @@ def test_sunaq_client_has_scope_ui_and_server_side_chat_archive():
     controller = (root / 'lib' / 'Controller' / 'ChatController.php').read_text(encoding='utf-8')
     for scope in ['documents', 'mailarchive', 'webarchive', 'chatarchive', 'web']:
         assert f'value="{scope}"' in main
+    assert 'value="documents" checked' in main
+    assert 'value="mailarchive" checked' not in main
     assert 'explicit user source selection wins over UI state' in proxy
     assert "const FOLDER = 'SunaQ-Chats'" in store
-    assert "const LEGACY_FOLDER = 'AKI-Chats'" in store
-    assert "$record['archive_path'] = $folder->getName() . '/' . $archiveFile;" in store
+    assert "chat_archive_path" in store
+    assert "LEGACY_FOLDER" not in store
+    assert "$record['archive_path'] = $this->archivePath() . '/' . $archiveFile;" in store
     assert '.akirag.json' in store
     assert "'source_origin' => 'chat_archive'" in store
     assert "'format' => 'markdown'" in store
@@ -190,3 +235,18 @@ def test_vector_documents_scope_excludes_all_archive_origins(monkeypatch):
         'chat_archive',
     }
     assert calls[0]['include_source_origins'] is None
+
+
+def test_use_findings_enrichment_is_deferred_until_after_answer_generation():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    provider = (root / "rag" / "openai_provider.py").read_text(encoding="utf-8")
+    assert "deferred_use_findings: dict[str, Any] | None = None" in provider
+    assert "_schedule_use_research_findings(**deferred_use_findings)" in provider
+    use_start = provider.index("if use_references or implicit_filename_use:")
+    use_end = provider.index("\n        if elastic_mode:", use_start)
+    assert use_start >= 0 and use_end > use_start
+    use_branch = provider[use_start:use_end]
+    assert "await _store_use_research_findings(" not in use_branch
+    assert "_BACKGROUND_TASKS.add(task)" in provider
+    assert '_ACTIVE_PROGRESS_ID.set("")' in provider

@@ -496,3 +496,49 @@ def test_nextcloud_login_flow_presents_only_sunaq_brand():
     assert '"User-Agent": "SunaQ"' in curation
     assert "Nextcloud-RAG-Middleware/" not in api
     assert "AKI-RAG/" not in curation
+
+
+def test_model_id_cannot_collide_with_alias_loaded_earlier(tmp_path):
+    models = tmp_path / "models"
+    _write_profile(
+        models,
+        "a-standard",
+        {
+            "id": "sunaq-standard",
+            "default": True,
+            "aliases": ["chef"],
+        },
+    )
+    _write_profile(
+        models,
+        "z-chef",
+        {
+            "id": "chef",
+        },
+    )
+    with pytest.raises(RuntimeError, match="chef"):
+        load_model_registry({}, models_dir=models)
+
+
+def test_runtime_reranker_config_merges_profile_over_global_defaults(monkeypatch):
+    from rag import search
+
+    monkeypatch.setattr(
+        search,
+        "RERANKER_CONFIG",
+        {"backend": "local", "batch_size": 4, "model": "base-reranker"},
+    )
+    with search.use_runtime_model_config({"reranker": {"batch_size": 8}}):
+        effective = search._runtime_reranker_config()
+    assert effective["backend"] == "local"
+    assert effective["model"] == "base-reranker"
+    assert effective["batch_size"] == 8
+
+
+def test_identical_reranker_config_reuses_warmed_global_instance():
+    from rag import reranker as reranker_module
+
+    assert (
+        reranker_module._reranker_for_config(dict(reranker_module.reranker_config))
+        is reranker_module.reranker
+    )

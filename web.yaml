@@ -33,7 +33,8 @@ relevance:
   max_sources: 5
 
 archive:
-  enabled: true
+  # Live web and web archiving are separate opt-in capabilities.
+  enabled: false
   # No root here in multi-user beta mode: target_path is per canonical user.
   # An explicit archive.root is accepted only as a single-user compatibility fallback.
   exclude_from_internal_retrieval: true

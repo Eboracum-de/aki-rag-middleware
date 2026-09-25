@@ -274,6 +274,8 @@ def test_core_routes_declare_machine_readable_security_zones():
 
 @pytest.mark.asyncio
 async def test_provider_chat_archive_registration_scopes_external_identity(monkeypatch):
+    monkeypatch.setattr(provider, "CHAT_ARCHIVE_ENABLED", True)
+    monkeypatch.setattr(provider, "_chat_archive_state", lambda user_id: ("AKI-Chats", True))
     captured = {}
 
     class DummyResponse:
@@ -324,6 +326,7 @@ async def test_provider_chat_archive_registration_scopes_external_identity(monke
 
 @pytest.mark.asyncio
 async def test_provider_chat_archive_registration_rejects_invalid_scoped_identity(monkeypatch):
+    monkeypatch.setattr(provider, "CHAT_ARCHIVE_ENABLED", True)
     monkeypatch.setattr(provider, "_check_auth", lambda authorization: "client-a")
     monkeypatch.setattr(
         provider,

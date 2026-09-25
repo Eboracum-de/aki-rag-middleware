@@ -1,21 +1,23 @@
 # Neo4j application schema
 
-This is the canonical internal reference for the Neo4j schema supported by AKI RAG Middleware 0.8.5-rc5. It describes the application contract derived from all Cypher access in the private development repository. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
+This is the canonical internal reference for the Neo4j schema supported by SunaQ since `0.8.5-rc5`. It describes the application contract derived from the Cypher access used by the current SunaQ codebase. It is not a `SHOW SCHEMA` dump: Neo4j exposes constraints and indexes there, but not the optional property contract, secondary labels, provenance rules or compatibility fields.
 
 ## Contract rules
 
 - A **required key** is an identifier used in `MATCH`/`MERGE` and protected by a uniqueness constraint where the label has an independent lifecycle.
 - All other properties are **optional** unless a write path explicitly needs them for the operation being performed. Historic nodes and relationships may legitimately omit optional fields.
 - Optional properties must be read as `properties(value)['field']` (usually with `coalesce`) so an empty or partial database does not emit `UnknownPropertyKeyWarning`.
-- AKI creates constraints and indexes with `IF NOT EXISTS`. Repeating initialization is supported.
+- SunaQ creates constraints and indexes with `IF NOT EXISTS`. Repeating initialization is supported.
 - Secondary labels such as `Person`, `Organization`, `OrganizationalUnit`, `Claim` and `AKIResearchFinding` refine a primary object; they are not separate identity stores.
+- `AKIResearchFinding` is a retained compatibility label from the pre-SunaQ
+  naming and is therefore intentionally not renamed in this schema reference.
 - No synthetic nodes or dummy properties are created to register property tokens.
 
 ## Node labels and properties
 
-“W” means AKI writes the field. “R” means AKI reads it. Unless marked required, listed fields are optional and may be absent on legacy data.
+“W” means SunaQ writes the field. “R” means SunaQ reads it. Unless marked required, listed fields are optional and may be absent on legacy data.
 
-| Label | Required key / role | Optional properties used by AKI | Access |
+| Label | Required key / role | Optional properties used by SunaQ | Access |
 |---|---|---|---|
 | `Entity` | `entity_id`; shared identity node | `display_name`, `identity_key`, `entity_kind`, `identity_status`, `origin`, `display_name_source_contact_id`, `merged_into_entity_id`, `confirmation_method`, `confirmed_at`, `created_at`, `updated_at`, `merged_at`, `orphaned_at`, `orphan_reason`/`orphaned_reason`, `last_document_seen_at`, `source_finding_id` | R/W |
 | `Person` | Secondary label on `Entity` | Uses the `Entity` property contract | R/W label |

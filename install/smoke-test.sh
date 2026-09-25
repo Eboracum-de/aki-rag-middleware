@@ -66,10 +66,6 @@ else
   QDRANT_ENABLED=""
 fi
 
-if [[ "$DEPLOYMENT_PROFILE" == "super-light" || "$DEPLOYMENT_MODE" == "dockerized" ]]; then
-  LOCAL_PLAYWRIGHT=1
-fi
-
 ok() { echo "[ OK ] $*"; }
 warn() { echo "[WARN] $*"; }
 bad() { echo "[FAIL] $*"; FAIL=1; }

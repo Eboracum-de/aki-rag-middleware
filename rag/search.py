@@ -1070,7 +1070,12 @@ def _entity_retry_seconds() -> float:
 
 
 def _runtime_reranker_config() -> dict:
-    return dict(_runtime_section("reranker", RERANKER_CONFIG))
+    merged = dict(RERANKER_CONFIG)
+    active = _ACTIVE_RUNTIME_CONFIG.get()
+    section = active.get("reranker") if isinstance(active, dict) else None
+    if isinstance(section, dict):
+        merged.update(section)
+    return merged
 
 
 def _reranker_enabled() -> bool:
@@ -4667,10 +4672,10 @@ def perform_search(
                 timings,
             )
             log.info(
-                "query rewrite effective: elastic=%r semantic=%r neo4j_expansions=%s",
-                str(getattr(plan, "elastic_query", "") or ""),
-                str(getattr(plan, "semantic_query", "") or ""),
-                [str(item.get("value") or "") for item in (getattr(plan, "entity_should_phrases", []) or [])[:12]],
+                "query rewrite effective: elastic_present=%s semantic_present=%s neo4j_expansions=%d",
+                bool(str(getattr(plan, "elastic_query", "") or "").strip()),
+                bool(str(getattr(plan, "semantic_query", "") or "").strip()),
+                len(getattr(plan, "entity_should_phrases", []) or []),
             )
         else:
             plan = run_timed(

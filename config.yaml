@@ -1,4 +1,4 @@
-# SunaQ / Eboracum Research Gateway - 0.8.6-rc1 development
+# SunaQ / Eboracum Research Gateway - 0.8.6-rc1.1
 
 health:
   timeout_seconds: 4
@@ -223,7 +223,9 @@ graph_queue:
 # work already performed for the user query; it never starts a graph-extraction
 # LLM pass and never stores rejected/uncertain document-query pairs.
 research_findings:
-  enabled: true
+  # Optional knowledge/curation layer. Fresh installs do not persist findings
+  # until the administrator deliberately enables this capability.
+  enabled: false
   timeout: 5
   max_documents_per_request: 30
   curation:
@@ -327,6 +329,12 @@ dedup:
 # Hidden mail sidecars are read on demand. In multi-user mode the graph worker
 # receives the scoped request identity for answer-cited documents and uses that
 # user's current Nextcloud credential. No per-user WebDAV secret belongs here.
+chat_archive:
+  # Saved SunaQ chats remain classified as chat_archive so they cannot leak
+  # into ordinary document retrieval. Using them as RAG evidence is opt-in.
+  enabled: false
+  root: "SunaQ-Chats"
+
 mail_metadata:
   enabled: true
   timeout: 10

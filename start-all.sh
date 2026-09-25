@@ -95,6 +95,21 @@ else
   printf '%-14s skipped (sync worker/Qdrant disabled)\n' sync-worker
 fi
 
-start_one mail-worker start-mail-worker.sh
+mail_enabled="$("$BASE_DIR/.venv/bin/python" - <<'PYCFG'
+import yaml
+try:
+    with open('config.yaml', encoding='utf-8') as f: cfg=yaml.safe_load(f) or {}
+    mail = cfg.get('mail') or {}
+    worker = mail.get('worker') or {}
+    print('1' if bool(mail.get('enabled', False)) and bool(worker.get('enabled', False)) else '0')
+except Exception:
+    print('0')
+PYCFG
+)"
+if [[ "$mail_enabled" == "1" ]]; then
+  start_one mail-worker start-mail-worker.sh
+else
+  printf '%-14s skipped (mail feature/worker disabled)\n' mail-worker
+fi
 
 printf '\nUse ./status.sh for health/status.\n'

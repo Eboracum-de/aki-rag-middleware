@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.6-rc1.1 – 2026-09-24
+
+- Harden request-local LLM role routing so a profile that changes an endpoint does not inherit a stale `local|remote` scope from the previous environment endpoint; remote evidence caps therefore remain effective unless the profile explicitly declares a scope.
+- Preserve explicit specialist answer-context limits even when they numerically equal legacy provider defaults by replacing value-equality sentinels with explicit omitted-argument handling.
+- Merge partial profile reranker settings over global defaults and reuse the warmed global reranker when the effective configuration is identical, avoiding incorrect disablement and duplicate local model loads.
+- Reject model-id/alias collisions independently of profile directory order.
+- Remove query-derived text, entities, concepts, constraints and rewrite reasons from normal INFO retrieval logs; keep only non-sensitive presence/count/control metadata.
+- Correct `/help` to the client-neutral Documents-only implicit source default and current SunaQ chat-archive naming.
+- Add one administrator-selected chat archive path per canonical user, defaulting to `SunaQ-Chats`. The Nextcloud app uses only that path; older RC archives can remain on `AKI-Chats` by configuration or be moved once by the operator. No dual-root scan or automatic migration is introduced.
+- Update SunaQ Recherche to 0.3.4. Credential-bearing middleware requests require HTTPS by default; plain HTTP is an explicit administrator opt-in intended only for controlled test/lab networks. Authenticated user settings now expose effective source capabilities to the app, which hides unavailable source chips. Optional Mail/Web/Webarchive/Chat sources are available through SunaQ only while the corresponding global service and per-user gate are enabled; unavailable optional source chips stay hidden from initial render and explicit disabled source directives are rejected server-side. Chat archiving has a per-user enable/disable switch below the global gate; disabled chat archiving stops new app writes as well as retrieval. Managed Markdown deletion removes its hidden metadata sidecar, with list/load orphan pruning as a repair fallback.
+- Tighten bundled nginx protection for the externally reachable OpenAI-compatible `/v1/` surface to 10 requests/s per source IP, burst 30 and 16 concurrent connections with HTTP 429 on excess. Avoid persistent authentication lockouts that could themselves be abused for denial of service.
+- Align Standard and Super-Light optional OpenWebUI on the pinned `v0.11.4-slim` image, disable Arena models and refresh `versions.lock.yaml`.
+- Refresh support, administration, operations and technical-reference documentation for the SunaQ rename, rc1 validation baseline and rc1.1 hardening.
+- Make fresh installations deliberately minimal and SRC-like: Web/Web archive off, chat-archive evidence/writes off, Research-Finding persistence off, mail worker not started unless configured, SunaQ client Documents-only by default, and Super-Light Playwright built/started only with explicit `--with-playwright`. ERG capabilities remain individually available for administrator opt-in.
+- Add the previously deferred `/use` Research-Finding side pipeline: explicit documents remain the unchanged answer context, while enabled Findings run a separate structured rewrite and Candidate-Verifier pass and persist only positive direct observations; optional enrichment is deferred until after answer generation.
+- Make chat-archive rename fail closed on the same capability/settings check as new archive writes.
+- Document SRC (Secure RAG Core) and ERG (Eboracum Research Gate) as the target architecture structure, with rc1.2 reserved for capability switches, safe text preset files, core/workgroup presets and authoritative server-side conversation state.
+- Add ALLOW-only policy/inspection hook scaffolding at outbound Web search, URL fetch/Playwright, received Web/mail content, Nextcloud Web/Mail persistence and LLM/embedding backend boundaries. The shared contract already supports `BLOCK`, `QUARANTINE` and `MODIFY`; concrete adapters/configuration remain deferred.
+- Fix fresh Standard/Super-Light installation without Playwright: inactive Compose parsing no longer requires the generated renderer seccomp file; `--with-playwright` prepares and selects the verified profile before the first Compose invocation.
+- Restore executable Git modes on both profile installer scripts; the public wrapper dispatches to them directly.
+
+
 ## 0.8.6-rc1 – 2026-09-24
 
 - Introduce SunaQ user-facing research profiles `Schnell`, `Gründlich` and `Tief` with stable ordering and per-user model entitlements exposed through authenticated `/v1/models`.
@@ -9,7 +31,7 @@
 - Add near-capacity retrieval warnings distinct from hard known-overflow warnings; add verifier batch progress such as `Prüfe Dokumente 11–15 von 48 …`.
 - Add deterministic provider follow-up actions and render them in SunaQ Recherche; stronger-model reruns are offered only when a strictly stronger profile is currently allowed for the authenticated user, while broad/unspecific retrieval can offer `Anfrage präzisieren`.
 - Rename the bundled Nextcloud app to `sunaq` / **SunaQ Recherche 0.3.0**, keep legacy app/archive configuration readable, add a compact modern chat composer, source chips, collapsible research sidebar, model selector and request progress.
-- Make ordinary `documents` the client-neutral implicit source default. Mail/Web/chat archives are opt-in; the bundled SunaQ app intentionally sends Documents + Mail explicitly by default.
+- Make ordinary `documents` the client-neutral implicit source default. Mail/Web/chat archives are opt-in. The initial rc1 bundled-client behavior sent Documents + Mail explicitly by default; **rc1.1 supersedes this** with Documents-only plus authenticated capability-gated optional sources.
 - Change the fresh-install default prefix to `/opt/sunaq` while retaining recognized legacy installations at their existing prefix.
 - Pin optional bundled OpenWebUI to `v0.11.4-slim`, disable Arena models by default and stop emitting legacy document-id HTML comments in new provider answers.
 - Preserve administrator-owned existing model packages on installer rerun while adding missing newly shipped profiles; document that fresh rc1 acceptance avoids stale preserved profile packages.
@@ -34,7 +56,7 @@
 - Replace the Elasticsearch hash-field source-text assertion with a behavioral filename-lookup regression test.
 - Remove a completed self-service/Login-Flow UI clarification item from the roadmap; the current curation login and per-user administration already expose the global gate, temporary Login-Flow credential semantics and per-user enablement.
 
-**Scope note:** direct `/use` document selection remains independent of Research-Finding enrichment in 0.8.5-rc5.1. Persisting verifier-derived Findings there without changing the direct answer path also requires a semantically valid structured QueryFrame; that should be implemented as an explicit side pipeline rather than by fabricating curation metadata.
+**Historical scope note:** 0.8.5-rc5.1 deliberately left direct `/use` outside Research-Finding enrichment. 0.8.6-rc1.1 implements the planned explicit side pipeline with a structured QueryFrame and verifier review while preserving the direct answer path.
 
 ## 0.8.5-rc5 – 2026-09-22
 

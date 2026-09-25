@@ -129,6 +129,11 @@ class ModelRegistry:
                 if alias in by_id or alias in aliases:
                     raise RuntimeError(f"Duplicate SunaQ model alias: {alias}")
                 aliases[alias] = model.model_id
+        collisions = sorted(set(aliases) & set(by_id))
+        if collisions:
+            raise RuntimeError(
+                "SunaQ model alias collides with model id: " + ", ".join(collisions)
+            )
         if not by_id:
             raise RuntimeError("No SunaQ models are configured")
         resolved_default = aliases.get(default_model_id, default_model_id)

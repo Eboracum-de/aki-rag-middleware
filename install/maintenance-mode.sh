@@ -84,7 +84,10 @@ disable_native() {
   if native_systemd_available; then
     systemctl start rag-api
     systemctl restart rag-provider
-    systemctl start rag-sync-worker rag-mail-worker 2>/dev/null || true
+    systemctl start rag-sync-worker 2>/dev/null || true
+    if systemctl is-enabled rag-mail-worker >/dev/null 2>&1; then
+      systemctl start rag-mail-worker
+    fi
     if systemctl is-enabled rag-graph-worker >/dev/null 2>&1; then
       systemctl start rag-graph-worker
     fi
@@ -94,13 +97,50 @@ disable_native() {
   fi
 }
 
+state_enabled() {
+  local key="$1"
+  [[ -f "$STATE_FILE" ]] || return 1
+  [[ "$(sed -n "s/^${key}=//p" "$STATE_FILE" | tail -1)" == "1" ]]
+}
+
+mail_worker_enabled() {
+  [[ -f "$BASE_DIR/config.yaml" ]] || return 1
+  awk '
+    /^mail:[[:space:]]*$/ { in_mail=1; next }
+    in_mail && /^[^[:space:]#]/ { exit }
+    in_mail && /^  enabled:[[:space:]]*/ {
+      value=$0
+      sub(/^  enabled:[[:space:]]*/, "", value)
+      sub(/[[:space:]]+#.*$/, "", value)
+      gsub(/[[:space:]"]/, "", value)
+      mail=(tolower(value) ~ /^(1|true|yes|on)$/)
+    }
+    in_mail && /^  worker:[[:space:]]*$/ { in_worker=1; next }
+    in_mail && in_worker && /^    enabled:[[:space:]]*/ {
+      value=$0
+      sub(/^    enabled:[[:space:]]*/, "", value)
+      sub(/[[:space:]]+#.*$/, "", value)
+      gsub(/[[:space:]"]/, "", value)
+      worker=(tolower(value) ~ /^(1|true|yes|on)$/)
+    }
+    END { exit !(mail && worker) }
+  ' "$BASE_DIR/config.yaml"
+}
+
 enable_dockerized() {
-  compose stop api mail-worker >/dev/null 2>&1 || true
+  compose stop api mail-worker playwright-renderer >/dev/null 2>&1 || true
   compose up -d --no-deps --force-recreate provider
 }
 
 disable_dockerized() {
-  compose up -d neo4j playwright-renderer api mail-worker
+  local services=(neo4j api)
+  if state_enabled LOCAL_PLAYWRIGHT; then
+    services=(neo4j playwright-renderer api)
+  fi
+  if mail_worker_enabled; then
+    services+=(mail-worker)
+  fi
+  compose up -d "${services[@]}"
 
   local schema_ready=0
   local attempt

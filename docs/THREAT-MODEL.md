@@ -118,18 +118,33 @@ This startup cleanup is defense in depth, not the primary expiry mechanism: the 
 The current normal path is intentionally:
 
 ```text
-retrieve -> fuse/deduplicate -> optional rerank -> bounded final candidates
+retrieve (optional ES ACL metadata prefilter)
+        -> fuse/deduplicate -> optional rerank -> bounded final candidates
         -> live Nextcloud ACL -> verifier/answer
 ```
 
 Denied results are removed and lower-ranked results are not adaptively fetched to refill the window. This has two deliberate properties:
 
-- retrieval/index state does not need a replicated ACL shadow;
+- the final authorization decision does not depend on a replicated ACL shadow;
 - an ACL denial does not cause a variable number of additional searches/checks that could itself become an inference/timing channel.
 
-The trade-off is recall: a user with narrow rights may receive only a few results even when lower-ranked authorized candidates existed outside the final window.
+The optional Elasticsearch ACL metadata prefilter is **implemented** and can
+reduce irrelevant candidate work before later ranking. Its first version uses
+the Nextcloud FullTextSearch owner/direct-user/group metadata. It does not yet
+evaluate Nextcloud Circles; deployments that depend on Circle-only visibility
+should leave the prefilter disabled until Circle support exists.
 
-A possible future optimization is a **fixed-size, predeclared ACL candidate pool before the expensive reranker**, or an optional metadata prefilter using the ACL fields already materialized by Nextcloud FullTextSearch (`owner`, `users`, `groups`, `circles`). Neither is the current implementation. Any metadata prefilter is retrieval optimization only: stale metadata must never replace the final live WebDAV authorization, and an incomplete user access context must fail open to the existing retrieval path rather than deny otherwise visible evidence. The design does not call for adaptive "keep fetching until N authorized results exist" behavior.
+The prefilter is a retrieval optimization, never an authorization decision.
+If the required user/group context is unavailable, SunaQ skips the prefilter and
+falls back to the existing unfiltered retrieval path. Stale or incomplete index
+metadata may affect recall, but a candidate still must pass the final live
+WebDAV authorization before its content can become verifier or answer evidence.
+
+The remaining trade-off is recall: a user with narrow rights may receive only a
+few results when lower-ranked authorized candidates fall outside the bounded
+window. A fixed-size, predeclared pre-rerank ACL candidate pool remains a
+possible future optimization. The design still does not call for adaptive
+"keep fetching until N authorized results exist" behavior.
 
 ## 7. Untrusted content and prompt injection
 
@@ -154,11 +169,39 @@ The more relevant boundaries are persistence and egress:
 
 Structured verifier output, Graph schemas/ontology, bounded context and provenance-specific prompts reduce these risks but do not make untrusted content trustworthy.
 
+### Policy and inspection hooks
+
+rc1.1 exposes small, modular policy/inspection hook points at trust-boundary
+transitions rather than embedding one mandatory scanner:
+
+- `outbound_query` before a search query is sent to Brave, SearXNG or another
+  external search provider;
+- `pre_fetch` before HTTP/Playwright fetch, for URL/domain/scheme/network policy
+  and future reputation checks;
+- `post_fetch` after content arrives but before it is trusted for further
+  processing, so downloaded pages/files and mail attachments can be inspected;
+- `pre_persist` before SunaQ writes imported or generated content into
+  Nextcloud;
+- `pre_model_egress` before bounded evidence/context is sent to an external
+  model or embedding service.
+
+The intended contract is deliberately small: `ALLOW`, `BLOCK`, `QUARANTINE`
+or `MODIFY`, with reason/provenance metadata and optional transformed content.
+Potential adapters include malware scanners, ICAP, YARA, DLP/redaction or
+site-specific policy services; no particular scanner is implied by the
+architecture.
+
+The rc1.1 runtime installs no evaluator, so all stages are no-op `ALLOW`
+decisions. Evaluator exceptions are not swallowed, allowing a future required
+scanner to fail closed. Concrete adapters and administrator configuration remain
+deferred; the hook scaffold itself is not a claim that rc1.1 scans imported
+mail, fetched Web content or model egress.
+
 As infrastructure hardening, operators should also apply least privilege independently of prompt handling: use a read-only Elasticsearch account for retrieval where supported, keep Qdrant/Neo4j on trusted networks or loopback unless remote access is required, and use read-only credentials or network policy for retrieval-only services where the selected backend supports them. These are deployment controls rather than application-level prompt defenses.
 
 ## 8. Archive scopes
 
-`/mailarchive`, `/webarchive` and `/chatarchive` are separate optional source scopes.
+`/mailarchive`, `/webarchive` and `/chatarchive` are separate optional source scopes. Fresh installs expose ordinary documents only; Web Research, mail ingestion and chat-archive evidence require deliberate administrator activation.
 
 ### Chat archive
 

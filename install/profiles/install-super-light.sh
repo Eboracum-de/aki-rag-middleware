@@ -17,6 +17,9 @@ OPENWEBUI_EXPLICIT=0
 OPENWEBUI_FROM_STATE=0
 WITH_PROXY=0
 PROXY_EXPLICIT=0
+WITH_PLAYWRIGHT=0
+PLAYWRIGHT_EXPLICIT=0
+PLAYWRIGHT_FROM_STATE=0
 PROXY_FROM_STATE=0
 PROXY_HTTP_PORT=80
 PROXY_HTTPS_PORT=443
@@ -45,6 +48,8 @@ Options:
   --no-openwebui            Disable/remove bundled OpenWebUI on this host
   --with-proxy              Start/retain bundled nginx (fresh default: off)
   --no-proxy                Disable/remove bundled nginx
+  --with-playwright          Build/install local Playwright renderer (fresh default: off)
+  --no-playwright            Disable/remove local Playwright renderer
   --proxy-http-port PORT     nginx HTTP listen port (default: 80)
   --proxy-https-port PORT    nginx HTTPS listen port (default: 443)
   --ca-certificate FILE     Trust one private CA certificate inside API/provider containers; repeatable
@@ -74,6 +79,8 @@ while [[ $# -gt 0 ]]; do
     --no-openwebui) WITH_OPENWEBUI=0; OPENWEBUI_EXPLICIT=1; shift ;;
     --with-proxy) WITH_PROXY=1; PROXY_EXPLICIT=1; shift ;;
     --no-proxy) WITH_PROXY=0; PROXY_EXPLICIT=1; shift ;;
+    --with-playwright) WITH_PLAYWRIGHT=1; PLAYWRIGHT_EXPLICIT=1; shift ;;
+    --no-playwright) WITH_PLAYWRIGHT=0; PLAYWRIGHT_EXPLICIT=1; shift ;;
     --proxy-http-port) [[ $# -ge 2 ]] || { echo "--proxy-http-port requires a port" >&2; exit 2; }; PROXY_HTTP_PORT="$2"; PROXY_HTTP_PORT_EXPLICIT=1; shift 2 ;;
     --proxy-https-port) [[ $# -ge 2 ]] || { echo "--proxy-https-port requires a port" >&2; exit 2; }; PROXY_HTTPS_PORT="$2"; PROXY_HTTPS_PORT_EXPLICIT=1; shift 2 ;;
     --ca-certificate) [[ $# -ge 2 ]] || { echo "--ca-certificate requires a file" >&2; exit 2; }; CA_CERTIFICATES+=("$2"); shift 2 ;;
@@ -134,7 +141,7 @@ load_install_state() {
   [[ -d "$PREFIX/rag" && -f "$PREFIX/config.yaml" && -d "$PREFIX/install" ]] && recognized=1
   [[ $recognized -eq 1 ]] || return 0
 
-  local state_local_openwebui=0 state_local_proxy=0
+  local state_local_openwebui=0 state_local_proxy=0 state_local_playwright=0
   local state_proxy_http_port=80 state_proxy_https_port=443
   local key value
   while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
@@ -142,6 +149,7 @@ load_install_state() {
     case "$key" in
       LOCAL_OPENWEBUI) state_local_openwebui="$(read_state_bool "$key" "$value")" ;;
       LOCAL_PROXY) state_local_proxy="$(read_state_bool "$key" "$value")" ;;
+      LOCAL_PLAYWRIGHT) state_local_playwright="$(read_state_bool "$key" "$value")" ;;
       PROXY_HTTP_PORT) state_proxy_http_port="$value" ;;
       PROXY_HTTPS_PORT) state_proxy_https_port="$value" ;;
       *) : ;;
@@ -155,6 +163,10 @@ load_install_state() {
   if [[ $PROXY_EXPLICIT -eq 0 ]]; then
     WITH_PROXY=$state_local_proxy
     [[ $state_local_proxy -eq 1 ]] && PROXY_FROM_STATE=1
+  fi
+  if [[ $PLAYWRIGHT_EXPLICIT -eq 0 ]]; then
+    WITH_PLAYWRIGHT=$state_local_playwright
+    [[ $state_local_playwright -eq 1 ]] && PLAYWRIGHT_FROM_STATE=1
   fi
   [[ $PROXY_HTTP_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTP_PORT=$state_proxy_http_port
   [[ $PROXY_HTTPS_PORT_EXPLICIT -eq 0 ]] && PROXY_HTTPS_PORT=$state_proxy_https_port
@@ -190,7 +202,7 @@ print_plan() {
   fi
 
   cat <<PLAN
-SunaQ / Eboracum Research Gateway 0.8.6-rc1 - super-light installation profile
+SunaQ / Eboracum Research Gateway 0.8.6-rc1.1 - super-light installation profile
 ----------------------------------------------
 Install prefix:          $PREFIX
 Deployment mode:         dockerized
@@ -201,7 +213,7 @@ Graph document arm:      disabled
 Graph extraction worker: disabled
 Qdrant/embeddings:       disabled / not installed
 Reranker/TEI:            disabled / not installed
-Playwright archive:      local renderer enabled
+Playwright archive:      $([[ $WITH_PLAYWRIGHT -eq 1 ]] && echo "install/start$([[ $PLAYWRIGHT_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-playwright to disable)')" || echo disabled/not installed)
 OpenWebUI:               $([[ $WITH_OPENWEBUI -eq 1 ]] && echo "pull/start$([[ $OPENWEBUI_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-openwebui to disable)')" || echo not pulled/not started)
 Reverse proxy:           $([[ $WITH_PROXY -eq 1 ]] && echo "bundled/start on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}$([[ $PROXY_FROM_STATE -eq 1 ]] && echo ' (retained from existing install; use --no-proxy to disable)')" || echo disabled)
 Nextcloud URL:           ${NEXTCLOUD_URL:-<required before start>}
@@ -433,6 +445,13 @@ fi
 if [[ ! -f "$PREFIX/web.yaml" ]]; then
   cp "$PREFIX/install/super-light/web.super-light.yaml" "$PREFIX/web.yaml"
 fi
+# Renderer installation state is explicit. Fresh installs stay off; reruns
+# preserve the recorded state unless --with/--no-playwright is supplied.
+if [[ $WITH_PLAYWRIGHT -eq 1 ]]; then
+  sed -i "/^  renderer:/,/^  timeout:/ s/^    enabled:.*/    enabled: true/" "$PREFIX/web.yaml"
+else
+  sed -i "/^  renderer:/,/^  timeout:/ s/^    enabled:.*/    enabled: false/" "$PREFIX/web.yaml"
+fi
 if [[ ! -f "$PREFIX/provider.env" ]]; then
   cp "$PREFIX/install/super-light/provider.env.super-light.example" "$PREFIX/provider.env"
 fi
@@ -535,6 +554,7 @@ NEO4J_HEAP_INITIAL=256m
 NEO4J_HEAP_MAX=512m
 NEO4J_PAGECACHE=256m
 PLAYWRIGHT_PORT=8090
+PLAYWRIGHT_SECCOMP_PROFILE=$([[ $WITH_PLAYWRIGHT -eq 1 ]] && echo "../components/playwright-renderer/seccomp_profile.json" || echo "unconfined")
 OPENWEBUI_PORT=3000
 ENV
 chmod 600 "$PREFIX/install/super-light/.env"
@@ -547,7 +567,7 @@ DEPLOYMENT_PROFILE=super-light
 DEPLOYMENT_MODE=dockerized
 LOCAL_QDRANT=0
 LOCAL_NEO4J=1
-LOCAL_PLAYWRIGHT=1
+LOCAL_PLAYWRIGHT=$WITH_PLAYWRIGHT
 LOCAL_OPENWEBUI=$WITH_OPENWEBUI
 LOCAL_PROXY=$WITH_PROXY
 PROXY_HTTP_PORT=$PROXY_HTTP_PORT
@@ -679,12 +699,22 @@ EOFOVR
   fi
 fi
 
-log "Preparing Playwright Chromium seccomp profile"
-"$PREFIX/install/components/playwright-renderer/prepare.sh"
+if [[ $WITH_PLAYWRIGHT -eq 1 ]]; then
+  log "Preparing Playwright Chromium seccomp profile"
+  "$PREFIX/install/components/playwright-renderer/prepare.sh"
+fi
 
 cd "$PREFIX/install/super-light"
-log "Building super-light provider and renderer images"
-compose build api provider playwright-renderer
+if [[ $WITH_PLAYWRIGHT -eq 0 ]]; then
+  compose stop playwright-renderer >/dev/null 2>&1 || true
+  compose rm -f playwright-renderer >/dev/null 2>&1 || true
+fi
+log "Building super-light API/provider images"
+compose build api provider
+if [[ $WITH_PLAYWRIGHT -eq 1 ]]; then
+  log "Building Playwright renderer image"
+  compose build playwright-renderer
+fi
 
 
 log "Registering default trusted provider client"
@@ -738,7 +768,7 @@ Local services:
   API:        stopped until maintenance mode is disabled
   Provider:   http://127.0.0.1:8766 (maintenance)
   Neo4j:      prepared; normal stack start after configuration
-  Playwright: prepared; normal stack start after configuration
+  Playwright: $([[ $WITH_PLAYWRIGHT -eq 1 ]] && echo "prepared; normal stack start after configuration" || echo "disabled/not installed")
   OpenWebUI:  $([[ $WITH_OPENWEBUI -eq 1 ]] && echo http://127.0.0.1:3000 || echo disabled)
   nginx:      $([[ $WITH_PROXY -eq 1 ]] && echo "enabled on ${PROXY_HTTP_PORT}/${PROXY_HTTPS_PORT}" || echo disabled)
   CA trust:   $([[ -d "$PREFIX/runtime/ca" ]] && find "$PREFIX/runtime/ca" -maxdepth 1 -name "*.crt" -type f 2>/dev/null | wc -l || echo 0) private certificate(s) baked into API/provider image

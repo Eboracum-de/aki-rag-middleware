@@ -53,6 +53,7 @@ import yaml
 
 from rag.logging_utils import get_logger
 from rag.nextcloud_tls import nextcloud_verify_value
+from rag.policy_hooks import POST_FETCH, PRE_PERSIST, apply_policy_hook
 from rag.credential_store import CredentialStore, MailAccount
 from rag.source_registry import register_document
 
@@ -329,6 +330,19 @@ def parse_mail(uid: int, raw: bytes) -> ParsedMail:
                 data = part.get_payload(decode=True) or b""
             except Exception:
                 data = b""
+            data = apply_policy_hook(
+                POST_FETCH,
+                content=data,
+                metadata={
+                    "source": "mail_attachment",
+                    "uid": uid,
+                    "filename": filename,
+                    "content_type": content_type,
+                },
+            )
+            if not isinstance(data, (bytes, bytearray)):
+                raise TypeError("post_fetch policy hook must return bytes content")
+            data = bytes(data)
 
             attachments.append(
                 Attachment(
@@ -672,6 +686,19 @@ class NextcloudDAV:
             self._known_dirs.add(key)
 
     def put(self, parts: list[str], data: bytes, content_type: str) -> str | None:
+        target = "/".join(str(part) for part in parts if str(part))
+        data = apply_policy_hook(
+            PRE_PERSIST,
+            content=data,
+            metadata={
+                "source": "mail_archive",
+                "target": target,
+                "content_type": content_type,
+            },
+        )
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("pre_persist policy hook must return bytes content")
+        data = bytes(data)
         url = self._url(parts)
         response = self.client.put(
             url,
@@ -1146,6 +1173,19 @@ def sync_mailbox(
         def import_one(uid: int, mode: str) -> None:
             nonlocal imported
             raw = _fetch_raw(client, uid)
+            raw = apply_policy_hook(
+                POST_FETCH,
+                content=raw,
+                metadata={
+                    "source": "imap_message",
+                    "account": account_name,
+                    "mailbox": mailbox,
+                    "uid": uid,
+                },
+            )
+            if not isinstance(raw, (bytes, bytearray)):
+                raise TypeError("post_fetch policy hook must return bytes content")
+            raw = bytes(raw)
             raw_message_sha256 = hashlib.sha256(raw).hexdigest()
             imported_at = datetime.now(timezone.utc).isoformat()
             parsed = parse_mail(uid, raw)

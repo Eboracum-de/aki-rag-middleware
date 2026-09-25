@@ -3,22 +3,25 @@ namespace OCA\Sunaq\Service;
 
 use OCP\Files\IRootFolder;
 use OCP\IUserSession;
+use OCP\IConfig;
 
 class ChatMetadataCorruptionException extends \RuntimeException {}
 
 class ChatStore {
     const FOLDER = 'SunaQ-Chats';
-    const LEGACY_FOLDER = 'AKI-Chats';
     const MAX_MESSAGES = 80;
 
     /** @var IRootFolder */
     private $rootFolder;
     /** @var IUserSession */
     private $userSession;
+    /** @var IConfig */
+    private $config;
 
-    public function __construct(IRootFolder $rootFolder, IUserSession $userSession) {
+    public function __construct(IRootFolder $rootFolder, IUserSession $userSession, IConfig $config) {
         $this->rootFolder = $rootFolder;
         $this->userSession = $userSession;
+        $this->config = $config;
     }
 
     private function userFolder() {
@@ -29,20 +32,67 @@ class ChatStore {
         return $this->rootFolder->getUserFolder($user->getUID());
     }
 
+    private function normalizeArchivePath($path) {
+        $value = trim((string)$path);
+        $value = trim($value, '/');
+        if ($value === '') {
+            $value = self::FOLDER;
+        }
+        if (strlen($value) > 240 || strpos($value, '\\') !== false) {
+            throw new \InvalidArgumentException('Ungültiger Chatarchiv-Pfad.');
+        }
+        $parts = explode('/', $value);
+        foreach ($parts as &$part) {
+            $part = trim((string)$part);
+            if ($part === '' || $part === '.' || $part === '..' || preg_match('/[\x00-\x1F\x7F]/', $part)) {
+                throw new \InvalidArgumentException('Ungültiger Chatarchiv-Pfad.');
+            }
+        }
+        unset($part);
+        return implode('/', $parts);
+    }
+
+    private function archivePath() {
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new \RuntimeException('Keine angemeldete Nextcloud-Sitzung gefunden.');
+        }
+        $stored = $this->config->getUserValue(
+            $user->getUID(),
+            'sunaq',
+            'chat_archive_path',
+            self::FOLDER
+        );
+        return $this->normalizeArchivePath($stored);
+    }
+
+    public function setArchivePath($path) {
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new \RuntimeException('Keine angemeldete Nextcloud-Sitzung gefunden.');
+        }
+        $value = $this->normalizeArchivePath($path);
+        $this->config->setUserValue($user->getUID(), 'sunaq', 'chat_archive_path', $value);
+        return $value;
+    }
+
     private function archiveFolder($create = true) {
-        $root = $this->userFolder();
-        if ($root->nodeExists(self::FOLDER)) {
-            return $root->get(self::FOLDER);
+        $folder = $this->userFolder();
+        foreach (explode('/', $this->archivePath()) as $segment) {
+            if ($folder->nodeExists($segment)) {
+                $next = $folder->get($segment);
+                if (!method_exists($next, 'getDirectoryListing')) {
+                    throw new \RuntimeException('Chatarchiv-Pfad kollidiert mit einer Datei.');
+                }
+                $folder = $next;
+                continue;
+            }
+            if (!$create) {
+                return null;
+            }
+            $folder = $folder->newFolder($segment);
         }
-        // Existing 0.2.x users keep their archive in place. Fresh users get
-        // the SunaQ folder; no destructive server-side folder move is required.
-        if ($root->nodeExists(self::LEGACY_FOLDER)) {
-            return $root->get(self::LEGACY_FOLDER);
-        }
-        if (!$create) {
-            return null;
-        }
-        return $root->newFolder(self::FOLDER);
+        return $folder;
     }
 
     private function cleanId($id) {
@@ -118,6 +168,30 @@ class ChatStore {
         }
         $file->putContent((string)$content);
         return $file;
+    }
+
+    private function resolveArchiveFile($folder, $id, $record) {
+        $archiveFile = is_array($record) ? trim((string)($record['archive_file'] ?? '')) : '';
+        if ($archiveFile !== '' && $folder->nodeExists($archiveFile)) {
+            return $archiveFile;
+        }
+        $recovered = $this->recoverMarkdownName($folder, $id);
+        if ($recovered !== '') {
+            return $recovered;
+        }
+        $legacyHtml = $this->legacyHtmlName($id);
+        if ($folder->nodeExists($legacyHtml)) {
+            return $legacyHtml;
+        }
+        return '';
+    }
+
+    private function deleteMetadataFiles($folder, $id) {
+        foreach ([$this->metaName($id), $this->legacyMetaName($id)] as $name) {
+            if ($folder->nodeExists($name)) {
+                $folder->get($name)->delete();
+            }
+        }
     }
 
     private function normalizeScopes($scopes) {
@@ -291,7 +365,7 @@ class ChatStore {
 
         $markdown = $this->writeFile($folder, $archiveFile, $this->renderMarkdown($record));
         $record['archive_file'] = $archiveFile;
-        $record['archive_path'] = $folder->getName() . '/' . $archiveFile;
+        $record['archive_path'] = $this->archivePath() . '/' . $archiveFile;
         $record['document_id'] = 'files:' . (string)$markdown->getId();
 
         $legacyHtml = $this->legacyHtmlName($id);
@@ -334,6 +408,23 @@ class ChatStore {
         if (!is_array($record)) {
             throw new ChatMetadataCorruptionException('Gespeicherter Chat ist beschädigt.');
         }
+
+        // The readable archive file is the lifecycle anchor.  If a user deletes
+        // it manually in Nextcloud, stale hidden metadata must not keep the chat
+        // alive as an invisible duplicate.  The delete-event listener handles
+        // the normal case immediately; this is the repair path for older/missed
+        // events.
+        $archiveFile = $this->resolveArchiveFile($folder, $id, $record);
+        if ($archiveFile === '') {
+            $this->deleteMetadataFiles($folder, $id);
+            if ($throwIfMissing) {
+                throw new \InvalidArgumentException('Chat nicht gefunden.');
+            }
+            return null;
+        }
+        if (empty($record['archive_file'])) {
+            $record['archive_file'] = $archiveFile;
+        }
         return $record;
     }
 
@@ -351,8 +442,13 @@ class ChatStore {
             try {
                 $record = json_decode((string)$node->getContent(), true);
                 if (is_array($record)) {
+                    $id = (string)($record['id'] ?? $match[1]);
+                    if ($this->resolveArchiveFile($folder, $id, $record) === '') {
+                        $this->deleteMetadataFiles($folder, $id);
+                        continue;
+                    }
                     $items[] = [
-                        'id' => (string)($record['id'] ?? $match[1]),
+                        'id' => $id,
                         'title' => (string)($record['title'] ?? 'Recherche'),
                         'updated_at' => (string)($record['updated_at'] ?? ''),
                         'created_at' => (string)($record['created_at'] ?? ''),

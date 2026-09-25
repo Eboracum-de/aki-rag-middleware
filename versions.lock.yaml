@@ -1,4 +1,4 @@
-release: 0.8.5-rc4.3
+release: 0.8.6-rc1.1
 python:
   torch: 2.13.0+cpu
   transformers: 4.57.6
@@ -18,9 +18,9 @@ docker:
     digest: sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe
     ref: neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe
   openwebui:
-    tag: ghcr.io/open-webui/open-webui:v0.11.0
-    digest: sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
-    ref: ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228
+    tag: ghcr.io/open-webui/open-webui:v0.11.4-slim
+    digest: sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e
+    ref: ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e
 models:
   answer: gpt-5.6-luna (reference API configuration)
   auxiliary: gpt-5.6-luna (reference API configuration)

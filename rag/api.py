@@ -46,7 +46,7 @@ from rag.web_research import WebResearchArm, load_web_config
 from rag.retrieval_planner import load_retrieval_planner_settings
 from rag.sunaq_models import RuntimeModel, load_model_registry
 from rag.reranker import get_reranker_status
-from rag.source_origin import chat_archive_roots, path_is_under
+from rag.source_origin import chat_archive_roots, path_is_under, classify_source_origin
 from rag.source_registry import register_document, auto_mirror_registry_to_elasticsearch
 from rag.acl import (
     NextcloudLiveAcl,
@@ -87,6 +87,10 @@ app_config = load_config()
 configure_tls_compat(app_config)
 graph_queue = GraphQueue(app_config)
 live_acl = NextcloudLiveAcl(app_config)
+_chat_archive_default = "true" if bool(cfg_get(app_config, "chat_archive.enabled", default=False)) else "false"
+CHAT_ARCHIVE_ENABLED = os.getenv("CHAT_ARCHIVE_ENABLED", _chat_archive_default).strip().lower() in {
+    "1", "true", "yes", "on"
+}
 api_security = ApiSecurity(app_config, live_acl)
 credential_store = CredentialStore(str(cfg_get(app_config, "auth.credential_store", default="runtime/users.sqlite") or "runtime/users.sqlite"))
 _web_arm_instance: WebResearchArm | None = None
@@ -1765,6 +1769,17 @@ async def documents_resolve(body: DocumentResolveRequest, http_request: Request)
                 for item in matches:
                     document_id = str(item.get("document_id") or "").strip()
                     if not document_id or document_id in local_seen:
+                        continue
+                    candidate_path = str(
+                        item.get("path") or item.get("title") or ""
+                    ).strip()
+                    if (
+                        not CHAT_ARCHIVE_ENABLED
+                        and classify_source_origin(
+                            candidate_path,
+                            document_id=document_id,
+                        ) == "chat_archive"
+                    ):
                         continue
                     local_seen.add(document_id)
                     deduped.append(item)

@@ -60,10 +60,10 @@ services:
     pids_limit: 512
     security_opt:
       - no-new-privileges:true
-      - seccomp=./components/playwright-renderer/seccomp_profile.json
+      - "seccomp=${PLAYWRIGHT_SECCOMP_PROFILE:-unconfined}"
 
   openwebui:
-    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e}
     restart: unless-stopped
     profiles: ["ui"]
     # The bundled UI uses host networking deliberately. It binds only to
@@ -83,6 +83,7 @@ services:
       # Nextcloud ACL is the authoritative document permission layer; do not
       # require a second per-model ACL inside the optional frontend.
       BYPASS_MODEL_ACCESS_CONTROL: "true"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
       OPENAI_API_BASE_URL: "http://127.0.0.1:8766/v1"
       OPENAI_API_KEY: "${OPENWEBUI_PROVIDER_API_KEY:-}"
       # Per-connection identity assertion. OpenWebUI expands {{USER_ID}} for

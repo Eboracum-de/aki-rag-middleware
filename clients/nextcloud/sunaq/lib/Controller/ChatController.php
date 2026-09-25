@@ -19,6 +19,40 @@ class ChatController extends Controller {
         $this->store = $store;
     }
 
+    private function syncArchiveSettings() {
+        try {
+            $settings = $this->proxy->userSettings();
+            $path = isset($settings['chat_archive_path']) ? trim((string)$settings['chat_archive_path']) : '';
+            if ($path !== '') {
+                $this->store->setArchivePath($path);
+            }
+            return [
+                'enabled' => !empty($settings['chat_archive_enabled']),
+                'path' => $path,
+                'chat_archive_enabled' => !empty($settings['chat_archive_enabled']),
+                'chat_archive_path' => $path,
+                'source_capabilities' => isset($settings['source_capabilities']) && is_array($settings['source_capabilities'])
+                    ? $settings['source_capabilities']
+                    : [],
+            ];
+        } catch (\Exception $e) {
+            // Persistence is privacy-sensitive policy.  If the provider policy
+            // cannot be read, fail closed for new archive writes rather than
+            // silently persisting a chat contrary to administrator intent.
+            return [
+                'enabled' => false,
+                'path' => '',
+                'chat_archive_enabled' => false,
+                'chat_archive_path' => '',
+                'source_capabilities' => [],
+            ];
+        }
+    }
+
+    private function syncArchivePath() {
+        $this->syncArchiveSettings();
+    }
+
     /**
      * @NoAdminRequired
      *
@@ -53,18 +87,22 @@ class ChatController extends Controller {
                 $assistant['source_scopes'] = $result['source_scopes'];
             }
             $stored[] = $assistant;
-            $chat = $this->store->save($conversationId, $stored, $sourceScopes);
-            $this->proxy->registerChatArchive(
-                $chat['document_id'] ?? '',
-                $chat['archive_path'] ?? ''
-            );
+            $archiveSettings = $this->syncArchiveSettings();
             $result['message_created_at'] = $assistantCreatedAt;
-            $result['conversation'] = [
-                'id' => $chat['id'],
-                'title' => $chat['title'],
-                'updated_at' => $chat['updated_at'],
-                'scopes' => $chat['scopes'],
-            ];
+            $result['chat_archive_enabled'] = !empty($archiveSettings['enabled']);
+            if (!empty($archiveSettings['enabled'])) {
+                $chat = $this->store->save($conversationId, $stored, $sourceScopes);
+                $this->proxy->registerChatArchive(
+                    $chat['document_id'] ?? '',
+                    $chat['archive_path'] ?? ''
+                );
+                $result['conversation'] = [
+                    'id' => $chat['id'],
+                    'title' => $chat['title'],
+                    'updated_at' => $chat['updated_at'],
+                    'scopes' => $chat['scopes'],
+                ];
+            }
             return new DataResponse($result);
         } catch (\InvalidArgumentException $e) {
             return new DataResponse(['error' => $e->getMessage()], 400);
@@ -80,7 +118,10 @@ class ChatController extends Controller {
      */
     public function models() {
         try {
-            return new DataResponse($this->proxy->models());
+            $settings = $this->syncArchiveSettings();
+            $models = $this->proxy->models();
+            $models['user_settings'] = $settings;
+            return new DataResponse($models);
         } catch (\RuntimeException $e) {
             return new DataResponse(['error' => $e->getMessage()], 502);
         } catch (\Exception $e) {
@@ -108,6 +149,7 @@ class ChatController extends Controller {
      */
     public function listChats() {
         try {
+            $this->syncArchivePath();
             return new DataResponse(['chats' => $this->store->listChats()]);
         } catch (\Exception $e) {
             return new DataResponse(['error' => 'Chatarchiv konnte nicht gelesen werden.'], 500);
@@ -119,6 +161,7 @@ class ChatController extends Controller {
      */
     public function load($id = '') {
         try {
+            $this->syncArchivePath();
             return new DataResponse(['chat' => $this->store->load($id)]);
         } catch (\InvalidArgumentException $e) {
             return new DataResponse(['error' => $e->getMessage()], 404);
@@ -132,6 +175,10 @@ class ChatController extends Controller {
      */
     public function rename($id = '', $title = '') {
         try {
+            $settings = $this->syncArchiveSettings();
+            if (empty($settings['enabled'])) {
+                return new DataResponse(['error' => 'Das Chatarchiv ist deaktiviert.'], 403);
+            }
             $chat = $this->store->rename($id, $title);
             $this->proxy->registerChatArchive(
                 $chat['document_id'] ?? '',
@@ -150,6 +197,7 @@ class ChatController extends Controller {
      */
     public function delete($id = '') {
         try {
+            $this->syncArchivePath();
             $this->store->delete($id);
             return new DataResponse(['ok' => true]);
         } catch (\Exception $e) {

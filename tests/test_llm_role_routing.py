@@ -87,3 +87,68 @@ def test_sunaq_remote_answer_context_uses_profile_budget_below_hard_cap(monkeypa
     assert len(included) == 3
     assert "d4.pdf" not in context
     assert len(context) <= 3000 + 20
+
+
+def test_profile_endpoint_change_reclassifies_inherited_role_scope(monkeypatch):
+    monkeypatch.setenv("ANSWER_LLM_SCOPE", "local")
+    built = roles.build_role_backends(
+        default_backend="ollama",
+        default_base_url="http://127.0.0.1:11434",
+        default_model="local-model",
+        default_api_key="",
+        default_verify_tls=True,
+        default_ca_file=None,
+        role_overrides={
+            "answer": {
+                "backend": "openai",
+                "base_url": "https://api.example.test/v1",
+                "model": "remote-model",
+            }
+        },
+    )
+    assert built["answer"].base_url == "https://api.example.test/v1"
+    assert built["answer"].scope == "remote"
+
+    explicit = roles.build_role_backends(
+        default_backend="ollama",
+        default_base_url="http://127.0.0.1:11434",
+        default_model="local-model",
+        default_api_key="",
+        default_verify_tls=True,
+        default_ca_file=None,
+        role_overrides={
+            "answer": {
+                "backend": "openai",
+                "base_url": "https://api.example.test/v1",
+                "model": "remote-model",
+                "scope": "local",
+            }
+        },
+    )
+    assert explicit["answer"].scope == "local"
+
+
+def test_explicit_context_budget_equal_to_legacy_default_is_not_a_profile_sentinel(monkeypatch):
+    monkeypatch.setattr(provider, "_role_remote", lambda _role: False)
+    monkeypatch.setattr(
+        provider,
+        "_answer_context_budget",
+        lambda: {
+            "max_documents": 10,
+            "max_chars_per_document": 50000,
+            "max_total_chars": 100000,
+        },
+    )
+    result = provider.SearchResult(
+        index=1,
+        title="large.pdf",
+        text="x" * 50000,
+        raw={},
+    )
+    context, included = provider._build_context(
+        [result],
+        per_result_max_chars=50000,
+        context_max_chars=provider.CONTEXT_MAX_CHARS,
+    )
+    assert included
+    assert len(context) <= provider.CONTEXT_MAX_CHARS

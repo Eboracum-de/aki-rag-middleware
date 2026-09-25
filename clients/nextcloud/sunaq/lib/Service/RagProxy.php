@@ -50,12 +50,54 @@ class RagProxy {
         return $this->config->getAppValue('akirag', (string)$key, $default);
     }
 
+    private function allowInsecureHttp() {
+        $value = strtolower(trim((string)$this->appConfigValue('allow_insecure_http', '0')));
+        return in_array($value, ['1', 'true', 'yes', 'on'], true);
+    }
+
+    private function assertCredentialTransport($baseUrl) {
+        $scheme = strtolower((string)parse_url((string)$baseUrl, PHP_URL_SCHEME));
+        if ($scheme === 'https') {
+            return;
+        }
+        if ($scheme === 'http' && $this->allowInsecureHttp()) {
+            return;
+        }
+        throw new \RuntimeException(
+            'Credential-geschützte SunaQ-Anfragen erfordern HTTPS. Unsicheres HTTP kann nur explizit in den App-Einstellungen freigegeben werden.'
+        );
+    }
+
+    private function userSettingsBackoffActive($uid) {
+        $raw = $this->config->getUserValue((string)$uid, 'sunaq', 'user_settings_sync_failed_at', '0');
+        $failedAt = (int)$raw;
+        return $failedAt > 0 && (time() - $failedAt) < 15;
+    }
+
+    private function markUserSettingsSyncFailure($uid) {
+        $this->config->setUserValue(
+            (string)$uid,
+            'sunaq',
+            'user_settings_sync_failed_at',
+            (string)time()
+        );
+    }
+
+    private function clearUserSettingsSyncFailure($uid) {
+        $this->config->deleteUserValue(
+            (string)$uid,
+            'sunaq',
+            'user_settings_sync_failed_at'
+        );
+    }
+
     public function chat(array $messages, array $sourceScopes = [], $modelId = '', $requestId = '') {
         $baseUrl = rtrim($this->appConfigValue('middleware_url', ''), '/');
         $encryptedKey = $this->appConfigValue('api_key_encrypted', '');
         if ($baseUrl === '' || $encryptedKey === '') {
             throw new \RuntimeException('SunaQ Recherche ist noch nicht konfiguriert.');
         }
+        $this->assertCredentialTransport($baseUrl);
 
         try {
             $apiKey = $this->crypto->decrypt($encryptedKey);
@@ -111,6 +153,7 @@ class RagProxy {
         try {
             $response = $client->post($baseUrl . '/v1/chat/completions', [
                 'headers' => $headers,
+                'allow_redirects' => false,
                 'body' => json_encode($payload),
                 'timeout' => 240,
                 'connect_timeout' => 15,
@@ -178,6 +221,7 @@ class RagProxy {
         if ($baseUrl === '' || $encryptedKey === '') {
             throw new \RuntimeException('SunaQ Recherche ist noch nicht konfiguriert.');
         }
+        $this->assertCredentialTransport($baseUrl);
 
         try {
             $apiKey = $this->crypto->decrypt($encryptedKey);
@@ -199,6 +243,7 @@ class RagProxy {
                     'Authorization' => 'Bearer ' . $apiKey,
                     'X-RAG-User-ID' => $uid,
                 ],
+                'allow_redirects' => false,
                 'timeout' => 15,
                 'connect_timeout' => 5,
             ]);
@@ -229,6 +274,55 @@ class RagProxy {
         return ['models' => $models, 'default_model' => $defaultModel];
     }
 
+    public function userSettings() {
+        $baseUrl = rtrim($this->appConfigValue('middleware_url', ''), '/');
+        $encryptedKey = $this->appConfigValue('api_key_encrypted', '');
+        if ($baseUrl === '' || $encryptedKey === '') {
+            throw new \RuntimeException('SunaQ Recherche ist noch nicht konfiguriert.');
+        }
+        $this->assertCredentialTransport($baseUrl);
+
+        try {
+            $apiKey = $this->crypto->decrypt($encryptedKey);
+        } catch (\Exception $e) {
+            throw new \RuntimeException('Der gespeicherte Middleware-API-Key kann nicht gelesen werden.');
+        }
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            throw new \RuntimeException('Keine angemeldete Nextcloud-Sitzung gefunden.');
+        }
+        $uid = trim((string)$user->getUID());
+        if ($this->userSettingsBackoffActive($uid)) {
+            throw new \RuntimeException('Benutzereinstellungen werden nach einem Verbindungsfehler kurzzeitig lokal weiterverwendet.');
+        }
+
+        try {
+            $client = $this->clientService->newClient();
+            $response = $client->get($baseUrl . '/v1/user-settings', [
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Authorization' => 'Bearer ' . $apiKey,
+                    'X-RAG-User-ID' => $uid,
+                ],
+                'allow_redirects' => false,
+                'timeout' => 10,
+                'connect_timeout' => 5,
+            ]);
+        } catch (\Exception $e) {
+            $this->markUserSettingsSyncFailure($uid);
+            throw new \RuntimeException('Benutzereinstellungen konnten nicht geladen werden: ' . $this->safeError($e->getMessage()));
+        }
+        $status = (int)$response->getStatusCode();
+        $decoded = json_decode((string)$response->getBody(), true);
+        if ($status < 200 || $status >= 300) {
+            $this->markUserSettingsSyncFailure($uid);
+            $detail = is_array($decoded) && isset($decoded['detail']) ? (string)$decoded['detail'] : 'HTTP ' . $status;
+            throw new \RuntimeException('Middleware-Fehler: ' . $detail);
+        }
+        $this->clearUserSettingsSyncFailure($uid);
+        return is_array($decoded) ? $decoded : [];
+    }
+
     public function status($requestId) {
         $requestId = trim((string)$requestId);
         if (!preg_match('/^[A-Za-z0-9._-]{8,128}$/', $requestId)) {
@@ -240,6 +334,7 @@ class RagProxy {
         if ($baseUrl === '' || $encryptedKey === '') {
             throw new \RuntimeException('SunaQ Recherche ist noch nicht konfiguriert.');
         }
+        $this->assertCredentialTransport($baseUrl);
 
         try {
             $apiKey = $this->crypto->decrypt($encryptedKey);
@@ -260,6 +355,7 @@ class RagProxy {
                     'Authorization' => 'Bearer ' . $apiKey,
                     'X-RAG-User-ID' => $uid,
                 ],
+                'allow_redirects' => false,
                 'timeout' => 5,
                 'connect_timeout' => 2,
             ]);
@@ -290,6 +386,11 @@ class RagProxy {
         if ($baseUrl === '' || $encryptedKey === '') {
             return false;
         }
+        try {
+            $this->assertCredentialTransport($baseUrl);
+        } catch (\RuntimeException $e) {
+            return false;
+        }
 
         try {
             $user = $this->userSession->getUser();
@@ -310,6 +411,7 @@ class RagProxy {
                     'Authorization' => 'Bearer ' . $apiKey,
                     'X-RAG-User-ID' => $uid,
                 ],
+                'allow_redirects' => false,
                 'body' => json_encode([
                     'document_id' => $documentId,
                     'path' => $path,

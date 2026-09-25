@@ -110,10 +110,17 @@ Other useful flags:
 Fresh installs and installer reruns deliberately return to **maintenance mode**. The OpenAI-compatible provider is started in a minimal maintenance implementation that still validates registered provider-client Bearer keys, but does not load the normal SunaQ/LLM pipeline.
 
 For **Super-Light**, the initial maintenance start intentionally brings up only
-the provider plus optional OpenWebUI/nginx. Neo4j, Playwright, the normal API and
-mail worker are started by `maintenance-mode.sh off`. A smoke test run before
-that transition therefore reports Neo4j/Playwright as *deferred*, not failed.
-After maintenance mode is disabled those services are checked normally.
+the provider plus optional OpenWebUI/nginx. Leaving maintenance starts Neo4j and
+the normal API; Playwright starts only when explicitly installed with
+`--with-playwright`, and the mail worker is not started unless the administrator
+has enabled and started that optional ingestion path. A smoke test reports only
+selected local components.
+
+Current rc1.1 operational note: the Neo4j image can still be first pulled at
+`maintenance-mode.sh off` rather than during the installer preparation phase.
+That is functional but not the intended long-term UX; a future installer cleanup
+should pull every selected runtime image before the maintenance hand-off so
+leaving maintenance is a fast, deterministic state transition.
 
 Selected infrastructure containers may already be prepared or running in the
 Standard profile; they do not receive user SunaQ traffic while the provider gate
@@ -428,7 +435,10 @@ optional Compose service. Use `--with-playwright` to set
 `127.0.0.1:8090` and record `LOCAL_PLAYWRIGHT=1`. Use `--no-playwright` to
 set the renderer disabled and remove the local container. If neither switch is
 passed on a rerun, the existing `web.yaml` setting remains authoritative.
-Super-Light manages the same renderer as part of its normal stack and enables it by default; do not pass `--with-playwright` to the Super-Light installer. The explicit `--with-playwright` / `--no-playwright` switches belong to the Standard profile.
+Super-Light now uses the same explicit lifecycle: fresh installs do not build or
+start the renderer. Pass `--with-playwright` to install/retain it or
+`--no-playwright` to stop/remove the local renderer container. Reruns without
+either switch preserve the recorded installation state.
 
 ## 7a. Periodic Elasticsearch -> Qdrant sync
 
@@ -453,6 +463,8 @@ mail:
   enabled: false
   state_file: mail_state.sqlite
   poll_interval_seconds: 300
+  worker:
+    enabled: false
 ```
 
 There are no IMAP usernames/passwords or per-user target paths in
@@ -478,11 +490,14 @@ The IMAP secret is held via the shared `CredentialStore` abstraction. In `0.8.3-
 it is AES-256-GCM encrypted inside `runtime/users.sqlite`, using a master key
 outside the database; it is never placed in `config.yaml`.
 
-To activate polling globally after at least one account has been configured:
+To activate polling globally after at least one account has been configured,
+enable both the mail capability and its periodic worker:
 
 ```yaml
 mail:
   enabled: true
+  worker:
+    enabled: true
 ```
 
 Then restart/start the worker. Native/systemd and Docker both run the same `rag.mail_worker` Python scheduler. It re-reads `mail.enabled`, `mail.worker.enabled` and the poll interval between runs; a disabled worker remains idle instead of exiting. Each configured mailbox is treated as a recursive
@@ -584,6 +599,9 @@ degradation and never bypasses document ACL.
 - nginx serves HTTPS on 443 by default with a generated self-signed bootstrap certificate;
   HTTP 80 redirects to HTTPS. Replace `install/nginx/tls/server.crt` and
   `server.key` with site certificates when available. The installer preserves them on reruns.
+  If nginx is already running when the files are replaced, reload/restart nginx before
+  testing the Nextcloud app; the current installer does not automatically reload nginx
+  after an out-of-band certificate replacement.
 - Firewall policy, secret backups and host hardening remain administrator responsibilities.
 
 

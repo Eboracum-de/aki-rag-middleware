@@ -458,18 +458,45 @@
         messageList.scrollTop = messageList.scrollHeight;
     }
 
+    function scopeAvailable(inputNode) {
+        return inputNode.getAttribute('data-sunaq-available') !== 'false';
+    }
+
     function selectedScopes() {
         return scopeInputs.filter(function (inputNode) {
-            return inputNode.checked;
+            return inputNode.checked && scopeAvailable(inputNode);
         }).map(function (inputNode) {
             return inputNode.value;
+        });
+    }
+
+    function applySourceCapabilities(capabilities) {
+        if (!capabilities || typeof capabilities !== 'object') {
+            return;
+        }
+        scopeInputs.forEach(function (inputNode) {
+            if (!Object.prototype.hasOwnProperty.call(capabilities, inputNode.value)) {
+                return;
+            }
+            var available = capabilities[inputNode.value] !== false;
+            inputNode.setAttribute('data-sunaq-available', available ? 'true' : 'false');
+            inputNode.disabled = !available;
+            if (!available) {
+                inputNode.checked = false;
+            }
+            var labelNode = inputNode.closest ? inputNode.closest('label') : inputNode.parentNode;
+            if (labelNode) {
+                labelNode.hidden = !available;
+                labelNode.style.display = available ? '' : 'none';
+                labelNode.setAttribute('aria-hidden', available ? 'false' : 'true');
+            }
         });
     }
 
     function applyScopes(scopes) {
         var selected = Array.isArray(scopes) ? scopes : [];
         scopeInputs.forEach(function (inputNode) {
-            inputNode.checked = selected.indexOf(inputNode.value) !== -1;
+            inputNode.checked = scopeAvailable(inputNode) && selected.indexOf(inputNode.value) !== -1;
         });
     }
 
@@ -481,6 +508,10 @@
         return apiRequest('/models', 'GET').then(function (data) {
             var models = Array.isArray(data.models) ? data.models : [];
             var defaultModel = String(data.default_model || '');
+            var userSettings = data.user_settings && typeof data.user_settings === 'object'
+                ? data.user_settings
+                : {};
+            applySourceCapabilities(userSettings.source_capabilities || {});
             modelSelect.innerHTML = '';
             models.forEach(function (model) {
                 if (!model || !model.id) {
@@ -518,7 +549,9 @@
         input.disabled = busy;
         retryButton.disabled = busy;
         cancelEditButton.disabled = busy;
-        scopeInputs.forEach(function (node) { node.disabled = busy; });
+        scopeInputs.forEach(function (node) {
+            node.disabled = busy || !scopeAvailable(node);
+        });
         if (modelSelect) { modelSelect.disabled = busy; }
         Array.prototype.forEach.call(messageList.querySelectorAll('button'), function (button) {
             button.disabled = busy;

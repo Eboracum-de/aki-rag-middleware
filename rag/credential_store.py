@@ -169,6 +169,14 @@ class UserWebSettings:
 
 
 @dataclass(frozen=True)
+class UserChatSettings:
+    canonical_user_id: str
+    enabled: bool
+    target_path: str
+    updated_at: float
+
+
+@dataclass(frozen=True)
 class UserModelSettings:
     canonical_user_id: str
     default_model_id: str
@@ -331,6 +339,19 @@ class CredentialStore:
                     FOREIGN KEY(canonical_user_id) REFERENCES canonical_users(canonical_user_id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS user_chat_settings (
+                    canonical_user_id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    target_path TEXT NOT NULL DEFAULT 'SunaQ-Chats',
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY(canonical_user_id) REFERENCES canonical_users(canonical_user_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS chat_archive_roots (
+                    target_path TEXT PRIMARY KEY,
+                    first_seen_at REAL NOT NULL,
+                    last_seen_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS user_model_settings (
                     canonical_user_id TEXT PRIMARY KEY,
                     default_model_id TEXT NOT NULL DEFAULT '',
@@ -380,6 +401,11 @@ class CredentialStore:
             user_columns = {str(row[1]) for row in con.execute("PRAGMA table_info(canonical_users)").fetchall()}
             if "findings_curation_enabled" not in user_columns:
                 con.execute("ALTER TABLE canonical_users ADD COLUMN findings_curation_enabled INTEGER NOT NULL DEFAULT 0")
+
+            chat_columns = {str(row[1]) for row in con.execute("PRAGMA table_info(user_chat_settings)").fetchall()}
+            if "enabled" not in chat_columns:
+                # Existing rc1.1 rows remain enabled unless an administrator disables them.
+                con.execute("ALTER TABLE user_chat_settings ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
 
             # Preserve every mail archive root ever used. Existing installations
             # are backfilled here; deleting/reconfiguring an IMAP account must not
@@ -1452,6 +1478,77 @@ class CredentialStore:
                 (str(canonical_user_id or "").strip(),),
             ).fetchone()
         return self._web_settings_from_row(row)
+
+    # ------------------------------------------------------------------
+    # Per-user chat-archive settings
+    # ------------------------------------------------------------------
+    @staticmethod
+    def normalize_chat_archive_path(value: str) -> str:
+        target = str(value or "").strip().strip("/")
+        if not target:
+            target = "SunaQ-Chats"
+        if len(target) > 240 or "\x00" in target or "\\" in target:
+            raise ValueError("invalid chat archive target_path")
+        parts = [part.strip() for part in target.split("/")]
+        if any(
+            not part
+            or part in {".", ".."}
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in part)
+            for part in parts
+        ):
+            raise ValueError("invalid chat archive target_path")
+        return "/".join(parts)
+
+    def get_chat_settings(self, canonical_user_id: str) -> UserChatSettings | None:
+        user_id = str(canonical_user_id or "").strip()
+        if not user_id:
+            return None
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM user_chat_settings WHERE canonical_user_id=?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return UserChatSettings(
+            canonical_user_id=user_id,
+            enabled=bool(row["enabled"]),
+            target_path=self.normalize_chat_archive_path(str(row["target_path"] or "")),
+            updated_at=float(row["updated_at"] or 0.0),
+        )
+
+    def set_chat_settings(
+        self, canonical_user_id: str, *, enabled: bool = True,
+        target_path: str = "SunaQ-Chats"
+    ) -> UserChatSettings:
+        user_id = str(canonical_user_id or "").strip()
+        if not user_id or self.get_canonical_user(user_id) is None:
+            raise ValueError("unknown canonical user")
+        target = self.normalize_chat_archive_path(target_path)
+        now = time.time()
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO user_chat_settings(canonical_user_id,enabled,target_path,updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(canonical_user_id) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    target_path=excluded.target_path,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, int(bool(enabled)), target, now),
+            )
+            con.execute(
+                """
+                INSERT INTO chat_archive_roots(target_path,first_seen_at,last_seen_at)
+                VALUES(?,?,?)
+                ON CONFLICT(target_path) DO UPDATE SET last_seen_at=excluded.last_seen_at
+                """,
+                (target, now, now),
+            )
+        settings = self.get_chat_settings(user_id)
+        assert settings is not None
+        return settings
 
     # ------------------------------------------------------------------
     # Per-user CardDAV/contact seed settings

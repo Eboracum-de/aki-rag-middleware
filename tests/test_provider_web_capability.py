@@ -19,6 +19,87 @@ def _request(headers=None):
     return Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": raw})
 
 
+def test_source_capabilities_follow_global_and_per_user_service_gates(monkeypatch, tmp_path):
+    import rag.openai_provider as provider
+    from rag.credential_store import CredentialStore, scope_identity
+
+    store = CredentialStore(tmp_path / "users.sqlite")
+    identity = scope_identity("frontend-a", "alice-ext")
+    user = store.bind_identity(identity, "https://cloud.example", "alice")
+    store.set_chat_settings(
+        user.canonical_user_id,
+        enabled=True,
+        target_path="SunaQ-Chats",
+    )
+    store.set_web_settings(
+        user.canonical_user_id,
+        enabled=True,
+        archive_enabled=True,
+        target_path="Research/Web",
+    )
+    store.save_mail_account(
+        user.canonical_user_id,
+        name="primary",
+        host="imap.example",
+        username="alice@example.org",
+        password="secret",
+        enabled=True,
+        target_path="Mailarchiv",
+    )
+
+    monkeypatch.setattr(provider, "_PROVIDER_CLIENT_STORE", store)
+    monkeypatch.setattr(provider, "CHAT_ARCHIVE_ENABLED", True)
+    monkeypatch.setitem(provider.PROVIDER_CONFIG, "mail", {"enabled": True})
+    monkeypatch.setattr(provider, "_provider_web_config", lambda: {
+        "enabled": True,
+        "archive": {"enabled": True},
+    })
+
+    assert provider._source_capabilities_for_identity(identity) == {
+        "documents": True,
+        "mailarchive": True,
+        "webarchive": True,
+        "chatarchive": True,
+        "web": True,
+    }
+
+    monkeypatch.setitem(provider.PROVIDER_CONFIG, "mail", {"enabled": False})
+    monkeypatch.setattr(provider, "_provider_web_config", lambda: {
+        "enabled": False,
+        "archive": {"enabled": False},
+    })
+    store.set_chat_settings(
+        user.canonical_user_id,
+        enabled=False,
+        target_path="SunaQ-Chats",
+    )
+
+    assert provider._source_capabilities_for_identity(identity) == {
+        "documents": True,
+        "mailarchive": False,
+        "webarchive": False,
+        "chatarchive": False,
+        "web": False,
+    }
+
+
+def test_disabled_requested_sources_are_rejected_as_server_policy(monkeypatch):
+    import rag.openai_provider as provider
+
+    monkeypatch.setattr(provider, "_source_capabilities_for_identity", lambda identity: {
+        "documents": True,
+        "mailarchive": False,
+        "webarchive": False,
+        "chatarchive": False,
+        "web": False,
+    })
+    assert provider._disabled_requested_sources(
+        {"documents", "mailarchive", "chatarchive"},
+        web_requested=True,
+        scoped_user_id="frontend::alice",
+    ) == ["chatarchive", "mailarchive", "web"]
+
+
 def test_ui_search_web_function_does_not_grant_capability():
     body = ChatCompletionRequest(
         messages=[{"role": "user", "content": "Wer ist heute Vorstand?"}],

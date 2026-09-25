@@ -203,6 +203,119 @@ RESEARCH_FINDINGS_TIMEOUT = float(os.getenv("RESEARCH_FINDINGS_TIMEOUT", str(_re
 RESEARCH_FINDINGS_MAX_DOCUMENTS = max(1, min(60, int(os.getenv(
     "RESEARCH_FINDINGS_MAX_DOCUMENTS", str(_research_findings_cfg.get("max_documents_per_request", 30))
 ))))
+_chat_archive_cfg = dict(PROVIDER_CONFIG.get("chat_archive") or {})
+_chat_archive_default = "true" if _config_truthy(_chat_archive_cfg.get("enabled"), False) else "false"
+CHAT_ARCHIVE_ENABLED = os.getenv("CHAT_ARCHIVE_ENABLED", _chat_archive_default).lower() in {
+    "1", "true", "yes", "on"
+}
+
+
+def _provider_web_config() -> dict[str, Any]:
+    """Return the static Web capability configuration from web.yaml."""
+    try:
+        path = Path(__file__).resolve().parent.parent / "web.yaml"
+        with path.open(encoding="utf-8") as handle:
+            value = yaml.safe_load(handle) or {}
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _chat_archive_state(scoped_user_id: str | None) -> tuple[str, bool]:
+    """Return the selected path and effective global+per-user archive policy."""
+    target_path = "SunaQ-Chats"
+    user_enabled = False
+    identity = str(scoped_user_id or "").strip()
+    if identity:
+        store = _provider_client_store()
+        user = store.get_canonical_user_for_identity(identity)
+        if user is not None and user.enabled:
+            user_enabled = True
+            settings = store.get_chat_settings(user.canonical_user_id)
+            if settings is not None:
+                target_path = settings.target_path
+                user_enabled = bool(settings.enabled)
+    return target_path, bool(CHAT_ARCHIVE_ENABLED and user_enabled)
+
+
+def _source_capabilities_for_identity(scoped_user_id: str | None) -> dict[str, bool]:
+    """Return the optional source capabilities actually enabled for this user.
+
+    Capability-off is a SunaQ boundary, not merely a producer/worker switch:
+    archived material may still exist in Nextcloud and remain discoverable there,
+    while SunaQ deliberately stops offering and accepting that source scope.
+    """
+    identity = str(scoped_user_id or "").strip()
+    store = _provider_client_store()
+    user = store.get_canonical_user_for_identity(identity) if identity else None
+
+    mail_enabled = False
+    web_user_enabled = False
+    web_archive_user_enabled = False
+    if user is not None and user.enabled:
+        mail_enabled = bool(
+            _config_truthy((PROVIDER_CONFIG.get("mail") or {}).get("enabled"), False)
+            and any(
+                account.enabled and account.has_secret
+                for account in store.list_mail_accounts(
+                    user.canonical_user_id,
+                    enabled_only=True,
+                )
+            )
+        )
+        web_settings = store.get_web_settings(user.canonical_user_id)
+        web_user_enabled = bool(web_settings is not None and web_settings.enabled)
+        web_archive_user_enabled = bool(
+            web_settings is not None
+            and web_settings.enabled
+            and web_settings.archive_enabled
+        )
+
+    web_cfg = _provider_web_config()
+    web_global_enabled = _config_truthy(web_cfg.get("enabled"), False)
+    web_archive_global_enabled = bool(
+        web_global_enabled
+        and _config_truthy((web_cfg.get("archive") or {}).get("enabled"), False)
+    )
+    _, chat_enabled = _chat_archive_state(identity)
+    return {
+        "documents": True,
+        "mailarchive": mail_enabled,
+        "webarchive": bool(web_archive_global_enabled and web_archive_user_enabled),
+        "chatarchive": chat_enabled,
+        "web": bool(
+            RETRIEVAL_POLICY.web != "disabled"
+            and web_global_enabled
+            and web_user_enabled
+        ),
+    }
+
+
+_SOURCE_CAPABILITY_LABELS = {
+    "mailarchive": "Mailarchiv",
+    "webarchive": "Webarchiv",
+    "chatarchive": "Chatarchiv",
+    "web": "Web-Recherche",
+}
+
+
+def _disabled_requested_sources(
+    source_scopes: set[str] | None,
+    *,
+    web_requested: bool,
+    scoped_user_id: str | None,
+) -> list[str]:
+    capabilities = _source_capabilities_for_identity(scoped_user_id)
+    requested = set(source_scopes or ())
+    if web_requested:
+        requested.add("web")
+    return sorted(
+        source
+        for source in requested
+        if source in capabilities and not capabilities[source]
+    )
+
+
 def _provider_config_nextcloud_base_url() -> str:
     """Resolve Nextcloud base URL from env override or canonical config.yaml."""
     env_value = os.getenv("NEXTCLOUD_BASE_URL", "").strip().rstrip("/")
@@ -466,6 +579,7 @@ _ACTIVE_PROGRESS_OWNER: ContextVar[str] = ContextVar("sunaq_progress_owner", def
 _ACTIVE_SUGGESTIONS: ContextVar[tuple[dict[str, str], ...]] = ContextVar(
     "sunaq_suggestions", default=()
 )
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 def _set_suggestions(items: list[dict[str, str]] | tuple[dict[str, str], ...]) -> None:
@@ -4057,6 +4171,108 @@ async def _graph_enqueue_evidence(
         )
 
 
+async def _store_use_research_findings(
+    *,
+    query_id: str,
+    question: str,
+    retrieval_query: str,
+    results: list[SearchResult],
+    canonical_user_id: str = "",
+    nextcloud_login: str = "",
+    nextcloud_server: str = "",
+) -> None:
+    """Persist /use evidence through the same planner/verifier contract as search Findings.
+
+    Explicit document selection bypasses normal retrieval, so it otherwise never
+    reaches the planner/verifier Findings hook.  Only when Findings are enabled do
+    we pay for a structured rewrite and verifier pass.  Work on copies so a
+    verifier classification cannot remove or reorder the user's explicitly chosen
+    answer context.
+    """
+    if not RESEARCH_FINDINGS_ENABLED or not results:
+        return
+
+    try:
+        rewrite = await _rewrite_search_spec(
+            question=retrieval_query,
+            round_no=1,
+            results=[],
+            previous_spec=None,
+            retrieval_arms={"files"},
+            seed_context=None,
+        )
+        if not bool(rewrite.get("valid")):
+            log.info("Research Findings skipped for /use: structured rewrite invalid")
+            return
+
+        spec = dict(rewrite.get("spec") or {})
+        query_frame = normalize_query_frame(
+            query_frame_from_search_spec(spec, intent=retrieval_query)
+        )
+        review_results = [
+            SearchResult(
+                index=result.index,
+                title=result.title,
+                text=result.text,
+                raw=dict(result.raw or {}),
+            )
+            for result in results
+        ]
+        verified, _uncertain, verification = await _verify_exhaustive_candidates(
+            retrieval_query,
+            review_results,
+            query_frame=query_frame,
+            verification_requirements=list(spec.get("verification_requirements") or []),
+            candidate_limit=min(
+                len(review_results),
+                _retrieval_planner().exhaustive_verification_candidate_limit,
+            ),
+            compact=True,
+            # /use is an explicitly bounded document set.  The administrator has
+            # already opted into Finding persistence, so review the configured
+            # bounded set rather than applying the ordinary remote small-window cap.
+            exhaustive=True,
+        )
+        await _store_positive_research_findings(
+            query_id=query_id,
+            query_frame=query_frame,
+            results=verified,
+            canonical_user_id=canonical_user_id,
+            nextcloud_login=nextcloud_login,
+            nextcloud_server=nextcloud_server,
+            user_query=question,
+            retrieval_query=retrieval_query,
+            source_scopes=None,
+        )
+        log.info(
+            "Research Findings /use review: selected=%d checked=%d matches=%d",
+            len(review_results),
+            int(verification.get("checked") or 0),
+            int(verification.get("matches") or 0),
+        )
+    except Exception as exc:
+        # Findings are an optional enrichment layer and must never break /use.
+        log.warning(
+            "Research Findings /use review failed; answer continues unchanged: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+
+
+async def _run_use_research_findings_background(**kwargs: Any) -> None:
+    _ACTIVE_PROGRESS_ID.set("")
+    _ACTIVE_PROGRESS_OWNER.set("")
+    await _store_use_research_findings(**kwargs)
+
+
+def _schedule_use_research_findings(**kwargs: Any) -> None:
+    if not RESEARCH_FINDINGS_ENABLED or not kwargs.get("results"):
+        return
+    task = asyncio.create_task(_run_use_research_findings_background(**kwargs))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
 async def _store_positive_research_findings(
     *,
     query_id: str,
@@ -4170,8 +4386,8 @@ async def _store_positive_research_findings(
 def _build_context(
     results: list[SearchResult],
     *,
-    per_result_max_chars: int = PER_RESULT_MAX_CHARS,
-    context_max_chars: int = CONTEXT_MAX_CHARS,
+    per_result_max_chars: int | None = None,
+    context_max_chars: int | None = None,
     preserve_all_results: bool = False,
 ) -> tuple[str, list[SearchResult]]:
     """Build the LLM context and return exactly the results that reached it.
@@ -4187,8 +4403,12 @@ def _build_context(
     included: list[SearchResult] = []
     used = 0
 
-    effective_per_result = int(per_result_max_chars)
-    effective_total = int(context_max_chars)
+    effective_per_result = int(
+        PER_RESULT_MAX_CHARS if per_result_max_chars is None else per_result_max_chars
+    )
+    effective_total = int(
+        CONTEXT_MAX_CHARS if context_max_chars is None else context_max_chars
+    )
     effective_results = results
     profile_budget = _answer_context_budget()
     if profile_budget is not None:
@@ -4198,7 +4418,7 @@ def _build_context(
         # pass their own budgets and remain bounded by the smaller value.
         effective_per_result = (
             profile_budget["max_chars_per_document"]
-            if int(per_result_max_chars) == int(PER_RESULT_MAX_CHARS)
+            if per_result_max_chars is None
             else min(
                 effective_per_result,
                 profile_budget["max_chars_per_document"],
@@ -4206,7 +4426,7 @@ def _build_context(
         )
         effective_total = (
             profile_budget["max_total_chars"]
-            if int(context_max_chars) == int(CONTEXT_MAX_CHARS)
+            if context_max_chars is None
             else min(
                 effective_total,
                 profile_budget["max_total_chars"],
@@ -5648,7 +5868,7 @@ Quellenbereiche (untereinander kombinierbar):
 /webarchive
   Nur bereits archivierte Webquellen.
 /chatarchive
-  Nur gespeicherte AKI-Recherchen.
+  Nur gespeicherte SunaQ-Recherchen.
 /web
   Aktuelle öffentliche Web-Recherche. Allein = Web-only; zusammen mit internen Quellen = gemischte Recherche.
 
@@ -5688,7 +5908,7 @@ Quellenbereiche und Retrieval-Technik können kombiniert werden, z. B.
 /documents /web Aktueller Stand des Vorgangs
 /webarchive /web Entwicklung seit der letzten Recherche
 
-Ohne Quellen-Directive bleibt der historische interne Standard erhalten: Dokumente + Mailarchiv; Web- und Chatarchiv sind opt-in."""
+Ohne Quellen-Directive werden nur normale Dokumente durchsucht; Mail-, Web- und Chatarchiv sind opt-in."""
 
 _HELP_ALIASES = {
     "help", "help me", "help please",
@@ -6147,6 +6367,33 @@ async def list_models(
     return {"object": "list", "data": data}
 
 
+@app.get("/v1/user-settings")
+async def user_settings(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    client_id = _check_auth(authorization)
+    external_user_id = str(
+        request.headers.get("x-rag-user-id")
+        or request.headers.get("x-openwebui-user-id")
+        or request.headers.get("x-open-webui-user-id")
+        or ""
+    ).strip()
+    if not external_user_id:
+        raise HTTPException(status_code=403, detail="RAG user identity missing")
+    try:
+        scoped_user_id = scope_identity(client_id, external_user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Invalid RAG user identity") from exc
+
+    target_path, chat_enabled = _chat_archive_state(scoped_user_id)
+    return {
+        "chat_archive_path": target_path,
+        "chat_archive_enabled": chat_enabled,
+        "source_capabilities": _source_capabilities_for_identity(scoped_user_id),
+    }
+
+
 @app.post("/v1/archive/chat/register")
 async def register_chat_archive(
     body: ChatArchiveRegisterRequest,
@@ -6161,6 +6408,12 @@ async def register_chat_archive(
         user_id = scope_identity(client_id, external_user_id)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="Invalid RAG user identity") from exc
+    if not _chat_archive_state(user_id)[1]:
+        return {
+            "ok": False,
+            "enabled": False,
+            "reason": "chat_archive_disabled",
+        }
     document_id = str(body.document_id or "").strip()
     path = str(body.path or "").strip()
     if not document_id or not path:
@@ -6469,6 +6722,27 @@ async def chat_completions(
                     completion_id, direct_kind, question[:180],
                 )
 
+        # Source capabilities govern retrieval/evidence use, not trivial direct
+        # replies. This also makes a stale frontend checkbox harmless while the
+        # UI refreshes its authenticated capability list.
+        if direct_kind is None:
+            disabled_sources = _disabled_requested_sources(
+                source_scopes,
+                web_requested=web_requested,
+                scoped_user_id=user_id,
+            )
+            if disabled_sources:
+                labels = [
+                    _SOURCE_CAPABILITY_LABELS.get(source, source)
+                    for source in disabled_sources
+                ]
+                return _static_response(
+                    "Die angeforderte Quelle ist für diesen Benutzer nicht freigeschaltet: "
+                    + ", ".join(labels) + ".",
+                    completion_id,
+                    body.stream,
+                )
+
     options, think, logged_parameters = _generation_parameters(body)
 
     # Purpose-specific generation policy.
@@ -6731,6 +7005,7 @@ async def chat_completions(
     auto_web_archive_run_paths: list[str] = []
     auto_web_archive_errors: list[dict[str, Any]] = []
     internal_fallback_message = ""
+    deferred_use_findings: dict[str, Any] | None = None
 
     if auxiliary:
         messages = _direct_messages(body.messages)
@@ -6870,6 +7145,15 @@ async def chat_completions(
                 context,
                 results,
             )
+            deferred_use_findings = {
+                "query_id": completion_id,
+                "question": question,
+                "retrieval_query": retrieval_query,
+                "results": list(results),
+                "canonical_user_id": str(auth_state.get("canonical_user_id") or ""),
+                "nextcloud_login": str(auth_state.get("nextcloud_login") or ""),
+                "nextcloud_server": str(auth_state.get("server") or ""),
+            }
             log.info(
                 "Request %s %s: references=%s resolved_documents=%s",
                 completion_id,
@@ -7095,14 +7379,14 @@ async def chat_completions(
                 query_frame_from_search_spec(active_search_spec, intent=retrieval_query)
             )
             log.info(
-                "query rewrite round 1: elastic=%r semantic=%r entities=%s concepts=%s constraints=%s verify=%s seeds=%s",
-                active_search_spec.get("elastic_query") or "",
-                active_search_spec.get("semantic_query") or "",
-                active_search_spec.get("entities") or [],
-                active_search_spec.get("concepts") or [],
-                active_search_spec.get("constraints") or [],
-                active_search_spec.get("verification_requirements") or [],
-                _compact_query_seed_context(query_seed_context),
+                "query rewrite round 1: elastic_present=%s semantic_present=%s entities=%d concepts=%d constraints=%d verification_requirements=%d seed_keys=%d",
+                bool(str(active_search_spec.get("elastic_query") or "").strip()),
+                bool(str(active_search_spec.get("semantic_query") or "").strip()),
+                len(active_search_spec.get("entities") or []),
+                len(active_search_spec.get("concepts") or []),
+                len(active_search_spec.get("constraints") or []),
+                len(active_search_spec.get("verification_requirements") or []),
+                len(query_seed_context),
             )
 
         retrieval_rounds = (
@@ -7253,23 +7537,21 @@ async def chat_completions(
                         )
                         planner_previous_doc_ids = current_doc_ids
                         log.info(
-                            "retrieval round %d rewrite: elastic=%r semantic=%r entities=%s concepts=%s constraints=%s reason=%s",
+                            "retrieval round %d rewrite: elastic_present=%s semantic_present=%s entities=%d concepts=%d constraints=%d",
                             round_no + 1,
-                            active_search_spec.get("elastic_query") or "",
-                            active_search_spec.get("semantic_query") or "",
-                            active_search_spec.get("entities") or [],
-                            active_search_spec.get("concepts") or [],
-                            active_search_spec.get("constraints") or [],
-                            next_rewrite.get("reason"),
+                            bool(str(active_search_spec.get("elastic_query") or "").strip()),
+                            bool(str(active_search_spec.get("semantic_query") or "").strip()),
+                            len(active_search_spec.get("entities") or []),
+                            len(active_search_spec.get("concepts") or []),
+                            len(active_search_spec.get("constraints") or []),
                         )
                         continue
                     log.info(
-                        "retrieval rounds stop after round %d: stop=%s changed=%s valid=%s reason=%s",
+                        "retrieval rounds stop after round %d: stop=%s changed=%s valid=%s",
                         round_no,
                         bool(next_rewrite.get("stop")),
                         changed,
                         bool(next_rewrite.get("valid")),
-                        next_rewrite.get("reason"),
                     )
                 planner_previous_doc_ids = current_doc_ids
 
@@ -8019,6 +8301,8 @@ async def chat_completions(
             answer_text=content,
         )
         log.info("Request %s finished: status=answered answer_chars=%d", completion_id, len(content))
+        if deferred_use_findings is not None:
+            _schedule_use_research_findings(**deferred_use_findings)
         return _completion_response(content, completion_id)
 
     async def event_stream() -> AsyncIterator[str]:
@@ -8208,6 +8492,8 @@ async def chat_completions(
             answer_text=answer,
         )
         log.info("Request %s finished: status=%s answer_chars=%d", completion_id, status, len(answer))
+        if deferred_use_findings is not None and status == "answered":
+            _schedule_use_research_findings(**deferred_use_findings)
 
         yield _sse_chunk(completion_id, finish_reason="stop")
         yield "data: [DONE]\n\n"

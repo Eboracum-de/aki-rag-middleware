@@ -1,6 +1,6 @@
 # Support
 
-AKI RAG Middleware is currently a public-beta open-source project.
+SunaQ is currently a public-beta open-source project.
 
 - Bugs and reproducible operational problems: use GitHub Issues.
 - Security vulnerabilities: follow `SECURITY.md`.

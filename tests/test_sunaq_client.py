@@ -7,7 +7,7 @@ APP = ROOT / "clients" / "nextcloud" / "sunaq"
 
 def test_sunaq_client_is_packaged_for_nextcloud_23_plus():
     root = ET.parse(APP / "appinfo" / "info.xml").getroot()
-    assert root.findtext("version") == "0.3.0"
+    assert root.findtext("version") == "0.3.4"
     dependency = root.find("./dependencies/nextcloud")
     assert dependency is not None
     assert dependency.attrib.get("min-version") == "23"
@@ -51,7 +51,9 @@ def test_sunaq_024_persists_timestamps_and_renders_tables():
     assert "timestamp" in js.lower()
     assert "/help" in main
     assert "SunaQ-Chats" in store
-    assert "AKI-Chats" in store  # legacy archive root remains readable
+    assert "chat_archive_path" in store
+    assert "setArchivePath" in store
+    assert "LEGACY_FOLDER" not in store
 
 
 def test_sunaq_chat_routes_use_nextcloud23_compatible_noadmin_docblocks():
@@ -114,9 +116,30 @@ def test_sunaq_026_archive_registration_is_bounded_and_damaged_chats_remain_dele
     assert "Gespeicherter Chat ist beschädigt und kann nicht umbenannt werden." in store
     assert "$item['sources'] = $sources;" in store
     assert "### Quellen" not in store
-    assert readme.startswith("# SunaQ Recherche 0.3.0")
+    assert readme.startswith("# SunaQ Recherche 0.3.4")
     assert "persistent per-user chat history as Markdown plus metadata" in readme
     assert "Legacy-HTML" in readme
+
+
+def test_sunaq_033_filters_source_chips_from_authenticated_server_capabilities():
+    controller = (APP / "lib" / "Controller" / "ChatController.php").read_text(encoding="utf-8")
+    proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
+    js = (APP / "js" / "app.js").read_text(encoding="utf-8")
+    main = (APP / "templates" / "main.php").read_text(encoding="utf-8")
+    css = (APP / "css" / "style.css").read_text(encoding="utf-8")
+
+    assert "'source_capabilities'" in controller
+    assert "$models['user_settings'] = $settings;" in controller
+    assert "$baseUrl . '/v1/user-settings'" in proxy
+    assert "applySourceCapabilities" in js
+    assert "data-sunaq-available" in js
+    assert "labelNode.hidden = !available" in js
+    assert "labelNode.style.display = available ? '' : 'none'" in js
+    assert 'value="mailarchive"' in main and 'class="sunaq-scope-chip" hidden' in main
+    assert ".sunaq-scope-chip[hidden]" in css
+    assert "display: none !important" in css
+    assert "Administrativ nicht verfügbare Quellen ausgeblendet" not in js
+    assert "node.disabled = busy || !scopeAvailable(node)" in js
 
 
 def test_sunaq_markdown_strong_weight_is_browser_independent():
@@ -189,9 +212,63 @@ def test_sunaq_app_id_migration_reads_legacy_akirag_configuration():
     assert "getAppValue('akirag'" in admin
 
 
-def test_sunaq_chat_store_writes_new_metadata_but_accepts_legacy_sidecars():
+def test_sunaq_chat_store_uses_one_configurable_archive_and_accepts_legacy_sidecars():
     store = (APP / "lib" / "Service" / "ChatStore.php").read_text(encoding="utf-8")
+    proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
+    controller = (APP / "lib" / "Controller" / "ChatController.php").read_text(encoding="utf-8")
     assert "'.sunaq.json'" in store
     assert "'.akirag.json'" in store
-    assert "LEGACY_FOLDER = 'AKI-Chats'" in store
     assert "FOLDER = 'SunaQ-Chats'" in store
+    assert "LEGACY_FOLDER" not in store
+    assert "chat_archive_path" in store
+    assert "setArchivePath" in store
+    assert "$baseUrl . '/v1/user-settings'" in proxy
+    assert "syncArchivePath" in controller
+
+
+def test_sunaq_client_requires_https_for_provider_credentials_unless_admin_opts_in():
+    proxy = (APP / "lib" / "Service" / "RagProxy.php").read_text(encoding="utf-8")
+    admin = (APP / "lib" / "Controller" / "AdminController.php").read_text(encoding="utf-8")
+    template = (APP / "templates" / "admin.php").read_text(encoding="utf-8")
+    js = (APP / "js" / "admin.js").read_text(encoding="utf-8")
+
+    assert "assertCredentialTransport" in proxy
+    assert "allow_insecure_http" in proxy
+    assert "scheme === 'https'" in proxy
+    assert "credentialRedirectProtocols" not in proxy
+    assert proxy.count("'allow_redirects' => false") >= 5
+    assert "userSettingsBackoffActive" in proxy
+    assert "user_settings_sync_failed_at" in proxy
+    assert "allowInsecureHttp" in admin
+    assert "HTTP würde den Provider-API-Key unverschlüsselt übertragen" in admin
+    assert "sunaq-allow-insecure-http" in template
+    assert "allowInsecureHttp" in js
+
+
+def test_sunaq_032_obeys_server_chat_archive_policy_and_cleans_manual_deletes():
+    controller = (APP / "lib" / "Controller" / "ChatController.php").read_text(encoding="utf-8")
+    store = (APP / "lib" / "Service" / "ChatStore.php").read_text(encoding="utf-8")
+    application = (APP / "lib" / "AppInfo" / "Application.php").read_text(encoding="utf-8")
+    listener = (APP / "lib" / "Listener" / "ChatArchiveDeleteListener.php").read_text(encoding="utf-8")
+
+    assert "chat_archive_enabled" in controller
+    assert "syncArchiveSettings" in controller
+    assert "if (!empty($archiveSettings['enabled']))" in controller
+    assert "fail closed for new archive writes" in controller
+    rename_block = controller[
+        controller.index("public function rename"):
+        controller.index("public function delete")
+    ]
+    assert "$settings = $this->syncArchiveSettings();" in rename_block
+    assert "empty($settings['enabled'])" in rename_block
+
+    assert "BeforeNodeDeletedEvent::class" in application
+    assert "ChatArchiveDeleteListener::class" in application
+    assert "$event->getNode()" in listener
+    assert "'.' . $id . '.sunaq.json'" in listener
+    assert "'.' . $id . '.akirag.json'" in listener
+    assert "Never block the user's requested file deletion" in listener
+
+    assert "resolveArchiveFile" in store
+    assert "deleteMetadataFiles" in store
+    assert "stale hidden metadata must not keep the chat" in store

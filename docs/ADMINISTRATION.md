@@ -268,6 +268,16 @@ polling/import limits. The password itself is not in this table; it is in
 
 Per-verified-Nextcloud-user Web Research enablement, archive enablement and target path (intern über `canonical_user_id`).
 
+### `user_chat_settings`
+
+Per-canonical-user chat archive enablement and target path. `enabled` is the
+user-level gate below the global `config.yaml: chat_archive.enabled` switch.
+Exactly one dedicated Nextcloud-relative archive path is configured for each user;
+absence of a row keeps the compatibility defaults (`enabled=true`,
+`target_path=SunaQ-Chats`). Changing the path does not move existing archive
+files. For an older RC archive, configure `AKI-Chats` for that user or move the
+files once to the selected target.
+
 ### `contact_sync_settings`
 
 Per-user CardDAV seed configuration and last-run status. The foreign key is the
@@ -286,26 +296,59 @@ retrieval even if an administrator later changes a user's archive target.
 
 Schema/runtime migration markers and internal metadata.
 
-## 5. Mail/Web/Kontakt-DB global vs. per-user switches
+## 5. Optional sources: global vs. per-user switches
 
-Mail requires both:
+SunaQ exposes an optional source only when its effective capability is enabled
+for the authenticated user. The bundled Nextcloud client therefore does not show
+disabled optional source controls at all; explicit source directives are subject
+to the same provider-side policy.
+
+Mail archive retrieval/import requires:
 
 ```text
 config.yaml: mail.enabled=true
 mail_accounts.enabled=true
+mail account has a usable credential
 canonical user enabled
 ```
 
-The mail worker polls every enabled account across all enabled canonical users;
-a broken/missing credential for one user does not intentionally redefine the
+The mail worker is not started by the fresh-install baseline. It becomes active
+only after the administrator enables both `mail.enabled` and
+`mail.worker.enabled` and starts/enables the worker service. Native non-systemd
+`start-all.sh` does this automatically from the configuration; systemd
+deployments use `systemctl enable --now rag-mail-worker`, and Super-Light uses
+`docker compose up -d mail-worker` from `install/super-light/`.
+
+When active, the worker polls every enabled account across all enabled canonical
+users; a broken/missing credential for one user does not intentionally redefine the
 others' configuration. Configured mailbox names are recursive roots: selectable
 IMAP descendants are discovered with `LIST`, and new messages use a dedicated
 Nextcloud directory per mail.
 After storing/testable IMAP credentials, **Verbindung testen & Mailboxen ermitteln** runs the same IMAP `LIST` parser as the importer and shows server names, flags, hierarchy delimiter and `\Noselect` state. The configured mailbox list remains a set of recursive roots.
 
 Web Research has global policy in `web.yaml` and per-user enablement/target in
-`users.sqlite`. The Admin UI warns when Mail or Web is configured per user but
-the corresponding global engine is disabled.
+`users.sqlite`. Live `/web` is available only when both the global Web service
+and that user's Web switch are enabled. `/webarchive` additionally requires
+global Web-archive persistence and the user's `archive_enabled` switch. The
+Admin UI warns when Mail, Web or Chat is configured per user while the
+corresponding global engine is disabled.
+
+Saved chats are still classified as `chat_archive` so they can never fall into
+ordinary document retrieval. Using or writing them is disabled on fresh installs.
+Effective Chat availability is:
+
+```text
+config.yaml: chat_archive.enabled=true
+user_chat_settings.enabled=true
+canonical user enabled
+```
+
+Enable the capability only after the operator has accepted the independent
+retention/lifecycle implications. When the effective capability is false, SunaQ
+Recherche hides the Chats source and keeps new conversations session-local.
+
+Research-Finding persistence is likewise opt-in:
+`config.yaml: research_findings.enabled=false` is the fresh-install default.
 
 CardDAV contact seeds are configured under **Users → <Nextcloud login> → Kontakt-DB**.
 The UI deliberately does not expose the internal UUID as an operational selector.

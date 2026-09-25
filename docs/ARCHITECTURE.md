@@ -1,9 +1,9 @@
-# SunaQ / Eboracum Research Gateway
-## Architecture and design baseline 0.8.6-rc1
+# SunaQ architecture
+## Architecture and design baseline 0.8.6-rc1.1
 
-**Updated:** 23 September 2026  
+**Updated:** 24 September 2026  
 **Status:** Release Candidate  
-**Reference version:** `0.8.6-rc1` (draft)
+**Reference version:** `0.8.6-rc1.1`
 
 ---
 
@@ -33,6 +33,66 @@ The reference architecture can combine:
 - optional Nextcloud-backed Web, Mail and Chat archives.
 
 The model layers are independently configurable. Embedding models, rerankers and planner/verifier/evidence/answer roles can be local or external according to administrator policy. In 0.8.6, user-visible SunaQ profiles select request-local research budgets and role routing without making the underlying LLM itself the product-level model.
+
+### 1.1 SRC and ERG capability layers
+
+The codebase is organized around two capability layers:
+
+```text
+A — Secure RAG Core (SRC)        BASELINE
+    Nextcloud documents
+            ↓
+    FullTextSearch / Elasticsearch
+            ↓
+       live Nextcloud ACL
+            ↓
+             LLM
+      local preferred;
+      external allowed with
+      managed/accepted egress
+
+B — Eboracum Research Gate (ERG) ADMIN OPT-IN
+    SRC + selected additional capabilities
+            ↓
+    Mail / Web / Chat archives
+    live Web research / Playwright
+    semantic retrieval / reranking
+    Findings / Graph-Lite / full graph
+    additional retrieval rounds
+    other specialist functions
+```
+
+A fresh installation deliberately starts close to layer A. Web Research and Web
+archiving are off, Playwright is not installed unless requested, the mail worker
+is off, chat archives are not retrieval evidence and Research-Finding
+persistence is off.
+
+SRC prefers local/private model processing, but it does not require zero egress.
+An administrator may use bounded external model endpoints where the disclosure
+is understood, explicitly accepted and controlled by the configured remote
+evidence limits.
+
+ERG is deliberately a menu rather than a monolithic "advanced mode". Enabling an
+ERG capability can add retained state, untrusted input, external egress,
+latency/resource cost or lifecycle obligations. Each capability therefore
+remains an explicit administrator decision.
+
+In 0.8.6-rc1.1 SRC/ERG is architecture and administration terminology, not yet
+a supported installer/configuration tier. See [SRC-ERG.md](SRC-ERG.md).
+
+### 1.2 Policy/inspection boundaries
+
+rc1.1 now wires a small, shared hook contract into the boundaries where SunaQ
+sends data outward, fetches untrusted content or writes imported/generated
+content back to Nextcloud. The stages are `outbound_query`, `pre_fetch`,
+`post_fetch`, `pre_persist` and `pre_model_egress`.
+
+The shipped rc1.1 evaluator is deliberately a no-op: every stage returns
+`ALLOW`, so the hooks do not claim malware, DLP, URL-filtering or egress
+protection. rc1.2 is intended to add administrator configuration and concrete
+adapters such as malware scanning, URL policy, ICAP/YARA/DLP/redaction or custom
+inspection services. Evaluator failures are not swallowed, allowing a configured
+required security adapter to fail closed.
 
 ---
 
@@ -132,9 +192,37 @@ Ordinary Elasticsearch/Qdrant retrieval, live ACL, verifier and answer generatio
 
 Curated identity and relation knowledge can improve query expansion, entity resolution and later graph-assisted searches, but this is an optional learning/curation loop rather than a mandatory runtime dependency.
 
+### 3.9 Model output may influence semantics, not authorization
+
+LLMs participate in bounded semantic decisions such as query rewriting,
+candidate verification, evidence selection and answer generation. Their output
+therefore can influence **which authorized evidence is considered relevant** and
+what answer is produced.
+
+LLM output is not treated as executable middleware control:
+
+- the planner emits a validated/normalized SearchSpec rather than raw
+  Elasticsearch JSON DSL;
+- retrieval arms, source capabilities, budgets and model entitlements are
+  application policy;
+- ACL-prefilter identity and groups come from authenticated Nextcloud OCS data,
+  not from the query or model;
+- the final live WebDAV ACL is deterministic and independent of model output;
+- normal retrieval has no generic tool/action interface and no arbitrary
+  filesystem, shell, database or Nextcloud write capability.
+
+This means prompt injection is not absent, but its consequence is deliberately
+bounded. In layer A it is principally an evidence-integrity/answer-quality risk.
+Persistence/egress risks become materially larger when optional ERG capabilities
+such as Web/Mail/Chat ingestion, Graph/Findings persistence or other external
+boundaries are enabled.
+
 ---
 
 ## 4. High-level architecture
+
+The policy/inspection stages wired in rc1.1 are shown in brackets. The shipped
+evaluator returns `ALLOW` for all stages; concrete adapters remain deferred.
 
 ```text
                  SunaQ Recherche / OpenWebUI / trusted API client
@@ -147,27 +235,38 @@ Curated identity and relation knowledge can improve query expansion, entity reso
                  |                                   |
          private/internal path                  public Web path
                  |                                   |
-        Neo4j seed/alias context               Brave / SearXNG
+        Neo4j seed/alias context          [outbound_query policy]
                  |                                   |
-        +--------+---------+                    URL discovery
+        +--------+---------+                    Brave / SearXNG
         |                  |                         |
- Elasticsearch         Qdrant                   HTTP fetch
+ Elasticsearch         Qdrant                   URL discovery
   required arm         optional                     |
-        |                  |                  passage selection
+        |                  |                  [pre_fetch policy]
         +--------+---------+                         |
-                 |                             relevance gate
-          fusion / dedup                           |
-                 |                           Web evidence W1..Wn
-        optional reranker                           |
-                 |                                  |
-        LIVE NEXTCLOUD ACL                          |
-                 |                                  |
-       optional Candidate Verifier                  |
-                 +-----------------+----------------+
+                 |                              HTTP/Playwright
+          fusion / dedup                            fetch
+                 |                                   |
+        optional reranker                    [post_fetch inspect]
+                 |                                   |
+        LIVE NEXTCLOUD ACL                    passage selection
+                 |                                   |
+       optional Candidate Verifier             relevance gate
+                 |                                   |
+                 +-----------------+-----------------+
+                                   |
+                         bounded evidence/context
+                                   |
+                        [pre_model_egress]
                                    |
                        reasoning/answer backend
                                    |
                  outcome + sources + provenance
+                                   |
+                    optional archive/import write
+                                   |
+                          [pre_persist]
+                                   |
+                              Nextcloud
 ```
 
 ---
@@ -186,6 +285,7 @@ Curated identity and relation knowledge can improve query expansion, entity reso
 | Answer model | answer generation from authorized evidence | No |
 | Brave/SearXNG | public URL discovery | N/A |
 | Web relevance gate | source relevance after actual fetch | N/A |
+| Planned policy/inspection hooks (rc1.2) | optional outbound-query, pre-fetch, post-fetch, pre-persist and remote-model-egress policy/inspection | No |
 
 ---
 
@@ -439,6 +539,8 @@ query
 
 A well-curated graph can improve entity resolution and may support searches across recognized relationships. Leaving Findings uncurated or disabling `research_findings.enabled` does not disable normal retrieval or answering.
 
+Direct `/use` selection remains a retrieval bypass: the user chooses already-resolved documents and the answer path does not rerank or discard them. When Research Findings are enabled, SunaQ now runs a **side pipeline** only for enrichment: it derives a structured QueryFrame from the user's `/use` task, verifies copies of the live-ACL-authorized selected documents, and persists only verifier `match` + `direct` observations. Verifier output cannot remove or reorder the explicit answer context.
+
 Curated claims remain document-grounded `RelationObservation` records. The current release does not automatically promote them into global fact edges or query-expansion relations.
 
 User/query provenance is represented through a per-request `ResearchRun` while the Finding remains shared:
@@ -470,16 +572,27 @@ Search snippets are discovery metadata and are not answer evidence.
 
 ### 11.2 Evidence pipeline
 
+Current rc1.1 execution is shown together with the planned rc1.2 hook insertion
+points:
+
 ```text
-Search provider
+derived/public search query
+   -> [outbound_query]
+   -> Search provider
    -> URL list
-   -> HTTP fetch
+   -> [pre_fetch]
+   -> HTTP/Playwright fetch
+   -> [post_fetch]
    -> text/PDF extraction
    -> passage selection
    -> relevance review
    -> bounded Web evidence
+   -> [pre_model_egress when the target model is remote]
    -> answer citations [W1], [W2], ...
 ```
+
+The bracketed policy/inspection stages are real rc1.1 hook points, but the
+shipped evaluator is ALLOW-only and therefore not a filtering guarantee.
 
 ### 11.3 Explicit, mixed and fallback use
 
@@ -517,6 +630,11 @@ Archive roots are excluded from ordinary internal retrieval so archived public m
 
 Playwright rendering is optional and produces a readable research snapshot, not a complete WARC/WACZ forensic capture.
 
+Web-archive writes pass the rc1.1 `pre_persist` hook; rc1.2 should attach configurable policy adapters
+after content inspection and before SunaQ writes the archive artifact into
+Nextcloud. This allows a deployment to attach malware/content/DLP policy without
+coupling the archive implementation to one scanner.
+
 ---
 
 ## 12. Privacy and processing boundaries
@@ -549,13 +667,54 @@ The master key remains outside SQLite.
 
 This protects stored database material from casual/plaintext disclosure but is not intended to protect secrets from `root` or a fully compromised middleware process.
 
-### 12.5 Untrusted content
+### 12.5 Untrusted content and prompt injection
 
-Documents, mail, Web pages and saved chats may contain text phrased as model instructions.
+Documents, mail, Web pages and saved chats may contain text phrased as model
+instructions. SunaQ treats that text as **untrusted evidence**, not as middleware
+policy.
 
-Such text is treated as evidence content, not as middleware control input.
+The important distinction is between *semantic influence* and *control-plane
+authority*:
 
-The main residual risks are evidence integrity, persistent graph/finding pollution and Web-query egress, rather than arbitrary backend-command execution.
+| Stage | Can untrusted document text influence it? | Security consequence |
+|---|---|---|
+| First-round query rewrite in shipped profiles | **No** — it runs before corpus evidence is supplied | no corpus-driven planner injection |
+| Elasticsearch/Qdrant request construction | Indirectly through validated SearchSpec terms | retrieval quality/recall; no raw DSL/tool execution |
+| ACL metadata prefilter | **No** for identity/groups | optimization only; live ACL still final |
+| Live Nextcloud ACL | **No** | deterministic authorization boundary |
+| Candidate Verifier | **Yes**, after live ACL | a visible malicious document may be misclassified |
+| Answer model | **Yes**, after live ACL | misleading/incorrect answer or social-engineering text |
+| Later retrieval rounds, when enabled | **Yes** — ACL-visible snippets can feed the next rewrite | bounded search steering; final ACL still applies |
+| Research Findings / graph extraction, when enabled | **Yes** | persistent knowledge pollution is possible |
+| Web-after queries, when enabled | **Yes** | possible query-egress manipulation; separate policy boundary |
+
+The shipped 0.8.6-rc1.1 profiles use one retrieval round. Corpus text therefore
+does not feed back into their query rewriter during the same request. A future
+multi-round profile intentionally changes that assumption and must be evaluated
+as a larger prompt-injection surface.
+
+The verifier and answer model still receive authorized document text. Prompt
+injection can therefore cause a wrong relevance decision or answer even in the
+minimal profile. What it cannot do through the current RAG contract is grant
+itself access to another Nextcloud file, change the authenticated identity,
+override the live ACL, emit raw Elasticsearch DSL for execution, or invoke an
+arbitrary side-effecting tool.
+
+There are two bounded persistence cases worth separating from retrieval itself:
+
+1. the bundled UI may save the generated conversation as a new Nextcloud chat
+   file, but only while the provider advertises `chat_archive.enabled=true`.
+   The file has its own Nextcloud ACL/lifecycle; when the capability is disabled
+   the app does not write new archives and `/chatarchive` retrieval is rejected.
+   Managed Markdown deletion also removes its hidden metadata sidecar, with
+   list/load orphan pruning as a repair fallback;
+2. optional Findings/Graph enrichment can persist model-derived observations,
+   which is why those capabilities are disabled in the fresh-install baseline.
+
+Accordingly, the main residual risks in layer A are evidence integrity, answer
+quality and user-facing social engineering. Persistent graph/finding pollution,
+public-Web query egress and broader untrusted-content ingestion belong to the
+explicitly enabled ERG capability layer.
 
 See `THREAT-MODEL.md` for the security analysis.
 
@@ -566,6 +725,26 @@ See `THREAT-MODEL.md` for the security analysis.
 Mail synchronization is configured per canonical Nextcloud user.
 
 Configured IMAP mailbox names are recursive roots. Selectable descendants are discovered through IMAP `LIST`, and the hierarchy is mirrored into Nextcloud.
+
+The rc1.1 inspection boundary for imported mail is:
+
+```text
+IMAP message / attachment
+        |
+   receive bytes/text
+        |
+   [post_fetch inspect]
+        |
+ normalize / extract metadata
+        |
+    [pre_persist]
+        |
+  Nextcloud Mail archive
+```
+
+For attachments, a deployment may choose to inspect the received binary before
+parser/OCR/rendering where the configured adapter supports that workflow. The shipped evaluator is ALLOW-only, so these hooks are not generic malware
+scanning in rc1.1.
 
 New messages use a directory-per-message layout:
 

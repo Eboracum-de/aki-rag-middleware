@@ -1,12 +1,12 @@
-# SunaQ / Eboracum Research Gateway
+# SunaQ
 
 **Evidence-first AI gateway for existing Nextcloud deployments.**
 
-> **Keep your Nextcloud. Add modern AI around it.**
+> **Keep your Nextcloud as is. Add modern AI around it.**
 
-Modern AI-assisted research and RAG for established Nextcloud document estates — without replacing Nextcloud as the document store, rebuilding its permission model or requiring full-corpus vectorization.
+Add modern AI-assisted research and RAG to your established Nextcloud document estates — without replacing Nextcloud as the document store, rebuilding its permission model or requiring full-corpus vectorization. Full-corpus vectorization, graph building and other research features are optional, not mandatory.
 
-SunaQ reuses existing Nextcloud FullTextSearch / Elasticsearch infrastructure and keeps Nextcloud as the final authorization authority for private document evidence. Start with an Elasticsearch-centric Super-Light deployment and add semantic retrieval, reranking, Graph-Lite or additional research sources only where they provide value.
+SunaQ reuses existing Nextcloud FullTextSearch / Elasticsearch infrastructure and keeps Nextcloud as the final authorization authority for private document evidence. Start with an Elasticsearch-centric core deployment (SRC) and add semantic retrieval, reranking, Graph-Lite or additional research sources only where they provide value.
 
 **Super-Light can typically be up and running in under 10 minutes** when the required Nextcloud, Elasticsearch and model endpoints are already available. Actual installation time depends on network speed, host performance, image/package downloads and site configuration.
 
@@ -21,27 +21,8 @@ The central security invariant is deliberately simple:
 
 Every document candidate is checked live against Nextcloud for the authenticated user before it can become answer evidence. If an otherwise relevant document is not authorized, it is removed rather than replaced by a weaker result merely to fill the context window.
 
-> **Project status:** `0.8.6-rc1` is the current release-candidate baseline. See `RELEASE-NOTES-0.8.6-rc1.md`, `CHANGELOG.md`, `models/README.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
+> **Project status:** `0.8.6-rc1.1` is the current release-candidate baseline. See `RELEASE-NOTES-0.8.6-rc1.1.md`, `CHANGELOG.md`, `models/README.md`, `docs/BETA-OPERATIONS.md` and `docs/KNOWN-LIMITATIONS.md`.
 
-## Renaming
-
-Releases up to and including `0.8.5-rc5.1` were published under the
-`aki-rag-middleware` name. To avoid confusion with the Berlin-based
-aki.io GmbH, we decided to rename the project to **SunaQ**. We hope that the new
-name does not conflict with any existing project, product or company in this
-field.
-
-As part of the rename, current user-facing names and new project-local
-identifiers no longer use `AKI` or `Nextcloud` where those terms are not
-required for compatibility. For example, fresh installations now default to
-`/opt/sunaq` instead of `/opt/nextcloud-rag`. References to Nextcloud remain
-where necessary to describe compatibility with the Nextcloud platform.
-
-Some textual, configuration, protocol, archive and compatibility references to
-the previous names intentionally remain so existing installations can continue
-to work and upgrade safely.
-
-Please accept our apologies for any inconvenience caused by this decision.
 
 ## Why this project exists
 
@@ -55,10 +36,66 @@ The project focuses on eight practical goals:
 - **No document migration.** Nextcloud remains the document store and authorization authority; SunaQ does not require a separate AI knowledge base to become the system of record.
 - **No mandatory full-corpus vectorization.** Super-Light can remain Elasticsearch-centric indefinitely. Qdrant and embeddings are optional scale-up components rather than prerequisites for first use.
 - **UI agnostic.** The middleware exposes an OpenAI-compatible provider path. The included SunaQ Recherche app is a slim Nextcloud-native UI; external OpenWebUI deployments can use the same middleware.
-- **Small local footprint.** Super-Light runs without Qdrant and without a local reranker. On the current acceptance VM, the local middleware services used about **1.7 GiB RAM at idle** while Nextcloud, Elasticsearch and the LLM were external. This is an observed test point, not a guaranteed ceiling; 4 GiB remains the practical VM minimum when Chromium-based web archiving is enabled.
-- **Integrated research sources.** Ordinary documents, imported mail, archived web evidence and saved SunaQ chats are distinct source scopes. Live public-web research remains a separate evidence arm.
+- **Small local footprint.** Current Super-Light runs without Qdrant and without a local reranker. On the current acceptance VM, the local middleware services used about **1.7 GiB RAM at idle** while Nextcloud, Elasticsearch and the LLM were external. This is an observed test point, not a guaranteed ceiling; 4 GiB remains the practical VM minimum when Chromium-based web archiving is enabled.
+- **Optional research sources.** The fresh-install baseline is ordinary Nextcloud documents only. Imported mail, archived web evidence, saved SunaQ chats and live public-web research are separate administrator-enabled extensions.
 - **Scale up without changing the core.** The same codebase can add Qdrant semantic retrieval, a reranker and richer Neo4j/Graph-Lite functionality when resources and use cases justify them.
 - **Data minimization by design.** Retrieval, indexing, embeddings and ACL checks can remain local. LLM roles are independently configurable and may be local or remote. A fully local deployment is possible when local model and web-search choices are used.
+
+## Default architecture boundary
+
+A fresh Super-Light installation deliberately starts close to the
+**Secure RAG Core (SRC)** baseline:
+
+```text
+Nextcloud documents
+       |
+FullTextSearch / Elasticsearch
+       |
+query rewrite / bounded retrieval
+       |
+LIVE NEXTCLOUD ACL
+       |
+      LLM
+```
+
+Local model processing is preferred. External model endpoints can also be used
+where the administrator explicitly accepts and manages the resulting data egress.
+
+No Web Research, Playwright renderer, mail worker, chat-archive evidence or
+Research-Finding persistence is active until an administrator enables it. The
+same codebase therefore contains two deliberately separated capability layers:
+
+- **A — Secure RAG Core (SRC):** Documents → Elasticsearch → live ACL → LLM.
+  Local processing is preferred; bounded external processing is possible when
+  the operator accepts the egress implications.
+- **B — Eboracum Research Gate (ERG):** an opt-in set of additional features and
+  capabilities such as Mail, live Web research and Web archiving, Chat archive,
+  semantic retrieval/reranking, Findings/Graph-Lite, full document graphization,
+  multiple retrieval rounds and other specialist functions.
+
+This split is intentional: **A is the shipped security and lifecycle baseline**.
+B increases capability, retained state, untrusted-input surface, egress,
+resource use and operational complexity. Those capabilities are therefore
+explicit administrator decisions rather than fresh-install defaults.
+
+### Prompt-injection boundary in the default profile
+
+SunaQ does not treat document text as executable control input. In the default
+one-round profiles, query rewriting happens before corpus evidence is supplied to
+the planner. The planner emits a bounded `SearchSpec`; middleware code, not the
+model, compiles backend requests. ACL prefilter identity/groups are resolved
+server-side from Nextcloud, and every final private-document candidate is checked
+again through live Nextcloud WebDAV ACL before verifier or answer use.
+
+An authorized document can still contain adversarial instructions and influence a
+Verifier or answer model. In the default profile this is primarily an
+**evidence-integrity / answer-quality risk**, not an authorization or arbitrary
+code-execution path: model output cannot grant file access, change the current
+Nextcloud identity, execute raw Elasticsearch DSL or invoke arbitrary write
+operations.
+
+Optional multi-round retrieval, Web/Mail/Chat evidence and
+Graph/Findings persistence do not replace the deterministic application control flow with model-controlled execution, but they do enlarge the integrity surface and therefore remain administrator-controlled features.
 
 ## Architecture at a glance
 
@@ -97,19 +134,49 @@ The project focuses on eight practical goals:
 
 Elasticsearch, Qdrant and Neo4j are retrieval systems, not authorization systems. The live Nextcloud ACL check is intentionally downstream of candidate retrieval and upstream of document evidence sent to verifier or answer roles.
 
+## Architecture concept: SRC and ERG
+
+SunaQ distinguishes two intended capability envelopes:
+
+- **SRC — Secure RAG Core:** the conservative Elasticsearch-centric baseline
+  with ordinary Nextcloud documents and live Nextcloud ACL. Local model
+  processing is preferred, but bounded external processing is compatible with
+  SRC where the administrator explicitly accepts and manages data egress.
+- **ERG — Eboracum Research Gate:** the opt-in extension space for additional
+  sources, derived state and more complex retrieval/graph functions. ERG is a
+  menu, not a requirement to enable everything.
+
+**0.8.6-rc1.1 status:** this is architecture/design terminology, not yet a
+supported installer/configuration tier. Existing feature gates can be combined
+manually, but SunaQ does not yet validate the combination as SRC or ERG.
+First-class capability switches, safe text preset files and consistency
+validation are planned for `0.8.6-rc1.2`.
+
+The first planned presets are deliberately small: **core** and **workgroup**.
+Workgroup is intended to stay Elasticsearch-centric while adding Mail, live
+Web/Web archive with Playwright, Chat archive and Findings/Graph-Lite. Qdrant
+and full document-graph processing remain optional rather than mandatory ERG
+components.
+
+Historically, the shipped Super-Light package was essentially an Elasticsearch-centric SRC baseline plus several capabilities that now belong to the planned ERG workgroup preset, delivered in the tested dockerized deployment.
+
+This is independent of **Standard / Super-Light** deployment and
+**Schnell / Gründlich / Tief** research models. See
+[SRC and ERG target architecture](docs/SRC-ERG.md).
+
 ## Deployment profiles
 
 | Profile | Intended use | Local components | External dependencies |
 | --- | --- | --- | --- |
-| **Super-Light** | legacy/smaller servers, first deployment | API, provider, Neo4j Graph-Lite, Playwright; optional nginx | Nextcloud, FullTextSearch/Elasticsearch, LLM |
+| **Super-Light** | lightweight, Elasticsearch-centric component profile | API, provider, Neo4j seed/alias context; optional Playwright/nginx | Nextcloud, FullTextSearch/Elasticsearch, LLM |
 | **Standard** | larger/hybrid retrieval installations | native middleware plus optional Qdrant, reranker, Neo4j, OpenWebUI | Nextcloud, Elasticsearch; model backends as configured |
 
-For the 0.8.6-rc1 candidate, the regression-tested deployment mappings remain:
+Profile and deployment mechanism are conceptually separate axes. For the 0.8.6-rc1.1 candidate, the regression-tested and supported mappings remain:
 
 - `super-light + dockerized`
 - `standard + native`
 
-Super-Light is a profile of the same middleware, not a separate fork.
+Other combinations are not yet supported. Super-Light is a profile of the same middleware, not a separate fork; `dockerized` is the deployment mechanism that currently provides the tested legacy-host compatibility.
 
 ## Research sources
 
@@ -123,9 +190,9 @@ The middleware keeps source selection separate from retrieval-engine selection.
 
 Archive origins are tracked by stable Nextcloud file IDs and mirrored into retrieval indexes so source scopes can be applied before candidate limits.
 
-Without an explicit source directive, SunaQ searches ordinary Nextcloud documents only. Mail, web archives and saved chat archives are opt-in sources, and live Web research is a separate capability. This behavior is provider-side and therefore independent of the frontend: OpenWebUI, the bundled Nextcloud client and any other OpenAI-compatible client can override the source selection directly in the user request with `/documents`, `/mailarchive`, `/webarchive`, `/chatarchive` and/or `/web`. Explicit source directives override frontend source selections. The bundled SunaQ Nextcloud client currently selects Documents and Mail archive by default through its UI checkboxes, so it intentionally sends both scopes unless the user changes that selection.
+Without an explicit source directive, SunaQ searches ordinary Nextcloud documents only. Mail, web archives, saved chat archives and live Web research are optional capabilities. The provider enforces the effective capability for the authenticated user: optional sources are usable only while the corresponding global service gate and per-user gate are enabled. Explicit `/mailarchive`, `/webarchive`, `/chatarchive` or `/web` directives cannot bypass that policy. The bundled SunaQ Recherche client renders these optional source controls fail-closed: they start hidden and are shown only after the authenticated capability response confirms availability. **Documents** remain the always-visible baseline source.
 
-Archive scopes are optional. In particular, saved chats are useful as shared/flat-hierarchy working memory, but they are deliberate retained copies: a saved conversation can contain text derived from another document and then has its own Nextcloud file ID, ACL and lifecycle. Deployments that require revocation of an original document to remove every conversational copy should leave `/chatarchive` disabled or define a matching retention/purge process.
+Archive scopes are optional. In particular, saved chats are useful as shared/flat-hierarchy working memory, but they are deliberate retained copies: a saved conversation can contain text derived from another document and then has its own Nextcloud file ID, ACL and lifecycle. In SunaQ Recherche 0.3.4 chat archiving is enabled only when both the global `chat_archive.enabled` gate and the canonical user's chat-archive switch are enabled. Otherwise new chats remain session-local, the Chats source control is not shown and explicit `/chatarchive` retrieval is rejected. Manual deletion of a managed Markdown chat removes its hidden metadata sidecar in the same Nextcloud file-operation path, with list/load self-healing for older orphan sidecars.
 
 ## Privacy and trust boundaries
 
@@ -140,6 +207,13 @@ A private document corpus does not need to be exposed wholesale to an external L
 
 Those controls reduce disclosure; they do not make remotely transmitted evidence non-sensitive. Administrators remain responsible for deciding which roles may use remote model providers.
 
+The minimal profile also reduces prompt-injection exposure by keeping Web, mail
+ingestion and chat evidence outside the default retrieval path. Query rewriting
+interprets the user's request before corpus evidence is loaded, but it is not a
+general prompt-injection sandbox: an authorized document can still contain
+adversarial text that reaches later verifier/answer stages. Corpus evidence must
+therefore continue to be treated as untrusted data.
+
 SunaQ also distinguishes **shared retrieval knowledge** from **document evidence**. Curated names/aliases and shared Finding decisions may be reused across users so that the organization benefits from prior curation. That reuse does not grant access to the document that originally motivated the knowledge: document text still needs the current user's live Nextcloud authorization before it becomes answer evidence.
 
 See `docs/PRIVACY-ARCHITECTURE.md`, `docs/THREAT-MODEL.md` and `SECURITY.md` for details.
@@ -148,9 +222,9 @@ See `docs/PRIVACY-ARCHITECTURE.md`, `docs/THREAT-MODEL.md` and `SECURITY.md` for
 
 The project intentionally keeps support for older installations in scope rather than requiring a current Linux/Python stack everywhere.
 
-Current 0.8.6-rc1 reference points:
+Current 0.8.6-rc1.1 reference points:
 
-- **SunaQ Recherche 0.3.0:** Nextcloud 23+
+- **SunaQ Recherche 0.3.4:** Nextcloud 23+
 - **Super-Light acceptance host:** openSUSE Leap 15.3
 - **Document retrieval:** existing Nextcloud FullTextSearch / Elasticsearch
 - **Internal PKI:** supported, including compatibility mode for older private certificate chains without disabling ordinary TLS verification
@@ -184,9 +258,15 @@ Detailed installation and acceptance steps are in `install/INSTALL.md` and `docs
 
 The included `clients/nextcloud/sunaq/` app is a slim Nextcloud-native research UI. It targets Nextcloud 23+, proxies server-side to the middleware, keeps the provider key out of browser JavaScript, exposes the user's allowed SunaQ profiles, shows request progress/follow-up actions and stores saved conversations per user in Nextcloud.
 
-### OpenWebUI
+### OpenWebUI & other Frontends
 
-OpenWebUI can be used as an external client through the provider interface. The middleware does not depend on OpenWebUI-specific retrieval or knowledge features.
+OpenWebUI can be used as an external client through the provider interface, the installer offers the option to include OpenWebUI in the installation process. The middleware does not depend on OpenWebUI-specific retrieval or knowledge features, so the UI of your choice may be used, as long as it supports sending an appropriate client identification in the request header.
+
+When SunaQ is selected as the model, client-side Knowledge/RAG/File-Context
+injection should be disabled: SunaQ is intended to remain the retrieval and
+evidence authority. Replayed client `user`/`assistant` history is still used
+in rc1.1 for bounded follow-up resolution and is therefore not authoritative
+provenance; authoritative server-side conversation state is an rc1.2 target.
 
 The same OpenAI-compatible boundary can be used by other local frontends, RAG systems, agents or research tools when an administrator deliberately registers them as trusted clients. A trusted-client key is an integration-server credential: keep it server-side and restrict externally reachable provider endpoints by network policy/reverse-proxy allowlists or equivalent controls where practical.
 
@@ -194,7 +274,7 @@ The API/provider boundary is intentional: front-end choice should not define the
 
 ## Optional scale-up path
 
-A Super-Light deployment can remain Elasticsearch-centric indefinitely. Where the workload justifies it, the same middleware can add:
+A Super-Light or SRC deployment can remain Elasticsearch-centric indefinitely. Where the workload justifies it, the same middleware can add:
 
 - **Qdrant** for semantic/vector retrieval,
 - a **cross-encoder reranker**,
@@ -220,7 +300,7 @@ The graph layer is deliberately conservative: retrieved or LLM-derived observati
 - `docs/ROADMAP.md` — implemented 0.8.6 direction and explicitly deferred follow-up work
 - `docs/DEVELOPMENT.md` — repository layout and test baseline
 - `SECURITY.md` — security model and vulnerability reporting
-- `RELEASE-NOTES-0.8.6-rc1.md` — draft 0.8.6 rc1 release notes
+- `RELEASE-NOTES-0.8.6-rc1.1.md` — 0.8.6-rc1.1 hardening release notes
 - `RELEASE-NOTES-0.8.5-rc5.1.md` — current public-beta release notes
 - `RELEASE-NOTES-0.8.5-rc5.md` — preceding release-candidate notes
 - `CHANGELOG.md` — detailed development/change history
@@ -257,12 +337,32 @@ See `CONTRIBUTING.md`, `CLA.md` and `COMMERCIAL-LICENSING.md`.
 
 Public release does not imply an SLA or guaranteed support lifetime. Questions about the project can be sent to `rag@eboracum.de`.
 
-If active development ends, the preferred lifecycle is to mark the project as maintained only for critical fixes and eventually archive the repository rather than erase the public history. Forks remain part of the freedoms provided by the AGPL.
+Should active development end, the preferred lifecycle is to mark the project as maintained only for critical fixes and eventually archive the repository rather than erase the public history. Forks remain part of the freedoms provided by the AGPL.
 
 See `docs/PROJECT-GOVERNANCE.md`.
 
+## Renaming
+
+Releases up to and including `0.8.5-rc5.1` were published under the
+`aki-rag-middleware` name. To avoid confusion with the Berlin-based
+aki.io GmbH, we decided to rename the project to **SunaQ**. We hope that the new
+name does not conflict with any existing project, product or company in this
+field.
+
+As part of the rename, current user-facing names and new project-local
+identifiers no longer use `AKI` or `Nextcloud` where those terms are not
+required for compatibility. For example, fresh installations now default to
+`/opt/sunaq` instead of `/opt/nextcloud-rag`. References to Nextcloud remain
+where necessary to describe compatibility with the Nextcloud platform.
+
+Some textual, configuration, protocol, archive and compatibility references to
+the previous names intentionally remain so existing installations can continue
+to work and upgrade safely.
+
+Please accept our apologies for any inconvenience caused by this decision.
+
 ## Trademark notice
 
-SunaQ / Eboracum Research Gateway is an independent project and is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH or aki.io GmbH. Historical repository and compatibility identifiers may still use the earlier AKI naming during the 0.8.6 transition. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH. References to aki.io are solely for identification and do not imply any affiliation, sponsorship, or endorsement.
+SunaQ is an independent project and is not affiliated with, sponsored by, or endorsed by Nextcloud GmbH or aki.io GmbH. Historical repository and compatibility identifiers may still use the earlier AKI naming during the 0.8.6 transition. “Nextcloud” is used descriptively to identify compatibility with the Nextcloud software platform. Nextcloud and related marks are trademarks of Nextcloud GmbH. References to aki.io are solely for identification and do not imply any affiliation, sponsorship, or endorsement.
 
 See `TRADEMARKS.md`.

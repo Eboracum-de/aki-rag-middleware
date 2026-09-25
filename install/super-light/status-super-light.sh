@@ -24,7 +24,11 @@ probe() {
 printf '\nLocal probes:\n'
 probe 'RAG API' 'http://127.0.0.1:8765/live'
 probe 'Provider' 'http://127.0.0.1:8766/live'
-probe 'Playwright' 'http://127.0.0.1:8090/live'
+
+playwright_cid="$("${C[@]}" ps -q playwright-renderer 2>/dev/null || true)"
+if [[ -n "$playwright_cid" ]]; then
+  probe 'Playwright' 'http://127.0.0.1:8090/live'
+fi
 
 for optional in openwebui proxy; do
   cid="$("${C[@]}" ps -q "$optional" 2>/dev/null || true)"

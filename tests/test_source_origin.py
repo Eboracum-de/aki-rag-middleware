@@ -37,6 +37,24 @@ def test_per_user_web_archive_root_is_excluded(tmp_path, monkeypatch):
 
 
 
+def test_per_user_chat_archive_root_is_classified_and_excluded(tmp_path, monkeypatch):
+    import sqlite3
+    import rag.source_origin as source_origin
+
+    db = tmp_path / "users.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE user_chat_settings(canonical_user_id TEXT, target_path TEXT)")
+    con.execute("INSERT INTO user_chat_settings VALUES('u1','Research/Alice-Chats')")
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(source_origin, "_credential_store_path", lambda: db)
+    source_origin._chat_archive_roots_for_stamp.cache_clear()
+    assert source_origin.is_internal_excluded_path("Research/Alice-Chats/2026-09/chat.md")
+    assert source_origin.classify_source_origin("Research/Alice-Chats/chat.md") == "chat_archive"
+    assert not source_origin.is_internal_excluded_path("Research/Alice/x.txt")
+
+
 def test_sunaq_chat_archives_and_legacy_aki_archives_are_both_classified():
     assert classify_source_origin("SunaQ-Chats/2026-09/Test.md") == "chat_archive"
     assert classify_source_origin("AKI-Chats/2026-09/Legacy.md") == "chat_archive"

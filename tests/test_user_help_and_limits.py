@@ -18,6 +18,17 @@ def test_help_aliases_are_natural_and_health_is_not_listed():
     assert "/health" not in _COMMAND_HELP
     assert "/use:1,2" in _COMMAND_HELP
     assert "/web" in _COMMAND_HELP
+    assert "nur normale Dokumente" in _COMMAND_HELP
+    assert "Dokumente + Mailarchiv" not in _COMMAND_HELP
+    assert "gespeicherte SunaQ-Recherchen" in _COMMAND_HELP
+
+
+def test_info_rewrite_logging_does_not_emit_query_content():
+    source = provider.__file__
+    text = __import__("pathlib").Path(source).read_text(encoding="utf-8")
+    assert "query rewrite round 1: elastic=%r" not in text
+    assert "query rewrite round 1: elastic_present=%s" in text
+    assert "retrieval round %d rewrite: elastic=%r" not in text
 
 
 def test_verification_limit_notice_only_when_candidates_are_unchecked():
@@ -199,3 +210,14 @@ def test_refinement_suggestions_always_offer_manual_refinement(monkeypatch):
         current_model_id="sunaq-standard",
     )
     assert suggestions == [{"label": "Anfrage präzisieren", "action": "focus"}]
+
+
+def test_explicit_use_can_persist_findings_without_changing_answer_selection():
+    source = __import__("pathlib").Path(provider.__file__).read_text(encoding="utf-8")
+    assert "async def _store_use_research_findings(" in source
+    assert "if not RESEARCH_FINDINGS_ENABLED or not results:" in source
+    assert "review_results = [" in source
+    assert "raw=dict(result.raw or {})" in source
+    assert "await _verify_exhaustive_candidates(" in source
+    assert "await _store_positive_research_findings(" in source
+    assert "await _store_use_research_findings(" in source

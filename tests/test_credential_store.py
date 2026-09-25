@@ -100,3 +100,71 @@ def test_user_sunaq_model_settings_roundtrip_and_validate_default(tmp_path: Path
 
     assert store.clear_model_settings(user.canonical_user_id) is True
     assert store.get_model_settings(user.canonical_user_id) is None
+
+
+def test_user_chat_archive_settings_are_single_path_and_validated(tmp_path: Path):
+    store = CredentialStore(tmp_path / "users.sqlite")
+    user = store.ensure_canonical_user("https://cloud.example", "alice")
+
+    assert store.get_chat_settings(user.canonical_user_id) is None
+
+    settings = store.set_chat_settings(
+        user.canonical_user_id,
+        target_path="Archiv/SunaQ",
+    )
+    assert settings.enabled is True
+    assert settings.target_path == "Archiv/SunaQ"
+    assert store.get_chat_settings(user.canonical_user_id).target_path == "Archiv/SunaQ"
+
+    disabled = store.set_chat_settings(
+        user.canonical_user_id,
+        enabled=False,
+        target_path="Archiv/SunaQ",
+    )
+    assert disabled.enabled is False
+
+    defaulted = store.set_chat_settings(user.canonical_user_id, target_path="")
+    assert defaulted.target_path == "SunaQ-Chats"
+
+    with store._connect() as con:
+        roots = {
+            row[0]
+            for row in con.execute(
+                "SELECT target_path FROM chat_archive_roots ORDER BY target_path"
+            ).fetchall()
+        }
+    assert roots == {"Archiv/SunaQ", "SunaQ-Chats"}
+
+    for invalid in ("../AKI-Chats", "foo/../bar", "foo\\bar", "foo//bar"):
+        try:
+            store.set_chat_settings(user.canonical_user_id, target_path=invalid)
+            assert False, f"invalid chat archive path accepted: {invalid}"
+        except ValueError:
+            pass
+
+def test_chat_settings_schema_migrates_existing_rows_enabled_by_default(tmp_path: Path):
+    import sqlite3
+
+    db = tmp_path / "users.sqlite"
+    con = sqlite3.connect(db)
+    try:
+        con.execute(
+            "CREATE TABLE user_chat_settings ("
+            "canonical_user_id TEXT PRIMARY KEY,"
+            "target_path TEXT NOT NULL DEFAULT 'SunaQ-Chats',"
+            "updated_at REAL NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO user_chat_settings(canonical_user_id,target_path,updated_at) VALUES(?,?,?)",
+            ("legacy-user", "AKI-Chats", 1.0),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    store = CredentialStore(db)
+    settings = store.get_chat_settings("legacy-user")
+    assert settings is not None
+    assert settings.enabled is True
+    assert settings.target_path == "AKI-Chats"
+

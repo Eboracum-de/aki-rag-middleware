@@ -302,6 +302,10 @@
     cursor: pointer;
 }
 
+.sunaq-scope-chip[hidden] {
+    display: none !important;
+}
+
 .sunaq-scope-chip input {
     position: absolute;
     width: 1px;

@@ -1,8 +1,8 @@
 """Source-origin classification and source-scope policy.
 
-The default internal RAG pool deliberately contains ordinary Nextcloud files and
-mail-archive content, while public-web snapshots and AKI chat exports are opt-in
-source scopes.  Explicit source scopes are orthogonal to retrieval engines: the
+The default internal RAG pool deliberately contains ordinary Nextcloud files
+only. Mail, public-web snapshots and saved SunaQ chat archives are explicit
+opt-in source scopes.  Explicit source scopes are orthogonal to retrieval engines: the
 same scope policy is applied to Elasticsearch, Qdrant and Graph candidates.
 """
 from __future__ import annotations
@@ -144,6 +144,53 @@ def _user_archive_roots_for_stamp(db_path: str, stamp: tuple[int, ...] | None) -
 
 
 @lru_cache(maxsize=16)
+def _chat_archive_roots_for_stamp(db_path: str, stamp: tuple[int, ...] | None) -> tuple[str, ...]:
+    """Return configured chat archive roots as a conservative path fallback.
+
+    Saved SunaQ chats register their concrete file IDs as `chat_archive`, which
+    is authoritative. The path roots keep a failed/late registration from
+    exposing a configured archive as ordinary implicit document evidence.
+    """
+    del stamp
+    path = Path(db_path)
+    if not path.exists():
+        return ()
+    try:
+        uri = f"file:{path.resolve().as_posix()}?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            rows: list[tuple[Any, ...]] = []
+            history_exists = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_archive_roots'"
+            ).fetchone()
+            if history_exists:
+                rows.extend(
+                    con.execute(
+                        "SELECT target_path FROM chat_archive_roots WHERE target_path<>''"
+                    ).fetchall()
+                )
+            settings_exists = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_chat_settings'"
+            ).fetchone()
+            if settings_exists:
+                rows.extend(
+                    con.execute(
+                        "SELECT target_path FROM user_chat_settings WHERE target_path<>''"
+                    ).fetchall()
+                )
+            if not rows:
+                return ()
+        finally:
+            con.close()
+    except Exception as exc:
+        log.debug("per-user chat archive roots unavailable: %s", exc)
+        return ()
+    roots = {normalize_path(str(row[0] or "")) for row in rows}
+    roots.discard("")
+    return tuple(sorted(roots, key=str.casefold))
+
+
+@lru_cache(maxsize=16)
 def _mail_archive_roots_for_stamp(db_path: str, stamp: tuple[int, ...] | None) -> tuple[str, ...]:
     """Return every known mail-archive root, including historical roots.
 
@@ -203,6 +250,11 @@ def mail_archive_roots() -> tuple[str, ...]:
     return _mail_archive_roots_for_stamp(str(path), _db_stamp(path))
 
 
+def _configured_chat_archive_roots() -> tuple[str, ...]:
+    path = _credential_store_path()
+    return _chat_archive_roots_for_stamp(str(path), _db_stamp(path))
+
+
 def web_archive_roots() -> tuple[str, ...]:
     roots = {web_archive_root(), *_user_archive_roots()}
     roots.discard("")
@@ -211,9 +263,10 @@ def web_archive_roots() -> tuple[str, ...]:
 
 def chat_archive_roots() -> tuple[str, ...]:
     root = chat_archive_root()
-    roots = {root} if root else set()
-    # 0.2.x Nextcloud client archive location remains readable after the SunaQ
-    # app-id migration. Fresh installs use SunaQ-Chats.
+    roots = {root, *_configured_chat_archive_roots()} if root else set(_configured_chat_archive_roots())
+    # Conservative compatibility fallback for pre-setting RC archives. This is
+    # source classification only; the Nextcloud app never scans two archive
+    # folders in parallel.
     roots.add("AKI-Chats")
     roots.discard("")
     return tuple(sorted(roots, key=str.casefold))

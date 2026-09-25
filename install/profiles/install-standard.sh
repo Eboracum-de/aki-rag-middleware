@@ -113,7 +113,7 @@ while [[ $# -gt 0 ]]; do
     --multi-user) MULTI_USER=1; ACL_OFF=0; ACL_MODE_EXPLICIT=1; shift ;;
     --single-user) MULTI_USER=0; ACL_OFF=0; ACL_MODE_EXPLICIT=1; shift ;;
     --acl-off) MULTI_USER=0; ACL_OFF=1; ACL_MODE_EXPLICIT=1; shift ;;
-    --full) WITH_QDRANT=1; WITH_NEO4J=1; WITH_OPENWEBUI=1; WITH_PLAYWRIGHT=1; PLAYWRIGHT_EXPLICIT=1; shift ;;
+    --full) WITH_QDRANT=1; WITH_NEO4J=1; WITH_OPENWEBUI=1; shift ;;
     --with-systemd) WITH_SYSTEMD=1; shift ;;
     --no-systemd) WITH_SYSTEMD=0; shift ;;
     --with-reranker-download) DOWNLOAD_RERANKER=1; shift ;;
@@ -902,8 +902,9 @@ upgrade_image_pin QDRANT_IMAGE 'qdrant/qdrant:v1.19.0' 'qdrant/qdrant:v1.19.0@sh
 upgrade_image_pin NEO4J_IMAGE 'neo4j:5-community' 'neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe'
 upgrade_image_pin NEO4J_IMAGE 'neo4j:5.26.30-community' 'neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe'
 upgrade_image_pin NEO4J_IMAGE 'neo4j:5.26.29-community' 'neo4j:5.26.29-community@sha256:d9dd3dc7d1c78fa959191ff02dbdcbefadceaf83eee23428fb92a58cac8ad3fe'
-upgrade_image_pin OPENWEBUI_IMAGE 'ghcr.io/open-webui/open-webui:v0.11.1' 'ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228'
-upgrade_image_pin OPENWEBUI_IMAGE 'ghcr.io/open-webui/open-webui:v0.11.0' 'ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228'
+upgrade_image_pin OPENWEBUI_IMAGE 'ghcr.io/open-webui/open-webui:v0.11.1' 'ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e'
+upgrade_image_pin OPENWEBUI_IMAGE 'ghcr.io/open-webui/open-webui:v0.11.0' 'ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e'
+upgrade_image_pin OPENWEBUI_IMAGE 'ghcr.io/open-webui/open-webui:v0.11.4-slim' 'ghcr.io/open-webui/open-webui:v0.11.4-slim@sha256:0487ad4a5a4b986062dedace806c3ef1e88fec38c10d1e64d6a5501c66671e5e'
 # Neo4j's password is shared with runtime.env and must stay consistent.
 if grep -q '^NEO4J_PASSWORD=' "$PREFIX/install/.env"; then
   sed -i "s|^NEO4J_PASSWORD=.*|NEO4J_PASSWORD=$NEO4J_PASSWORD|" "$PREFIX/install/.env"
@@ -1077,6 +1078,19 @@ case "$PLAYWRIGHT_ENABLED" in 0|1) ;; *)
   exit 1
 esac
 
+if [[ "$PLAYWRIGHT_ENABLED" -eq 1 ]]; then
+  PLAYWRIGHT_SECCOMP_PROFILE="./components/playwright-renderer/seccomp_profile.json"
+  log "Preparing Playwright Chromium seccomp profile"
+  "$PREFIX/install/components/playwright-renderer/prepare.sh"
+else
+  PLAYWRIGHT_SECCOMP_PROFILE="unconfined"
+fi
+if grep -q '^PLAYWRIGHT_SECCOMP_PROFILE=' "$PREFIX/install/.env"; then
+  sed -i "s|^PLAYWRIGHT_SECCOMP_PROFILE=.*|PLAYWRIGHT_SECCOMP_PROFILE=$PLAYWRIGHT_SECCOMP_PROFILE|" "$PREFIX/install/.env"
+else
+  printf '\nPLAYWRIGHT_SECCOMP_PROFILE=%s\n' "$PLAYWRIGHT_SECCOMP_PROFILE" >> "$PREFIX/install/.env"
+fi
+
 cd "$PREFIX/install"
 # Explicit negative switches win over retained rerun state. Remove only the
 # container; persistent volumes are preserved for a later re-enable.
@@ -1109,8 +1123,7 @@ if [[ ${#LOCAL_SERVICES[@]} -gt 0 ]]; then
 fi
 
 if [[ "$PLAYWRIGHT_ENABLED" -eq 1 ]]; then
-  log "Preparing and starting Playwright renderer for Web archive"
-  "$PREFIX/install/components/playwright-renderer/prepare.sh"
+  log "Building and starting Playwright renderer for Web archive"
   compose_cmd -f docker-compose.yml --env-file .env --profile renderer build playwright-renderer
   compose_cmd -f docker-compose.yml --env-file .env --profile renderer up -d playwright-renderer
   PLAYWRIGHT_READY=0
@@ -1269,6 +1282,16 @@ PY
   fi
 fi
 
+MAIL_WORKER_ENABLED="$("$PREFIX/.venv/bin/python" - <<PY
+import yaml
+with open("$PREFIX/config.yaml", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f) or {}
+mail = cfg.get("mail") or {}
+worker = mail.get("worker") or {}
+print("1" if bool(mail.get("enabled", False)) and bool(worker.get("enabled", False)) else "0")
+PY
+)"
+
 if [[ $WITH_SYSTEMD -eq 1 ]]; then
   log "Installing systemd services"
   for name in rag-api rag-provider rag-graph-worker rag-sync-worker rag-mail-worker; do
@@ -1281,7 +1304,12 @@ if [[ $WITH_SYSTEMD -eq 1 ]]; then
       "$src" > "$dst"
   done
   systemctl daemon-reload
-  systemctl enable rag-api rag-provider rag-sync-worker rag-mail-worker
+  systemctl enable rag-api rag-provider rag-sync-worker
+  if [[ "$MAIL_WORKER_ENABLED" -eq 1 ]]; then
+    systemctl enable rag-mail-worker
+  else
+    systemctl disable rag-mail-worker >/dev/null 2>&1 || true
+  fi
   if [[ $WITH_NEO4J -eq 1 ]]; then systemctl enable rag-graph-worker; fi
   # Normal services remain stopped until maintenance mode is disabled.
 fi

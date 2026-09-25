@@ -22,8 +22,10 @@ combinations are regression-tested and accepted for the beta:
 Super-Light is one configuration of the same middleware, not a fork. Nextcloud,
 its FullTextSearch Elasticsearch and the LLM endpoint are administrator-managed
 dependencies outside the SunaQ stack; they may be on separate systems or, where
-ports/resources permit, on the same host. Locally the SunaQ stack runs API, provider,
-Neo4j Graph-Lite and Playwright; bundled nginx is optional. Playwright is part of the Super-Light stack by default and requires no `--with-playwright` switch. Qdrant and the local reranker are disabled.
+ports/resources permit, on the same host. Locally the minimal SunaQ stack runs API, provider and Neo4j seed/alias support;
+bundled nginx is optional. Qdrant, the local reranker, Web Research, Research
+Findings, the mail worker and Playwright are disabled by default. Install the
+renderer only when required with `--with-playwright`.
 
 ## 2. Super-Light installation
 
@@ -180,20 +182,60 @@ On Super-Light, a warning that `/app/runtime/ca/...` is an external `ca_file` ca
 
 For cross-system recovery order, key/master-key pairing and deletion/lifecycle scope, see `DATA-LIFECYCLE.md`.
 
-## 4. SunaQ Recherche 0.3.0
+## 4. SunaQ Recherche 0.3.2
 
 SunaQ Recherche is the preferred slim Nextcloud UI for this beta. It targets Nextcloud 23+.
 Install the `sunaq` app in Nextcloud, enable it, then configure **SunaQ URL**
 and **Provider API key** under **Settings → Administration → Additional settings**.
 
 The app proxies server-side and sends the current Nextcloud UID; the provider key
-never reaches browser JavaScript. Each user completes Nextcloud Login Flow once so
-the middleware can perform live ACL checks with that user's current credential.
+never reaches browser JavaScript. Credential-bearing app requests require HTTPS by
+default. An administrator can explicitly enable insecure HTTP for controlled lab/test
+networks, but that opt-in sends the provider key and request content without transport
+encryption and is not a normal deployment mode. Each user completes Nextcloud Login
+Flow once so the middleware can perform live ACL checks with that user's current
+credential.
+
+SunaQ Admin configures exactly one chat-archive target path per canonical user
+(default `SunaQ-Chats`). The global `chat_archive.enabled` capability controls
+both new writes by the bundled app and retrieval through `/chatarchive`; with the
+capability off, a chat remains only in the current browser session unless the user
+copies it elsewhere manually. Changing the path does not copy or move existing
+files. For an older RC archive, either leave that user on `AKI-Chats` or move the
+archive once into the selected path. Do not maintain two simultaneously active
+chat archives for one user. Deleting a managed visible Markdown chat in Nextcloud
+also deletes its hidden SunaQ metadata sidecar; opening/listing chats additionally
+prunes older orphan sidecars.
 
 If the middleware URL is an RFC1918/private address, Nextcloud can reject the
 server-side request with `Host violates local access rules`. For a deliberately
 internal deployment set the global Nextcloud option `allow_local_remote_servers`
 to true and make sure the Nextcloud host trusts the middleware TLS issuer.
+
+### Public `/v1/` pressure controls
+
+The OpenAI-compatible provider surface remains externally reachable through the
+reverse proxy so a separate trusted client such as OpenWebUI can connect. Provider
+routes are nevertheless authenticated with a high-entropy registered Bearer client
+key before user identity or retrieval work is accepted.
+
+Bundled nginx applies a dedicated per-source-IP limit of 10 requests/s with a
+burst allowance and a maximum of 16 concurrent `/v1/` connections; excess requests
+receive HTTP 429. Persistent client/user lockouts after failed authentication are
+intentionally not used because an unauthenticated attacker could weaponize them to
+lock out a known legitimate client.
+
+When bundled nginx sits behind another reverse proxy, the rate-limit key must
+resolve to the real client address. The shipped configuration trusts
+`X-Forwarded-For` only from loopback (`127.0.0.1` / `::1`), covering the
+documented same-host Apache setup. For a remote load balancer, add only that
+balancer's exact address/network via `set_real_ip_from`; never trust forwarded
+client-address headers from arbitrary peers.
+
+These controls bound application pressure, not volumetric DDoS. Keep the provider
+itself on loopback/private service networking and expose only the reverse proxy.
+Internet-facing sites that need protection against link or host saturation require
+upstream firewall/load-balancer/provider DDoS controls.
 
 ## 5. Contact seeds / Graph-Lite
 
@@ -232,8 +274,8 @@ reranker are disabled.
 Every normal request first produces one small SearchSpec. In
 Super-Light its lexical fields are compiled to Elasticsearch; `semantic_query`
 is retained for portability but is not executed because Qdrant is disabled.
-Neo4j may add known seed/alias forms before the Elasticsearch request. The actual
-Elasticsearch JSON query is logged at INFO for this path. The shipped rc1 profiles deliberately use one retrieval round. Additional rounds
+Neo4j may add known seed/alias forms before the Elasticsearch request. Normal INFO logging records only bounded control/count metadata for this path;
+query text and Elasticsearch request bodies are not emitted at INFO. The shipped rc1 profiles deliberately use one retrieval round. Additional rounds
 are deferred until the budget-only profile comparison has been accepted.
 
 The absence of a reranker does **not** disable deduplication. Near-identical text
@@ -275,7 +317,7 @@ bundle every subresource.
 Use at least one real account with ordinary documents and one second account with
 different ACLs.
 
-1. `status-super-light.sh` reports API/provider/Neo4j/Playwright ready.
+1. `status-super-light.sh` reports API/provider/Neo4j ready. If Playwright was explicitly installed with `--with-playwright`, verify the renderer is ready as well.
 2. SunaQ appears in Nextcloud navigation and opens without manual URL entry.
 3. User 1 completes Login Flow and can query an authorized document.
 4. User 2 cannot receive evidence for a document they cannot access.
@@ -283,15 +325,15 @@ different ACLs.
 6. Review one identity candidate: **Identisch** must create non-destructive `SAME_AS` with both Entities still active; **Verschieden** must create `NOT_SAME_AS`. Use technical merge separately only for a true redundant SunaQ Entity.
 7. With two files that have the same valid extracted-content hash, verify they consume one duplicate group while live ACL still checks both file IDs and can promote the authorized copy if the ranked representative is denied.
 8. A normal document question works with the Super-Light 10-candidate verifier window.
-9. A Web Research run archives a source as desktop/Landscape PDF plus hidden metadata.
+9. **If Web Research/Web archive is enabled** (and Playwright is installed when rendered PDFs are required), run one Web Research request and verify the selected source archive/metadata; with Playwright enabled, also verify the desktop/Landscape PDF.
 10. Stop Elasticsearch temporarily and verify the friendly unavailable response.
 11. Restore Elasticsearch and verify retrieval recovers without state repair.
 12. Verify that `/health` reports `live_acl.enabled=true` on a shared beta instance.
 13. If shared alias/Graph-Lite is enabled, verify that User 2 may benefit from a curated alias without receiving the protected source document as evidence.
 14. If `/chatarchive` is enabled, verify that the saved chat obeys the ACL of its own Nextcloud archive file and document its independent retention semantics.
-15. Run `docker-compose down` / `docker-compose up -d` and repeat one document and one Web query.
+15. Run `docker-compose down` / `docker-compose up -d` and repeat one document query. **If Web Research is enabled**, repeat one Web query as a separate optional-capability acceptance check.
 
-The rc4.3 blank-VM pass completed for both supported mappings. Super-Light/dockerized passed installation, document search and SunaQ Admin checks with Playwright active by default. Standard/native passed installation, document search and SunaQ Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout. RC5 incremental field acceptance additionally covers the ACL prefilter/two-user unspecific behavior, Markdown chat continuation and the Super-Light backup/restore roundtrip described above.
+The rc4.3 blank-VM pass completed for both supported mappings. That historical Super-Light/dockerized pass used Playwright by default; rc1.1 changes the fresh-install baseline so Playwright is now explicit `--with-playwright`. Standard/native passed installation, document search and SunaQ Admin checks; when selected with `--with-playwright`, the renderer was built and started automatically. The earlier Leap 15.3 beta host additionally exercised CardDAV import/reconciliation, Web Research archive creation, IMAP→WebDAV mail import with attachments/OCR and the long-running Docker mail worker. Rerun this acceptance checklist before production rollout. RC5 incremental field acceptance additionally covers the ACL prefilter/two-user unspecific behavior, Markdown chat continuation and the Super-Light backup/restore roundtrip described above.
 
 ## 9. Resource reference
 

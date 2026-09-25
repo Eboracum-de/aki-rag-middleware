@@ -18,6 +18,8 @@ from typing import Any
 
 import httpx
 
+from rag.policy_hooks import PRE_MODEL_EGRESS, apply_policy_hook
+
 
 class EmbeddingContextLengthError(RuntimeError):
     """Embedding backend rejected an input because it exceeds model context."""
@@ -86,6 +88,23 @@ class EmbeddingBackend:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _policy_texts(self, texts: list[str]) -> list[str]:
+        checked = apply_policy_hook(
+            PRE_MODEL_EGRESS,
+            content=texts,
+            metadata={
+                "kind": "embedding",
+                "backend": self.kind,
+                "base_url": self.base_url,
+                "model": self.model,
+            },
+        )
+        if not isinstance(checked, list) or any(
+            not isinstance(item, str) for item in checked
+        ):
+            raise TypeError("pre_model_egress policy hook must return a string list")
+        return checked
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
 
@@ -128,6 +147,7 @@ class OllamaEmbeddings(EmbeddingBackend):
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        texts = self._policy_texts(texts)
         with httpx.Client(
             timeout=self.timeout,
             headers=self.headers(),
@@ -197,6 +217,7 @@ class OpenAICompatibleEmbeddings(EmbeddingBackend):
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        texts = self._policy_texts(texts)
         with httpx.Client(
             timeout=self.timeout,
             headers=self.headers(),

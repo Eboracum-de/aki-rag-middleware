@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from rag.policy_hooks import PRE_MODEL_EGRESS, apply_policy_hook
+
 
 def _verify_value(verify_tls: bool, ca_file: str | None) -> bool | ssl.SSLContext:
     if not verify_tls:
@@ -69,6 +71,28 @@ class LLMBackend:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+    def _policy_messages(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str,
+    ) -> list[dict[str, str]]:
+        checked = apply_policy_hook(
+            PRE_MODEL_EGRESS,
+            content=messages,
+            metadata={
+                "kind": "llm",
+                "backend": self.kind,
+                "base_url": self.base_url,
+                "model": model,
+            },
+        )
+        if not isinstance(checked, list) or any(
+            not isinstance(item, dict) for item in checked
+        ):
+            raise TypeError("pre_model_egress policy hook must return a message list")
+        return checked
 
     async def complete(
         self,
@@ -117,8 +141,10 @@ class OllamaBackend(LLMBackend):
         response_format: str | dict[str, Any] | None = None,
         timeout: float = 300.0,
     ) -> dict[str, Any]:
+        selected_model = model or self.model
+        messages = self._policy_messages(messages, model=selected_model)
         payload: dict[str, Any] = {
-            "model": model or self.model,
+            "model": selected_model,
             "messages": messages,
             "stream": False,
             "options": dict(options),
@@ -155,8 +181,10 @@ class OllamaBackend(LLMBackend):
         model: str | None = None,
         read_timeout: float | None = 90.0,
     ) -> AsyncIterator[dict[str, str]]:
+        selected_model = model or self.model
+        messages = self._policy_messages(messages, model=selected_model)
         payload: dict[str, Any] = {
-            "model": model or self.model,
+            "model": selected_model,
             "messages": messages,
             "stream": True,
             "options": dict(options),
@@ -290,6 +318,7 @@ class OpenAICompatibleBackend(LLMBackend):
         timeout: float = 300.0,
     ) -> dict[str, Any]:
         selected_model = model or self.model
+        messages = self._policy_messages(messages, model=selected_model)
         reasoning_effort = self._reasoning_effort(think, selected_model)
         payload: dict[str, Any] = {
             "model": selected_model,
@@ -375,6 +404,7 @@ class OpenAICompatibleBackend(LLMBackend):
         read_timeout: float | None = 90.0,
     ) -> AsyncIterator[dict[str, str]]:
         selected_model = model or self.model
+        messages = self._policy_messages(messages, model=selected_model)
         reasoning_effort = self._reasoning_effort(think, selected_model)
         payload: dict[str, Any] = {
             "model": selected_model,

@@ -26,6 +26,14 @@ def test_unified_installer_dispatches_profiles():
     assert 'WITH_PROXY=0' in super_impl
 
 
+def test_profile_installers_are_executable():
+    for path in (
+        ROOT / "install/profiles/install-standard.sh",
+        ROOT / "install/profiles/install-super-light.sh",
+    ):
+        assert path.stat().st_mode & 0o111, f"{path} must be executable in the Git checkout"
+
+
 def test_super_light_compose_is_legacy_compatible_shape():
     cfg = yaml.safe_load((ROOT / "install/super-light/docker-compose.yml").read_text())
     assert cfg["version"] == "2.4"
@@ -75,6 +83,9 @@ def test_super_light_plan_reports_disk_and_keeps_openwebui_opt_in():
     assert "Estimated disk use:" in installer
     assert "not pulled/not started" in installer
     assert '[[ $WITH_OPENWEBUI -eq 1 ]] && SERVICES+=(openwebui)' in installer
+    assert 'WITH_PLAYWRIGHT=0' in installer
+    assert '--with-playwright' in installer
+    assert 'compose build playwright-renderer' in installer
 
 def test_compose_minimal_default_is_proxy_only():
     cfg = yaml.safe_load((ROOT / "install/docker-compose.yml").read_text())
@@ -83,6 +94,13 @@ def test_compose_minimal_default_is_proxy_only():
     assert default_services == ["proxy"]
     assert services["qdrant"]["profiles"] == ["qdrant"]
     assert services["neo4j"]["profiles"] == ["neo4j"]
+
+
+def test_standard_full_does_not_implicitly_enable_playwright():
+    installer = _standard_installer_text()
+    full_line = next(line for line in installer.splitlines() if "--full)" in line)
+    assert "WITH_PLAYWRIGHT" not in full_line
+    assert "PLAYWRIGHT_EXPLICIT" not in full_line
 
 
 def test_standard_playwright_renderer_is_optional_compose_service():
@@ -101,6 +119,19 @@ def test_standard_playwright_renderer_is_optional_compose_service():
     assert '--profile renderer build playwright-renderer' in installer
     assert '--profile renderer up -d playwright-renderer' in installer
     assert 'LOCAL_PLAYWRIGHT=$PLAYWRIGHT_ENABLED' in installer
+
+
+def test_standard_disabled_playwright_does_not_require_generated_seccomp_file():
+    compose = (ROOT / "install/docker-compose.yml").read_text(encoding="utf-8")
+    installer = _standard_installer_text()
+    assert 'seccomp=${PLAYWRIGHT_SECCOMP_PROFILE:-unconfined}' in compose
+    assert 'PLAYWRIGHT_SECCOMP_PROFILE="unconfined"' in installer
+    assert 'PLAYWRIGHT_SECCOMP_PROFILE="./components/playwright-renderer/seccomp_profile.json"' in installer
+    prepare = '"$PREFIX/install/components/playwright-renderer/prepare.sh"'
+    prepare_pos = installer.index(prepare)
+    runtime_compose = 'compose_cmd -f docker-compose.yml --env-file .env'
+    assert prepare_pos < installer.index(runtime_compose, prepare_pos)
+    assert installer.count(prepare) == 1
 
 
 def test_bind_mounts_are_selinux_relabelled():
@@ -158,6 +189,17 @@ def test_openwebui_root_assets_are_not_rate_limited():
     assert "limit_req" not in root_block
 
 
+def test_v1_rate_limits_restore_real_client_only_from_trusted_loopback_proxy():
+    for name in ("nginx.conf", "nginx-openwebui.conf"):
+        nginx = (ROOT / "install/nginx" / name).read_text()
+        assert "set_real_ip_from 127.0.0.1;" in nginx
+        assert "set_real_ip_from ::1;" in nginx
+        assert "real_ip_header X-Forwarded-For;" in nginx
+        assert "real_ip_recursive on;" in nginx
+        assert "zone=rag_v1:10m rate=10r/s" in nginx
+        assert "limit_conn rag_v1_conn 16;" in nginx
+
+
 def test_rag_api_explicitly_forwards_test_identity_header():
     for name in ("nginx.conf", "nginx-openwebui.conf"):
         nginx = (ROOT / "install/nginx" / name).read_text()
@@ -169,6 +211,7 @@ def test_openwebui_provider_config_is_installer_authoritative():
     env = cfg["services"]["openwebui"]["environment"]
     assert env["ENABLE_PERSISTENT_CONFIG"] == "false"
     assert env["BYPASS_MODEL_ACCESS_CONTROL"] == "true"
+    assert env["ENABLE_EVALUATION_ARENA_MODELS"] == "false"
     assert env["OPENAI_API_KEY"] == "${OPENWEBUI_PROVIDER_API_KEY:-}"
 
 
@@ -210,7 +253,7 @@ def test_docker_and_ml_beta_dependencies_are_pinned():
     assert "PIP_DISABLE_PIP_VERSION_CHECK=1" in renderer_dockerfile
     assert "v1.19.0@sha256:" in images["qdrant"]
     assert "5.26.29-community@sha256:" in images["neo4j"]
-    assert "v0.11.0@sha256:" in images["openwebui"]
+    assert "v0.11.4-slim@sha256:" in images["openwebui"]
     lock = yaml.safe_load((ROOT / "versions.lock.yaml").read_text())
     for name in ("nginx", "qdrant", "neo4j", "openwebui"):
         assert lock["docker"][name]["ref"].endswith(lock["docker"][name]["digest"])
@@ -254,6 +297,21 @@ def test_installers_support_scoped_private_nextcloud_ca_without_global_env_overr
     assert "SSL_CERT_FILE=" not in standard
 
 
+def test_fresh_baseline_keeps_optional_research_layers_disabled():
+    cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
+    web = yaml.safe_load((ROOT / "web.yaml").read_text())
+    main = (ROOT / "clients/nextcloud/sunaq/templates/main.php").read_text()
+
+    assert cfg["mail"]["enabled"] is False
+    assert cfg["mail"]["worker"]["enabled"] is False
+    assert cfg["research_findings"]["enabled"] is False
+    assert cfg["chat_archive"]["enabled"] is False
+    assert web["enabled"] is False
+    assert web["archive"]["enabled"] is False
+    assert 'value="documents" checked' in main
+    assert 'value="mailarchive" checked' not in main
+
+
 def test_per_user_mail_and_web_are_not_shipped_in_yaml():
     cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
     web = yaml.safe_load((ROOT / "web.yaml").read_text())
@@ -262,11 +320,27 @@ def test_per_user_mail_and_web_are_not_shipped_in_yaml():
     assert "root" not in (web.get("archive") or {})
 
 
+def test_runtime_does_not_start_mail_worker_when_feature_is_disabled():
+    start = (ROOT / "start-all.sh").read_text()
+    maintenance = (ROOT / "install/maintenance-mode.sh").read_text()
+    standard = _standard_installer_text()
+
+    assert 'mail_enabled="$("$BASE_DIR/.venv/bin/python"' in start
+    assert 'if [[ "$mail_enabled" == "1" ]]' in start
+    assert 'skipped (mail feature/worker disabled)' in start
+    assert 'if systemctl is-enabled rag-mail-worker' in maintenance
+    assert 'compose up -d neo4j playwright-renderer api mail-worker' not in maintenance
+    assert 'MAIL_WORKER_ENABLED=' in standard
+    assert 'systemctl disable rag-mail-worker' in standard
+
+
 def test_installer_ships_per_user_mail_worker_without_global_mail_secret_envs():
     installer = _standard_installer_text()
     runtime_example = (ROOT / "install/runtime.env.example").read_text()
     assert "start-mail-worker.sh" in installer
     assert "rag-mail-worker" in installer
+    assert "MAIL_WORKER_ENABLED" in installer
+    assert "systemctl disable rag-mail-worker" in installer
     assert "start-sync-worker.sh" in installer
     assert "rag-sync-worker" in installer
     assert "MAIL_IMAP_USERNAME" not in installer
@@ -287,6 +361,18 @@ def test_proxy_defaults_to_https_and_reserves_root_for_ui():
     assert "return 302 /rag-admin/;" in no_ui
     ui = (ROOT / "install/nginx/nginx-openwebui.conf").read_text()
     assert "proxy_pass http://127.0.0.1:3000;" in ui
+
+
+def test_public_provider_api_has_dedicated_request_and_connection_limits():
+    for name in ("nginx.conf", "nginx-openwebui.conf"):
+        nginx = (ROOT / "install/nginx" / name).read_text()
+        assert "zone=rag_v1:10m rate=10r/s" in nginx
+        assert "limit_conn_zone $binary_remote_addr zone=rag_v1_conn:10m;" in nginx
+        v1 = nginx.split("location /v1/ {", 1)[1].split("}", 1)[0]
+        assert "limit_req zone=rag_v1 burst=30 nodelay;" in v1
+        assert "limit_req_status 429;" in v1
+        assert "limit_conn rag_v1_conn 16;" in v1
+        assert "limit_conn_status 429;" in v1
 
 
 def test_proxy_mounts_bootstrap_tls_material():
@@ -373,7 +459,7 @@ def test_periodic_sync_worker_wraps_existing_rag_sync():
 
 
 def test_release_repository_hygiene():
-    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.6-rc1"'
+    assert (ROOT / "rag/version.py").read_text().strip() == 'VERSION = "0.8.6-rc1.1"'
     assert not (ROOT / "provider.env").exists()
     assert "provider.env" in (ROOT / ".gitignore").read_text().splitlines()
     assert (ROOT / "CHANGELOG.md").exists()
@@ -543,6 +629,7 @@ def test_common_optional_frontend_proxy_switches_exist_in_both_profiles():
     common = {
         "--nextcloud-url", "--elasticsearch-url", "--elasticsearch-index",
         "--with-openwebui", "--no-openwebui", "--with-proxy", "--no-proxy",
+        "--with-playwright", "--no-playwright",
         "--proxy-http-port", "--proxy-https-port",
         "--x509-strict", "--no-x509-strict", "--plan",
     }

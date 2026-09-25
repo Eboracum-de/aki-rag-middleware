@@ -24,6 +24,10 @@ def test_super_light_profile_disables_vector_reranker_and_graph_documents():
     assert cfg["graph_indexer"]["enabled"] is False
     assert cfg["graph_entity_discovery"]["enabled"] is False
     assert cfg["graph_relation_discovery"]["enabled"] is False
+    assert cfg["research_findings"]["enabled"] is False
+    assert cfg["chat_archive"]["enabled"] is False
+    assert cfg["mail"]["enabled"] is False
+    assert cfg["mail"]["worker"]["enabled"] is False
 
     for model in registry.list():
         assert model.section("entity_resolution")["enabled"] is True
@@ -38,13 +42,15 @@ def test_super_light_requirements_have_no_model_or_vector_client_dependencies():
     assert "neo4j" in req
 
 
-def test_super_light_web_profile_enables_local_playwright():
+def test_super_light_web_profile_is_disabled_until_admin_opts_in():
     web = yaml.safe_load((ROOT / "install/super-light/web.super-light.yaml").read_text())
     renderer = web["archive"]["renderer"]
-    assert renderer["enabled"] is True
+    assert web["enabled"] is False
+    assert web["archive"]["enabled"] is False
+    assert renderer["enabled"] is False
     assert renderer["url"] == "http://127.0.0.1:8090/render"
-    assert renderer["cleanup"]["cookie_consent"] == "accept_all"
-    assert renderer["cleanup"]["dismiss_overlays"] is True
+    assert renderer["cleanup"]["cookie_consent"] == "off"
+    assert renderer["cleanup"]["dismiss_overlays"] is False
     assert renderer["cleanup"]["remove_overlays"] is False
 
 
@@ -109,9 +115,10 @@ def test_super_light_proxy_htpasswd_is_worker_readable():
     assert 'chmod 600 "$PREFIX/install/nginx/htpasswd"' not in installer
 
 
-def test_super_light_web_capability_is_globally_enabled_but_still_user_gated():
+def test_super_light_web_capability_is_globally_off_by_default():
     web = yaml.safe_load((ROOT / "install/super-light/web.super-light.yaml").read_text())
-    assert web["enabled"] is True
+    assert web["enabled"] is False
+    assert web["archive"]["enabled"] is False
     assert web["search"]["provider"] == "brave"
 
 
@@ -129,6 +136,18 @@ def test_super_light_installer_generates_optional_compose_override():
     assert 'if [[ $WITH_OPENWEBUI -eq 1 ]]' in installer
     assert 'if [[ $WITH_PROXY -eq 1 ]]' in installer
     assert 'compose up -d --remove-orphans' in installer
+
+
+def test_super_light_disabled_playwright_does_not_require_generated_seccomp_file():
+    compose = (ROOT / "install/super-light/docker-compose.yml").read_text(encoding="utf-8")
+    installer = (ROOT / "install/profiles/install-super-light.sh").read_text(encoding="utf-8")
+    assert 'seccomp=${PLAYWRIGHT_SECCOMP_PROFILE:-unconfined}' in compose
+    assert 'PLAYWRIGHT_SECCOMP_PROFILE=$([[ $WITH_PLAYWRIGHT -eq 1 ]]' in installer
+    prepare = '"$PREFIX/install/components/playwright-renderer/prepare.sh"'
+    first_compose = 'compose stop playwright-renderer'
+    assert installer.index(prepare) < installer.index('compose build api provider')
+    assert installer.index(prepare) < installer.index(first_compose)
+    assert installer.count(prepare) == 1
 
 
 def test_super_light_marks_dockerized_deployment_mode():
@@ -236,7 +255,10 @@ def test_super_light_installer_records_profile_state_for_diagnostics():
     assert 'DEPLOYMENT_PROFILE=super-light' in installer
     assert 'DEPLOYMENT_MODE=dockerized' in installer
     assert 'LOCAL_QDRANT=0' in installer
-    assert 'LOCAL_PLAYWRIGHT=1' in installer
+    assert 'WITH_PLAYWRIGHT=0' in installer
+    assert '--with-playwright' in installer
+    assert '--no-playwright' in installer
+    assert 'LOCAL_PLAYWRIGHT=$WITH_PLAYWRIGHT' in installer
 
 
 def test_playwright_renderer_stays_alive_in_degraded_browser_state():

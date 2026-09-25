@@ -55,6 +55,18 @@
 </section>
 
 <section>
+<h2>Chatarchiv</h2>
+{% if not chat_engine_enabled %}<div class="alert warning">Das Chatarchiv ist global in <code>config.yaml</code> deaktiviert. Die Benutzerkonfiguration kann vorbereitet werden; wirksam wird sie erst nach globaler Freigabe.</div>{% endif %}
+<p class="muted">Pro Benutzer wird genau ein Nextcloud-Archivpfad verwendet. Ein Pfadwechsel verschiebt bestehende Dateien nicht automatisch. Für ältere RC-Archive kann entweder <code>AKI-Chats</code> eingetragen oder der Bestand einmalig nach <code>SunaQ-Chats</code> verschoben werden.</p>
+<form class="stack-form" method="post" action="{{ request.app.url_path_for('admin_user_chat_archive', canonical_user_id=user.canonical_user_id) }}">
+<label><span><input type="checkbox" name="enabled" {% if not chat_settings or chat_settings.enabled %}checked{% endif %}> Chatarchiv für diesen Benutzer aktiv</span></label>
+<label>Nextcloud-Zielpfad<input name="target_path" value="{{ chat_settings.target_path if chat_settings else 'SunaQ-Chats' }}" placeholder="SunaQ-Chats" required></label>
+<div><button>Chatarchiv speichern</button></div>
+</form>
+<p class="muted smalltext">Der Pfad ist relativ zum Dateien-Wurzelverzeichnis des jeweiligen Nextcloud-Benutzers. SunaQ liest nicht parallel aus mehreren Chatarchiven.</p>
+</section>
+
+<section>
 <h2>Research Findings</h2>
 <p class="muted">Die Berechtigung zur Recherche und die Berechtigung zur Änderung des gemeinsamen Graph-Lite-Wissens sind getrennt. Self-Service ist global {{ 'aktiv' if user_self_service_enabled else 'deaktiviert' }}; eine Sitzung läuft maximal {{ (curation_session_max_seconds / 3600)|round(2) }} Stunden.</p>
 <form method="post" action="{{ request.app.url_path_for('admin_user_findings_curation', canonical_user_id=user.canonical_user_id) }}">

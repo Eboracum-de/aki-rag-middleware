@@ -569,6 +569,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             mailbox_error=mailbox_error,
             mailbox_discovery_requested=mailbox_discovery_requested,
             web_settings=user_store.get_web_settings(canonical_user_id),
+            chat_settings=user_store.get_chat_settings(canonical_user_id),
             contact_settings=contact_settings,
             contact_last_sync=contact_last_sync,
             contact_sync_job=_contact_active_job(canonical_user_id),
@@ -578,6 +579,7 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
             has_nextcloud_credential=user_store.get_nextcloud_credential_for_canonical_user(canonical_user_id) is not None,
             mail_engine_enabled=bool(cfg_get(cfg, "mail.enabled", default=False)),
             web_engine_enabled=bool((web_cfg or {}).get("enabled", False)),
+            chat_engine_enabled=bool(cfg_get(cfg, "chat_archive.enabled", default=False)),
             sunaq_models=sunaq_models,
             sunaq_default_model=sunaq_default_model,
             user_self_service_enabled=user_self_service_enabled,
@@ -630,6 +632,28 @@ def create_admin_router(cfg: dict[str, Any], graph_queue: GraphQueue, web_cfg: d
                 f"SunaQ-Modelle gespeichert (Default: {default_id})",
             )
         except (KeyError, ValueError) as exc:
+            return error_page(request, exc, status_code=400)
+
+    @router.post("/users/{canonical_user_id}/chat-archive", name="admin_user_chat_archive", dependencies=auth)
+    async def admin_user_chat_archive(request: Request, canonical_user_id: str):
+        if user_store.get_canonical_user(canonical_user_id) is None:
+            raise HTTPException(status_code=404, detail="Unbekannter kanonischer Benutzer")
+        data = await form_data(request)
+        try:
+            settings = user_store.set_chat_settings(
+                canonical_user_id,
+                enabled=data.get("enabled") == "on",
+                target_path=data.get("target_path", "SunaQ-Chats"),
+            )
+            return redirect(
+                str(request.app.url_path_for("admin_user_detail", canonical_user_id=canonical_user_id)),
+                (
+                    "Chatarchiv für Benutzer aktiviert"
+                    if settings.enabled
+                    else "Chatarchiv für Benutzer deaktiviert"
+                ) + f" (Ziel: {settings.target_path})",
+            )
+        except Exception as exc:
             return error_page(request, exc, status_code=400)
 
     @router.post("/users/{canonical_user_id}/findings-curation", name="admin_user_findings_curation", dependencies=auth)

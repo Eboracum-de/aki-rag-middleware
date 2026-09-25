@@ -13,6 +13,11 @@ style('sunaq', 'admin');
     </p>
 
     <p>
+        <label><input id="sunaq-allow-insecure-http" type="checkbox" <?php if (!empty($_['allow_insecure_http'])) { print_unescaped('checked'); } ?>> Unsicheres HTTP ausdrücklich erlauben</label>
+        <br><em>Nur für kontrollierte Test-/Labornetze. Bei HTTP werden Provider-Key und Anfragen unverschlüsselt übertragen.</em>
+    </p>
+
+    <p>
         <label for="sunaq-api-key">API-Key</label><br>
         <input id="sunaq-api-key" type="password" class="long" value="" autocomplete="new-password" placeholder="<?php p($_['has_api_key'] ? 'API-Key ist gespeichert – leer lassen zum Beibehalten' : 'Provider-Client API-Key'); ?>">
     </p>

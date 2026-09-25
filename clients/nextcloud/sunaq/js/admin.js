@@ -9,6 +9,7 @@
         var save = document.getElementById('sunaq-save');
         var url = document.getElementById('sunaq-middleware-url');
         var key = document.getElementById('sunaq-api-key');
+        var allowInsecureHttp = document.getElementById('sunaq-allow-insecure-http');
         var status = document.getElementById('sunaq-admin-status');
 
         save.addEventListener('click', function () {
@@ -24,7 +25,8 @@
                 },
                 body: JSON.stringify({
                     middlewareUrl: url.value.trim(),
-                    apiKey: key.value.trim()
+                    apiKey: key.value.trim(),
+                    allowInsecureHttp: !!(allowInsecureHttp && allowInsecureHttp.checked)
                 })
             }).then(function (response) {
                 return response.json().catch(function () { return {}; }).then(function (data) {

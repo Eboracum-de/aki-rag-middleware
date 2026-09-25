@@ -1,6 +1,6 @@
 # Privacy architecture and trust boundary
 
-**Reference:** `0.8.6-rc1`
+**Reference:** `0.8.6-rc1.1`
 
 The middleware deliberately separates access to the complete private corpus from
 processing of already selected evidence. Privacy is therefore not defined as
@@ -64,6 +64,13 @@ A practical `private-retrieval` deployment keeps embedding, Qdrant, reranking
 and ACL local while using a capable remote model for verifier/evidence/answer.
 A `strict-local` deployment points all roles at a local provider instead.
 
+Within the SRC/ERG architecture concept, **SRC prefers local model processing but
+does not require zero egress**. Remote model roles can remain compatible with SRC
+when the administrator deliberately accepts the disclosure and the configured
+remote evidence caps bound what is transmitted. ERG is distinguished primarily
+by opt-in sources, derived state and more complex retrieval/graph capabilities,
+not merely by the existence of a remote LLM endpoint.
+
 ## Remote evidence budgets
 
 When a role endpoint is classified as remote, the provider applies hard evidence caps in
@@ -113,6 +120,32 @@ sources can be archived to the current user's Nextcloud via WebDAV. Archive TLS
 verification has its own `web.yaml: archive.verify_tls` setting because the
 archive write is a separate HTTP client path.
 
+## Privacy/policy inspection hooks
+
+rc1.1 implements the generic hook points, but not concrete inspection adapters.
+The hooks sit at the privacy and trust boundaries where data leaves the
+controlled retrieval plane, untrusted content enters it, or SunaQ persists
+imported/generated content:
+
+- `outbound_query` before a query is sent to Brave, SearXNG or another external
+  search provider;
+- `pre_fetch` before an HTTP/Playwright URL fetch;
+- `post_fetch` after Web/mail content or attachments are received and before
+  further processing where practical;
+- `pre_persist` before SunaQ writes imported or generated artifacts to
+  Nextcloud;
+- `pre_model_egress` before evidence/context is sent to a remote LLM or
+  embedding service.
+
+The interface is intentionally adapter-neutral. The shipped rc1.1 evaluator
+returns `ALLOW` for every stage. A later deployment may attach malware scanning,
+URL/domain policy, ICAP, YARA, DLP/redaction or custom inspection services.
+Evaluator failures propagate rather than being bypassed, so a configured
+required adapter can fail closed.
+
+The existence of these hook points must not be cited as a current rc1.1 malware,
+DLP, URL-filtering or egress-control guarantee.
+
 ## Shared retrieval knowledge versus protected evidence
 
 SunaQ intentionally permits organization-wide reuse of curated identity and alias
@@ -126,6 +159,10 @@ state can be collaborative, while source passages, EvidenceFrames and supporting
 documents remain provenance-bearing and authorization-sensitive.
 
 ## Untrusted content
+
+Fresh installations keep Web Research, mail ingestion, chat-archive evidence
+and Research-Finding persistence disabled. This makes ordinary ACL-authorized
+Nextcloud documents the default evidence boundary.
 
 Mail, web pages, archived web content and saved chats can be authored or influenced
 by third parties. Their text is data, not an instruction channel to the model.
